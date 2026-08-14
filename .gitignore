@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.venv/
+python/__pycache__/
+*.log
+.DS_Store
+build/icon.iconset/

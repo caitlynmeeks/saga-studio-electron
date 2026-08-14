@@ -1,0 +1,999 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Saga Studio</title>
+<style>
+:root{--bg:#0b0d0c;--panel:#101413;--chrome:#171d1b;--line:#222b28;--fg:#ccd6d0;
+--bright:#f2f7f4;--dim:#6d7d75;--faint:#4a5852;--green:#7fd88f;--amber:#e8b45c;--red:#e05f56;
+--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.55 var(--mono);height:100vh;
+display:grid;grid-template-columns:270px 1fr 340px;grid-template-rows:44px 1fr 52px}
+header{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:0 14px;
+background:var(--chrome);border-bottom:1px solid var(--line)}
+header b{color:var(--bright);letter-spacing:.08em}
+.mut{color:var(--dim)}.warn{color:var(--amber)}.ok{color:var(--green)}
+aside,#chat{background:var(--panel);overflow-y:auto;padding:12px}
+aside{border-right:1px solid var(--line)}
+#chat{border-left:1px solid var(--line);display:flex;flex-direction:column}
+/* The centre column is one grid cell holding two stacked children: the
+   find/replace bar and the scrolling card list. Left as siblings of <main>
+   they became grid items of their own and shunted every later panel a
+   column to the right. min-height:0 lets <main> scroll instead of the
+   flex parent growing past the viewport. */
+#center{display:flex;flex-direction:column;min-height:0}
+#frbar{flex:none;padding:8px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+main{flex:1;min-height:0;overflow-y:auto;padding:14px 18px}
+footer{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:0 14px;
+background:var(--chrome);border-top:1px solid var(--line)}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--dim);margin:2px 0 8px}
+#drop{border:1.5px dashed var(--line);border-radius:8px;padding:20px 10px;text-align:center;
+color:var(--faint);cursor:pointer;transition:.15s;font-size:12.5px}
+#drop.hot{border-color:var(--green);color:var(--green);background:#131a17}
+.proj{padding:7px 8px;border-radius:6px;cursor:pointer;margin-bottom:2px}
+.proj:hover{background:#182220}.proj.sel{background:#1b2724;color:var(--bright)}
+.proj .meta{font-size:11px;color:var(--faint)}
+.bar{height:3px;background:var(--line);border-radius:2px;margin-top:4px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--green)}
+.chunk{border:1px solid var(--line);border-radius:7px;margin-bottom:9px;background:#0e1211}
+.chunk.sel{border-color:var(--green)}
+.chunk .top{display:flex;align-items:center;gap:8px;padding:5px 9px;border-bottom:1px solid var(--line);
+font-size:11.5px;color:var(--faint)}
+.chunk textarea{width:100%;background:transparent;border:0;color:var(--fg);font:13.5px/1.6 var(--mono);
+padding:9px;resize:vertical;min-height:62px;outline:none}
+.chunk .act{display:flex;gap:5px;padding:0 9px 8px;flex-wrap:wrap;align-items:center}
+button{background:#131a17;border:1px solid var(--line);color:var(--fg);border-radius:5px;
+padding:3px 9px;font:11.5px var(--mono);cursor:pointer}
+button:hover{border-color:var(--green);color:var(--green)}
+button.pri{border-color:var(--green);color:var(--green)}
+button:disabled{opacity:.4;cursor:default}
+button.busy{border-color:var(--green);color:var(--green);animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(127,216,143,.5)}
+  50%{opacity:.65;box-shadow:0 0 0 5px rgba(127,216,143,0)}}
+@media(prefers-reduced-motion:reduce){button.busy{animation:none;opacity:.7}}
+.dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--faint)}
+.dot.ready{background:var(--green)}.dot.stale{background:var(--amber)}
+input,select,textarea{background:#0b0f0e;border:1px solid var(--line);color:var(--fg);
+border-radius:5px;padding:4px 6px;font:12px var(--mono)}
+input[type=number]{width:62px}
+#log{flex:1;overflow-y:auto;font-size:12.5px}
+#log .m{margin-bottom:10px;padding-bottom:9px;border-bottom:1px solid var(--line);white-space:pre-wrap}
+#log .me{color:var(--amber)}
+#ask{width:100%;height:64px;resize:vertical}
+.pill{font-size:10.5px;border:1px solid var(--line);border-radius:99px;padding:1px 7px;color:var(--faint)}
+button.tiny{padding:0 5px;font-size:12px;line-height:17px;border-color:transparent;color:var(--faint)}
+.proj:hover button.tiny{border-color:var(--line)}
+/* The stack: cards no longer carry their own bottom margin — the insert strip
+   between them does, so "between two cards" is a real place you can point at,
+   both to insert and to drop a dragged card. */
+.chunk{margin-bottom:0}
+.ins{height:20px;display:flex;align-items:center;gap:5px;justify-content:center;
+opacity:0;transition:opacity .15s}
+.ins:hover,.ins.hot{opacity:1}
+.ins::before,.ins::after{content:'';flex:1;height:1px;background:var(--line)}
+.ins button{padding:0 7px;font-size:10.5px;line-height:16px;color:var(--dim)}
+.grip{cursor:grab;color:var(--faint);user-select:none;flex:none}
+.grip:active{cursor:grabbing}
+.chunk.dropb{box-shadow:0 -3px 0 var(--green)}
+.chunk.dropa{box-shadow:0 3px 0 var(--green)}
+/* audio & silence cards */
+.arow{display:flex;gap:8px;align-items:center;padding:6px 9px;flex-wrap:wrap;font-size:12px}
+.arow .lbl{font-size:11px;color:var(--dim);width:46px;flex:none}
+input[type=range]{border:0;background:none;padding:0;accent-color:var(--green)}
+/* two native sliders stacked = one dual-handle range: the inputs ignore the
+   pointer, only their thumbs take it, and a fill bar shows the kept span */
+.dual{position:relative;height:22px;flex:1;min-width:150px}
+.dual .rail{position:absolute;top:10px;left:0;right:0;height:3px;background:var(--line);border-radius:2px}
+.dual .fill{position:absolute;top:10px;height:3px;background:var(--green);opacity:.55;border-radius:2px}
+.dual input[type=range]{position:absolute;left:0;top:0;width:100%;height:22px;margin:0;
+-webkit-appearance:none;appearance:none;pointer-events:none}
+.dual input[type=range]::-webkit-slider-runnable-track{background:transparent;height:22px}
+.dual input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;pointer-events:auto;
+width:13px;height:13px;border-radius:50%;background:var(--green);border:none;margin-top:4px;cursor:ew-resize}
+.dual input[type=range]::-moz-range-thumb{pointer-events:auto;width:13px;height:13px;
+border-radius:50%;background:var(--green);border:none;cursor:ew-resize}
+</style>
+</head>
+<body>
+<header>
+  <b>SAGA STUDIO</b>
+  <span class="mut" id="hdr">no project</span>
+  <span style="flex:1"></span>
+  <span class="pill warn" id="busy"></span>
+  <span class="pill" id="model">model: cold</span>
+</header>
+
+<aside>
+  <h2>documents</h2>
+  <div id="drop">drop .md or .sagaproj here<br><span style="font-size:11px">or click to choose</span></div>
+  <input type="file" id="file" accept=".md,.markdown,.txt,.sagaproj" multiple hidden>
+  <div id="projects" style="margin-top:12px"></div>
+
+  <h2 style="margin-top:18px">backup</h2>
+  <label class="mut" style="font-size:11px;display:block">
+    <input type="checkbox" id="bkaudio" checked> include rendered audio</label>
+  <label class="mut" style="font-size:11px;display:flex;gap:5px;align-items:center;margin-top:5px">
+    on import, if it is already here
+    <select id="bkmode" style="flex:1">
+      <option value="skip">leave mine</option>
+      <option value="replace">replace mine</option>
+      <option value="copy">keep both</option>
+    </select></label>
+  <div style="display:flex;gap:5px;margin-top:7px">
+    <button onclick="exportAll()">export everything</button>
+    <button onclick="$('arch').click()">import…</button>
+  </div>
+  <input type="file" id="arch" accept=".sagaproj" hidden>
+  <input type="file" id="clipfile" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aif,.aiff" hidden>
+  <div id="bkmsg" class="mut" style="font-size:11px;margin-top:6px"></div>
+
+  <h2 style="margin-top:18px">voice profiles</h2>
+  <div id="profiles"></div>
+  <div style="display:flex;gap:5px;margin-top:7px">
+    <input id="newprof" placeholder="new profile name" style="flex:1">
+    <button onclick="addProfile()">+</button>
+  </div>
+  <div id="profedit"></div>
+</aside>
+
+<div id="center">
+  <div id="frbar" hidden></div>
+  <main id="main"><p class="mut">Drop a markdown file on the left to begin.</p></main>
+</div>
+
+<div id="chat">
+  <h2>discuss</h2>
+  <div id="log"><div class="m mut">Ask about pacing, pronunciation, or a specific passage.
+Selected chunks are sent as context.</div></div>
+  <textarea id="ask" placeholder="e.g. does chunk 12 read naturally aloud?"></textarea>
+  <div style="display:flex;gap:6px;margin-top:6px">
+    <button class="pri" onclick="send()" id="sendb">ask</button>
+    <span class="mut" id="chatnote" style="font-size:11px;align-self:center"></span>
+  </div>
+</div>
+
+<footer>
+  <button id="undob" onclick="undo()" title="⌘Z">undo</button>
+  <button class="pri" id="bakeb" onclick="bake()">bake all stale</button>
+  <button id="stopb" onclick="stopBake()" style="color:var(--red);border-color:var(--red)" hidden>stop</button>
+  <button id="pvbook" onclick="previewBook()"
+    title="mix and play the whole book right here, without exporting the mp3">▶ preview audiobook</button>
+  <button onclick="assemble()">assemble audiobook</button>
+  <span class="mut" id="status"></span>
+  <span style="flex:1"></span>
+  <button id="revealb" onclick="revealOut()" title="show the assembled audiobook in the Finder">open renders folder ↗</button>
+  <a id="dl" class="mut" style="font-size:12px" href="#" hidden>download mp3</a>
+</footer>
+
+<script>
+const $=i=>document.getElementById(i);
+let DOC=null, SEL=new Set(), STATE={}, PREV={}, JOBS={}, POLL=null, HEIGHT={};
+let BAKETIMER=null, WASBAKING=false;
+
+async function api(p,b){const r=await fetch(p,b?{method:'POST',body:JSON.stringify(b)}:undefined);
+  return r.json()}
+const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+// ── import ────────────────────────────────────────────────
+const drop=$('drop');
+drop.onclick=()=>$('file').click();
+$('file').onchange=e=>files(e.target.files);
+['dragenter','dragover'].forEach(k=>drop.addEventListener(k,e=>{e.preventDefault();drop.classList.add('hot')}));
+['dragleave','drop'].forEach(k=>drop.addEventListener(k,e=>{e.preventDefault();drop.classList.remove('hot')}));
+document.addEventListener('dragover',e=>e.preventDefault());
+document.addEventListener('drop',e=>e.preventDefault());
+drop.addEventListener('drop',e=>files(e.dataTransfer.files));
+
+async function files(list){
+  for(const f of list){
+    if(/\.sagaproj$/i.test(f.name)){ await importArchive(f); continue; }
+    const md=await f.text();
+    const title=f.name.replace(/\.(md|markdown|txt)$/i,'').replace(/^\d+[-_]/,'');
+    const r=await api('/api/import',{title,markdown:md});
+    $('status').textContent=`imported ${title} — ${r.chunks} chunks`;
+  }
+  await refresh(); }
+
+// ── show in the Finder ────────────────────────────────────
+async function reveal(name,what){
+  const r=await api('/api/reveal',{name,what});
+  if(r.error)$('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`;
+  return r;
+}
+// The footer button aims at the assembled book. Before anything is assembled
+// there is no out/ to open, so it lands on the project folder instead and says
+// why, rather than opening a window with nothing in it.
+async function revealOut(){
+  if(!DOC)return void($('status').textContent='open a document first');
+  const r=await reveal(DOC.name,'out');
+  if(r.ok&&!r.assembled)
+    $('status').innerHTML='<span class="warn">nothing assembled yet</span> — '+
+      'showing the document folder; press <b>assemble audiobook</b> to make the mp3';
+}
+
+// ── backup ────────────────────────────────────────────────
+// One file out, one file in: a gzipped tar holding the documents, the voice
+// clips and profiles they need, and (optionally) the rendered audio. Without
+// the audio a backup is tiny and re-renders to exactly the same chunks on the
+// way back, because the hashes do not change.
+const size=n=>n>=1e9?(n/1e9).toFixed(1)+' GB':n>=1e6?Math.round(n/1e6)+' MB':Math.max(1,Math.round(n/1e3))+' KB';
+const withAudio=()=>$('bkaudio').checked?1:0;
+
+const exportOne=name=>doExport('name='+encodeURIComponent(name));
+const exportAll=()=>doExport('all=1');
+
+async function doExport(qs){
+  const m=$('bkmsg'), q=qs+'&audio='+withAudio();
+  m.textContent='working out what to pack…';
+  const plan=await api('/api/export_plan?'+q);
+  if(plan.error) return void(m.innerHTML=`<span class="warn">${esc(plan.error)}</span>`);
+  if(!plan.projects.length) return void(m.textContent='nothing to export');
+  const rendered=plan.projects.reduce((a,p)=>a+p.rendered,0);
+  // The download only begins once the server has packed the whole archive, so
+  // say what is happening rather than sitting there looking broken.
+  const nclips=Object.keys(plan.clips||{}).length;
+  m.innerHTML=`packing ${plan.projects.length} episode(s), ${rendered} rendered chunk(s), `+
+    `${Object.keys(plan.voices).length} voice(s)`+
+    (nclips?`, ${nclips} audio clip(s)`:'')+
+    ` — about <b>${size(plan.bytes)}</b>.<br>`+
+    `<span class="mut">your browser saves it when it is ready`+
+    (plan.bytes>2e8?' — a minute or so at this size':'')+`</span>`+
+    (plan.unreadable.length?`<br><span class="warn">left out, unreadable: ${plan.unreadable.map(esc).join(', ')}</span>`:'')+
+    (plan.missing_voices.length?`<br><span class="warn">voice clip missing from disk, so not in the backup: ${plan.missing_voices.map(esc).join(', ')}</span>`:'')+
+    ((plan.missing_clips||[]).length?`<br><span class="warn">audio clip missing from disk, so not in the backup: ${plan.missing_clips.map(esc).join(', ')}</span>`:'');
+  window.location='/api/export?'+q;
+}
+
+$('arch').onchange=e=>{ const f=e.target.files[0]; e.target.value=''; if(f)importArchive(f); };
+
+async function importArchive(f){
+  const m=$('bkmsg');
+  m.textContent=`restoring ${f.name} (${size(f.size)})…`;
+  let j;
+  try{
+    const r=await fetch('/api/import_archive?mode='+$('bkmode').value,
+      {method:'POST',body:f,headers:{'Content-Type':'application/octet-stream'}});
+    j=await r.json();
+  }catch(ex){ j={error:String(ex)}; }
+  if(j.error) return void(m.innerHTML=`<span class="warn">${esc(j.error)}</span>`);
+  const bits=[`restored ${j.projects.length} episode(s)`];
+  if(j.audio) bits.push(`${j.audio} rendered chunk(s)`);
+  if(j.skipped.length) bits.push(`${j.skipped.length} already here, left alone`);
+  // Renames are the one thing worth reading: they mean a name collided and the
+  // incoming copy landed beside yours rather than over it.
+  const notes=[...j.voices,...j.profiles,...(j.clips||[])];
+  m.innerHTML=`<span class="ok">${bits.join(' · ')}</span>`+
+    (notes.length?`<div class="warn" style="margin-top:5px">${notes.map(esc).join('<br>')}</div>`:'');
+  await refresh();
+  if(DOC) open_(DOC.name,true);
+}
+
+// ── state ─────────────────────────────────────────────────
+async function refresh(){
+  STATE=await api('/api/state');
+  $('model').textContent='model: '+STATE.model;
+  $('projects').innerHTML=STATE.projects.map(p=>`
+    <div class="proj ${DOC&&DOC.name===p.name?'sel':''}" onclick="openProject('${p.name}')">
+      <div style="display:flex;gap:6px;align-items:center">
+        <span style="flex:1">${esc(p.title)}</span>
+        <button class="tiny" title="show this episode's folder"
+          onclick="event.stopPropagation();reveal('${p.name}')">↗</button>
+        <button class="tiny" title="export this episode"
+          onclick="event.stopPropagation();exportOne('${p.name}')">⤓</button>
+      </div>
+      <div class="meta">${p.ready}/${p.chunks} rendered · ${p.words.toLocaleString()} words</div>
+      <div class="bar"><i style="width:${p.chunks?100*p.ready/p.chunks:0}%"></i></div>
+    </div>`).join('')||'<span class="mut" style="font-size:12px">none yet</span>';
+  const b=STATE.bake;
+  $('bakeb').disabled=b.running;
+  $('stopb').hidden=!b.running;
+  if(b.running){
+    WASBAKING=true;
+    $('status').innerHTML=`<span class="warn">baking ${b.done}/${b.total}</span> — `+
+      (b.cancel?'stopping after this card…':esc(b.label));
+    // One timer, not one per refresh() — stopBake and open_ both call refresh,
+    // and stacked timers would poll faster and faster until the bake ended.
+    clearTimeout(BAKETIMER);
+    // syncCards, not open_: a bake ticks this every 2.5s, and rebuilding the
+    // card list under you that often would eat both your edits and your clicks
+    BAKETIMER=setTimeout(()=>{refresh();if(DOC)syncCards()},2500);
+  } else {
+    clearTimeout(BAKETIMER); BAKETIMER=null;
+    $('stopb').disabled=false; $('stopb').textContent='stop';
+    if(WASBAKING){ WASBAKING=false;
+      $('status').innerHTML = b.stopped
+        ? `<span class="warn">bake stopped at ${b.done}/${b.total}</span> — bake again to resume`
+        : `<span class="ok">bake complete — ${b.done}/${b.total}</span>`;
+    }
+  }
+}
+
+// Switching document throws the card list away, so bank the edits first.
+async function openProject(name){ await flushAll(); await open_(name); }
+
+async function open_(name,quiet){
+  DOC=await api('/api/doc?name='+encodeURIComponent(name));
+  $('hdr').textContent=DOC.title+' · '+DOC.chunks.length+' chunks';
+  if(!quiet)SEL.clear();
+  // fit before observing, so the initial sizing is never mistaken for a drag
+  renderFR(); renderDoc(); fitAll(); watchHeights(); renderProfiles(); bindVoiceDrop();
+  if(!quiet)refresh();
+  const rd=DOC.chunks.filter(c=>c.ready).length;
+  $('dl').hidden=rd<DOC.chunks.length; $('dl').href='/api/download?name='+encodeURIComponent(name);
+}
+
+let EDITING=null;
+function renderProfiles(){
+  const P=STATE.profiles||{};
+  $('profiles').innerHTML=Object.keys(P).map(n=>{
+    const pr=P[n], v=(pr.voices||[])[pr.active||0]||'—';
+    return `<div class="proj ${EDITING===n?'sel':''}" onclick="editProfile('${n}')">
+      <div>${esc(n)}${n==='Default'?' <span class="pill">always</span>':''}</div>
+      <div class="meta">${esc(v)} · pace ${pr.cfg} · feel ${pr.exag}</div></div>`;
+  }).join('');
+  $('profedit').innerHTML = EDITING ? profEditor(EDITING) : '';
+}
+function profEditor(n){
+  const pr=(STATE.profiles||{})[n]||{}, vs=pr.voices||[];
+  const f=(k,label,step)=>`<label class="mut" style="font-size:11px">${label}
+    <input type="number" step="${step}" value="${pr[k]}" onchange="setProf('${n}','${k}',this.value)"></label>`;
+  return `<div style="border:1px solid var(--line);border-radius:7px;padding:9px;margin-top:8px">
+    <div style="font-size:11px;color:var(--dim);margin-bottom:6px">editing <b>${esc(n)}</b></div>
+    <div id="vdrop" class="mut" style="border:1px dashed var(--line);border-radius:6px;
+      padding:8px;text-align:center;font-size:11px;margin-bottom:7px">drop a .wav here to add a voice</div>
+    ${vs.map((v,i)=>`<div style="display:flex;gap:5px;align-items:center;margin-bottom:3px">
+        <input type="radio" name="av" ${i===(pr.active||0)?'checked':''}
+          onchange="setProf('${n}','active',${i})" title="use this clip">
+        <span style="flex:1;font-size:12px">${esc(v)}</span>
+        <button onclick="dropVoice('${n}',${i})">×</button></div>`).join('')}
+    <select onchange="addVoice('${n}',this.value)" style="width:100%;margin:4px 0">
+      <option value="">+ add an existing voice…</option>
+      ${(STATE.voices||[]).map(v=>`<option>${v}</option>`).join('')}</select>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:5px">
+      ${f('cfg','pace',0.05)}${f('exag','feeling',0.05)}
+      ${f('temp','steadiness',0.05)}${f('rep','anti-stutter',0.05)}</div>
+    <input placeholder="note — when to use this" value="${esc(pr.note||'')}"
+      onchange="setProf('${n}','note',this.value)" style="width:100%;margin-top:6px">
+    <div style="display:flex;gap:5px;margin-top:7px">
+      <button onclick="EDITING=null;renderProfiles()">close</button>
+      ${n==='Default'?'':`<button onclick="delProfile('${n}')" style="color:var(--red)">delete</button>`}
+    </div></div>`;
+}
+function editProfile(n){ EDITING=(EDITING===n?null:n); renderProfiles(); bindVoiceDrop(); }
+async function addProfile(){
+  const n=$('newprof').value.trim(); if(!n)return;
+  $('newprof').value='';
+  await api('/api/profile',{profile:n,data:{}});
+  EDITING=n; await refresh(); renderProfiles(); bindVoiceDrop(); }
+async function setProf(n,k,v){
+  const num=['cfg','exag','temp','rep','active'].includes(k);
+  await api('/api/profile',{profile:n,data:{[k]:num?parseFloat(v):v}});
+  await refresh(); renderProfiles(); bindVoiceDrop(); if(DOC)open_(DOC.name,true); }
+async function addVoice(n,v){
+  if(!v)return; const pr=STATE.profiles[n], vs=[...(pr.voices||[])];
+  if(!vs.includes(v))vs.push(v);
+  await api('/api/profile',{profile:n,data:{voices:vs}});
+  await refresh(); renderProfiles(); bindVoiceDrop(); }
+async function dropVoice(n,i){
+  const vs=[...(STATE.profiles[n].voices||[])]; vs.splice(i,1);
+  await api('/api/profile',{profile:n,data:{voices:vs.length?vs:['caitlyn2'],active:0}});
+  await refresh(); renderProfiles(); bindVoiceDrop(); }
+async function delProfile(n){
+  if(!confirm(`Delete profile "${n}"? Cards using it fall back to Default.`))return;
+  await api('/api/profile/delete',{profile:n});
+  EDITING=null; await refresh(); renderProfiles(); if(DOC)open_(DOC.name,true); }
+function bindVoiceDrop(){
+  const z=$('vdrop'); if(!z)return;
+  ['dragenter','dragover'].forEach(k=>z.addEventListener(k,e=>{e.preventDefault();z.style.borderColor='var(--green)'}));
+  ['dragleave','drop'].forEach(k=>z.addEventListener(k,e=>{e.preventDefault();z.style.borderColor='var(--line)'}));
+  z.addEventListener('drop',async e=>{
+    for(const f of e.dataTransfer.files){
+      const buf=await f.arrayBuffer();
+      const b64=btoa(String.fromCharCode(...new Uint8Array(buf)));
+      const r=await api('/api/voice/upload',{filename:f.name,data:b64});
+      if(r.ok)await addVoice(EDITING,r.voice);
+    }});
+}
+
+// ── chunks ────────────────────────────────────────────────
+// Three kinds of card share the stack: speech (the original), an audio clip,
+// and a timed silence. Insert strips sit between every pair of cards — and at
+// both ends — so a new card can be born exactly where it belongs.
+function renderDoc(){
+  $('main').innerHTML=insBar(0)+DOC.chunks.map(c=>cardHTML(c)+insBar(c.id+1)).join('');
+  DOC.chunks.forEach(c=>{ if(c.type==='audio')fadeUi(c.id); });
+  bindDrag();
+}
+function cardHTML(c){
+  return c.type==='audio'?audioCard(c):c.type==='silence'?silenceCard(c):speechCard(c);
+}
+const insBar=at=>`<div class="ins">
+    <button onclick="insertCard(${at},'speech')" title="insert an empty text card here">+ text</button>
+    <button onclick="insertCard(${at},'audio')" title="insert a music / sound-effect card here">+ ♪ audio</button>
+    <button onclick="insertCard(${at},'silence')" title="insert a timed pause here">+ silence</button>
+  </div>`;
+const grip=id=>`<span class="grip" draggable="true" ondragstart="dragStart(event,${id})"
+  ondragend="dragEnd()" title="drag to move this card">⠿</span>`;
+
+function speechCard(c){return `
+   <div class="chunk ${SEL.has(c.id)?'sel':''}" id="c${c.id}" style="${c.mute?'opacity:.45':''}">
+    <div class="top">
+      ${grip(c.id)}
+      <span class="dot ${c.mute?'':(c.ready?'ready':'stale')}"></span>
+      <span>#${c.id}</span>
+      <span class="mut chars">${c.text.length} ch</span>
+      <select onchange="setProfile(${c.id},this.value)" style="font-size:11px;padding:1px 4px">
+        ${Object.keys(STATE.profiles||{}).map(p=>
+          `<option ${ (c.profile||'Default')===p?'selected':''}>${p}</option>`).join('')}
+      </select>
+      ${c.mute?'<span class="pill warn">muted</span>':''}
+      <span style="flex:1"></span>
+      <label class="mut" style="font-size:11px"><input type="checkbox" ${SEL.has(c.id)?'checked':''}
+        onchange="pick(${c.id},this.checked)"> discuss</label>
+    </div>
+    <textarea id="t${c.id}" oninput="touched(${c.id})" onblur="flush(${c.id})"${(HEIGHT[c.id]||c.height)?` style="height:${HEIGHT[c.id]||c.height}px"`:''}>${esc(c.text)}</textarea>
+    <div class="act">
+      <button id="pf${c.id}" onclick="playFull(${c.id})" ${c.ready&&!c.mute?'':'disabled'}>▶ full</button>
+      <button id="pp${c.id}" onclick="playPrev(${c.id})" ${PREV[c.id]&&!c.mute?'':'disabled'}>▶ preview</button>
+      <button id="pv${c.id}" onclick="prev(${c.id})" disabled>preview selected</button>
+      <button id="rb${c.id}" class="pri" onclick="one(${c.id})" ${c.mute?'disabled':''}>render</button>
+      <button onclick="splitAt(${c.id})">split</button>
+      <button onclick="merge(${c.id})">merge next</button>
+      <button onclick="dup(${c.id})">duplicate</button>
+      <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
+      <button onclick="del(${c.id})" style="color:var(--red)">remove</button>
+      <span class="mut" id="s${c.id}" style="font-size:11px"></span>
+    </div>
+   </div>`;
+}
+
+function audioCard(c){
+  const clips=STATE.clips||[], cur=clips.find(k=>k.name===c.clip);
+  const len=c.cliplen||(cur&&cur.secs)||0;
+  const fade=c.fade||[0,100], g=c.gain==null?100:c.gain, after=c.after==null?5:c.after;
+  return `
+   <div class="chunk" id="c${c.id}" style="${c.mute?'opacity:.45':''}">
+    <div class="top">
+      ${grip(c.id)}
+      <span class="dot ${c.mute?'':(c.ready?'ready':'stale')}"></span>
+      <span>#${c.id}</span>
+      <span class="pill">♪ audio</span>
+      <span class="mut">${c.clip?esc(c.clip)+(len?' · '+fmtSecs(len):''):'no clip chosen'}</span>
+      ${c.mute?'<span class="pill warn">muted</span>':''}
+      <span style="flex:1"></span>
+    </div>
+    <div class="arow">
+      <select onchange="setCard(${c.id},{clip:this.value},true)" style="max-width:230px">
+        <option value="">choose a clip…</option>
+        ${clips.map(k=>`<option value="${esc(k.name)}" ${k.name===c.clip?'selected':''}>${esc(k.name)} (${fmtSecs(k.secs)})</option>`).join('')}
+      </select>
+      <button onclick="pickClip(${c.id})">import a file…</button>
+      <button id="pc${c.id}" onclick="playClip(${c.id})" ${c.ready&&!c.mute?'':'disabled'}>▶ play</button>
+    </div>
+    <div class="arow">
+      <span class="lbl">then</span>
+      <label class="mut"><input type="radio" name="md${c.id}" ${c.mode!=='after'?'checked':''}
+        onchange="setCard(${c.id},{mode:'full'})"> play it all, then the next card</label>
+      <label class="mut"><input type="radio" name="md${c.id}" ${c.mode==='after'?'checked':''}
+        onchange="setCard(${c.id},{mode:'after'})"> next card after
+        <input type="number" step="0.5" min="0" value="${after}" style="width:56px"
+          onchange="setCard(${c.id},{mode:'after',after:parseFloat(this.value)||0})"> s
+        <span class="mut" style="font-size:11px">— the rest plays under what follows</span></label>
+    </div>
+    <div class="arow">
+      <span class="lbl">fade</span>
+      <div class="dual">
+        <div class="rail"></div><div class="fill" id="ff${c.id}"></div>
+        <input type="range" min="0" max="100" value="${fade[0]}" id="flo${c.id}"
+          oninput="fadeUi(${c.id})" onchange="fadeSave(${c.id})">
+        <input type="range" min="0" max="100" value="${fade[1]}" id="fhi${c.id}"
+          oninput="fadeUi(${c.id})" onchange="fadeSave(${c.id})">
+      </div>
+      <span class="mut" id="flab${c.id}" style="font-size:11px;min-width:110px"></span>
+    </div>
+    <div class="arow">
+      <span class="lbl">volume</span>
+      <input type="range" min="0" max="100" value="${g}" style="flex:1"
+        oninput="$('glab${c.id}').textContent=this.value+'%'"
+        onchange="setCard(${c.id},{gain:parseFloat(this.value)})">
+      <span class="mut" id="glab${c.id}" style="font-size:11px;min-width:36px">${g}%</span>
+    </div>
+    <div class="act">
+      <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
+      <button onclick="del(${c.id})" style="color:var(--red)">remove</button>
+      <span class="mut" id="s${c.id}" style="font-size:11px"></span>
+    </div>
+   </div>`;
+}
+
+function silenceCard(c){return `
+   <div class="chunk" id="c${c.id}" style="${c.mute?'opacity:.45':''}">
+    <div class="top" style="border-bottom:0">
+      ${grip(c.id)}
+      <span class="dot ready"></span>
+      <span>#${c.id}</span>
+      <span class="pill">— silence</span>
+      <input type="number" step="0.1" min="0" value="${c.secs==null?1:c.secs}" style="width:62px"
+        onchange="setCard(${c.id},{secs:parseFloat(this.value)||0})">
+      <span class="mut" style="font-size:11px">seconds of rest</span>
+      ${c.mute?'<span class="pill warn">muted</span>':''}
+      <span style="flex:1"></span>
+      <button class="tiny" onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
+      <button class="tiny" onclick="del(${c.id})" style="color:var(--red)" title="remove">×</button>
+    </div>
+   </div>`;
+}
+// Cards fit their text by default — no card should hide a line you are trying
+// to read. Dragging the corner sets an explicit height, which then wins in
+// both directions and survives a reload; only cards with no dragged height
+// keep growing to fit as you type.
+function autosize(id){
+  const ta=$('t'+id); if(!ta)return;
+  ta._prog=true;                       // tell the observer this was not a drag
+  ta.style.height='auto';
+  ta.style.height=(ta.scrollHeight+2)+'px';
+  // ResizeObserver callbacks run in the rendering steps, before the next task,
+  // so a timeout — not rAF — clears the flag after the observer has seen it
+  setTimeout(()=>{ta._prog=false},0);
+}
+const sized=c=>HEIGHT[c.id]||c.height;
+function fitAll(){ DOC.chunks.forEach(c=>{ if(!sized(c)) autosize(c.id); }); }
+
+// A rebuild of the card list would drop an inline height, so remember it and
+// put it back — and persist it so it survives a reload too.
+function watchHeights(){
+  if(!window.ResizeObserver) return;
+  DOC.chunks.forEach(c=>{
+    const ta=$('t'+c.id); if(!ta) return;
+    let saved=HEIGHT[c.id]||c.height||0;
+    new ResizeObserver(()=>{
+      // offsetHeight, not contentRect: contentRect is the *content* box, but
+      // `*{box-sizing:border-box}` means style.height sets the *border* box.
+      // Storing one and applying the other lost the 18px of padding on every
+      // round trip, so a card at the 62px default came back as 44px and
+      // clipped a line more each time it was saved and reloaded.
+      const h=ta.offsetHeight;
+      if(!h || Math.abs(h-saved)<4) return;
+      saved=h;
+      if(ta._prog) return;             // fitting the text is not a resize to store
+      HEIGHT[c.id]=h;
+      clearTimeout(ta._t);
+      ta._t=setTimeout(()=>api('/api/chunk',{name:DOC.name,id:c.id,height:h}),700);
+    }).observe(ta);
+  });
+}
+function renderFR(){
+  const b=$('frbar'); b.hidden=!DOC; if(!DOC)return;
+  if(b.dataset.built)return; b.dataset.built='1';
+  b.innerHTML=`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+    <input id="frFind" placeholder="find" style="flex:1;min-width:120px">
+    <input id="frRepl" placeholder="replace with" style="flex:1;min-width:120px">
+    <label class="mut" style="font-size:11px"><input type="checkbox" id="frWhole" checked> whole word</label>
+    <label class="mut" style="font-size:11px"><input type="checkbox" id="frCase"> match case</label>
+    <label class="mut" style="font-size:11px"><input type="checkbox" id="frRe"> regex</label>
+    <button onclick="frFindAll()">find</button>
+    <button class="pri" id="frGo" onclick="frApply()" disabled>replace all</button>
+    <span class="mut" id="frMsg" style="font-size:11.5px"></span>
+  </div><div id="frHits" style="margin-top:6px;font-size:11.5px;max-height:150px;overflow-y:auto"></div>`;
+}
+function frBody(dry){ return {name:DOC.name, find:$('frFind').value, replace:$('frRepl').value,
+  whole:$('frWhole').checked, case:$('frCase').checked, regex:$('frRe').checked, dry_run:dry}; }
+async function frFindAll(){
+  const r=await api('/api/replace', frBody(true));
+  if(r.error){ $('frMsg').textContent=r.error; $('frGo').disabled=true; return; }
+  const mins=Math.round(r.resec/60);
+  $('frMsg').innerHTML = r.cards
+    ? `${r.matches} match(es) in ${r.cards} card(s)` +
+      (r.stale ? ` &middot; <span class="warn">${r.stale} already rendered — replacing costs ~${mins||1} min to re-render</span>` : '')
+    : 'no matches';
+  $('frGo').disabled = !r.cards;
+  $('frHits').innerHTML = r.hits.map(h=>
+    `<div style="border-bottom:1px solid var(--line);padding:3px 0">
+       <a href="#c${h.id}" style="color:var(--amber)">#${h.id}</a>
+       ${h.was_ready?'<span class="pill warn">rendered</span>':''}
+       <div class="mut">${esc(h.before)}</div>
+       <div style="color:var(--green)">${esc(h.after)}</div></div>`).join('');
+}
+async function frApply(){
+  await flushAll();          // replace rewrites the stored text of every hit
+  const r=await api('/api/replace', frBody(false));
+  $('frMsg').textContent = `replaced in ${r.cards} card(s) — ⌘Z to undo`;
+  $('frHits').innerHTML=''; $('frGo').disabled=true;
+  open_(DOC.name,true);
+}
+function pick(id,on){on?SEL.add(id):SEL.delete(id);
+  $('chatnote').textContent=SEL.size?SEL.size+' chunk(s) as context':''; }
+// ── editing ───────────────────────────────────────────────
+// Typing marks the card stale on the spot and saves shortly after. It used to
+// save on `change`, which fires on blur — so pressing render *was* the blur:
+// the save fired first, rebuilt the card list, and destroyed the button the
+// click was still travelling towards. The press hit nothing, and the only
+// visible effect was the note the save left behind. Hence two clicks.
+let SAVET={}, SAVING={}, DIRTY=new Set();
+
+function touched(id){
+  DIRTY.add(id);
+  // Say so immediately rather than after a round trip: the card is stale the
+  // moment the text differs, whatever the server has caught up with.
+  const dot=document.querySelector('#c'+id+' .dot');
+  if(dot && !dot.classList.contains('mute')){ dot.classList.remove('ready'); dot.classList.add('stale'); }
+  const pf=$('pf'+id); if(pf) pf.disabled=true;      // that audio is the old text now
+  const s=$('s'+id); if(s) s.textContent='edited — needs re-render';
+  const n=document.querySelector('#c'+id+' .chars');
+  if(n) n.textContent=$('t'+id).value.length+' ch';
+  const c=DOC&&DOC.chunks.find(x=>x.id===id);
+  if(c&&!sized(c)) autosize(id);        // grow with the text unless it was dragged
+  clearTimeout(SAVET[id]);
+  SAVET[id]=setTimeout(()=>flush(id),700);
+}
+// Saves for one card run in series. Two overlapping POSTs can land in either
+// order, and the loser would put the older text back.
+function queueSave(id){
+  const run=async()=>{
+    if(!DIRTY.has(id))return;
+    DIRTY.delete(id);
+    await api('/api/chunk',{name:DOC.name,id,text:$('t'+id).value});
+    await syncCards();
+  };
+  SAVING[id]=(SAVING[id]||Promise.resolve()).then(run,run);
+  return SAVING[id];
+}
+async function flush(id){
+  clearTimeout(SAVET[id]); delete SAVET[id];
+  await queueSave(id);
+}
+// Anything that rebuilds the card list, renumbers ids or moves to another
+// document has to bank the pending edits first. Saving on blur used to do this
+// by accident; a debounce means it has to be asked for.
+const flushAll=()=>Promise.all([...DIRTY].map(flush));
+
+// Update what the server derives — hash, ready, effective params — by patching
+// the cards in place. renderDoc() replaces every card's HTML, which drops
+// focus, loses the caret and throws away whatever the mouse was about to hit,
+// so it is now kept for changes that actually alter the list: split, merge,
+// duplicate, remove, undo.
+async function syncCards(){
+  if(!DOC)return;
+  const fresh=await api('/api/doc?name='+encodeURIComponent(DOC.name));
+  if(!fresh||fresh.error)return;
+  if(fresh.chunks.length!==DOC.chunks.length)return void open_(DOC.name,true);
+  DOC=fresh;
+  for(const c of DOC.chunks){
+    const card=$('c'+c.id); if(!card)continue;
+    const dot=card.querySelector('.dot');
+    if(dot)dot.className='dot '+(c.mute?'':(c.ready?'ready':'stale'));
+    const ta=$('t'+c.id);
+    // never overwrite an edit that has not reached the server yet — this runs
+    // while a bake is going, and typing in one card must survive another
+    // card finishing
+    if(ta&&document.activeElement!==ta&&!DIRTY.has(c.id)&&!SAVING[c.id]&&ta.value!==c.text){
+      ta.value=c.text;
+      if(!sized(c)) autosize(c.id);     // normalise() may have changed its length
+    }
+    const n=card.querySelector('.chars'); if(n)n.textContent=c.text.length+' ch';
+    const pf=$('pf'+c.id); if(pf)pf.disabled=!(c.ready&&!c.mute);
+    const pp=$('pp'+c.id); if(pp)pp.disabled=!(PREV[c.id]&&!c.mute);
+    const pc=$('pc'+c.id); if(pc)pc.disabled=!(c.ready&&!c.mute);
+    syncPrevBtn(c.id);
+  }
+  const rd=DOC.chunks.filter(c=>c.ready).length;
+  $('dl').hidden=rd<DOC.chunks.length;
+  $('hdr').textContent=DOC.title+' · '+DOC.chunks.length+' chunks';
+}
+
+async function one(id){
+  const b=$('rb'+id); b.classList.add('busy'); b.textContent='rendering…';
+  $('s'+id).textContent='';
+  // speak what is on screen, not what the server last heard about
+  await flush(id);
+  const r=await api('/api/render',{name:DOC.name,id,force:true});
+  if(r.error){ fail(id,r.error); return; }
+  JOBS[r.job]={id,kind:'render'};
+  $('s'+id).textContent='queued — carry on, it renders in the background';
+  pollJobs(); }
+
+// Render failures used to be written into the card and then wiped a moment
+// later by the refresh that followed, which is no way to learn that torchaudio
+// is missing. They stay put now, and also go to the footer, which is visible
+// wherever you have scrolled to.
+function fail(id,msg){
+  const b=$('rb'+id); if(b){ b.classList.remove('busy'); b.textContent='render'; }
+  const s=$('s'+id);
+  if(s)s.innerHTML=`<span style="color:var(--red)">${esc(msg)}</span>`;
+  $('status').innerHTML=`<span style="color:var(--red)">card #${id}: ${esc(msg)}</span>`;
+}
+
+// "preview selected" only means something with a selection, so the button says
+// so by being dead until there is one. selectionchange covers every way of
+// making one — dragging, shift-arrows, double-click, ⌘A.
+function selectedIn(id){
+  const ta=$('t'+id); if(!ta)return '';
+  return ta.value.slice(ta.selectionStart,ta.selectionEnd).trim();
+}
+function syncPrevBtn(id){
+  const b=$('pv'+id); if(!b||b.classList.contains('busy'))return;
+  const c=DOC&&DOC.chunks.find(x=>x.id===id);
+  b.disabled=!selectedIn(id)||!!(c&&c.mute);
+}
+document.addEventListener('selectionchange',()=>{
+  const el=document.activeElement;
+  if(el&&el.tagName==='TEXTAREA'&&/^t\d+$/.test(el.id)) syncPrevBtn(+el.id.slice(1));
+});
+
+async function prev(id){
+  const ta=$('t'+id);
+  // Grab the range before anything steals focus, then put it straight back so
+  // the highlight stays visible while the model works — you can see what you
+  // are about to hear, and press again without re-selecting.
+  const a=ta.selectionStart, z=ta.selectionEnd;
+  const sel=ta.value.slice(a,z).trim();
+  const keep=()=>{ try{ ta.focus({preventScroll:true}); ta.setSelectionRange(a,z);}catch(e){} };
+  if(!sel){ $('s'+id).textContent='select some text in the card, then press preview selection';
+            keep(); return; }
+  const b=$('pv'+id); b.classList.add('busy'); b.textContent='previewing…';
+  $('s'+id).textContent=''; keep();
+  try{
+    const r=await api('/api/preview',{name:DOC.name,id,force:true,text:sel});
+    // without this the button sits on "previewing…" for ever: nothing was
+    // queued, so no poll comes along to put it back
+    if(r.error){ b.classList.remove('busy'); b.textContent='preview selected';
+                 syncPrevBtn(id); $('s'+id).textContent=r.error; return; }
+    JOBS[r.job]={id,kind:'preview',play:true};
+    $('s'+id).textContent='queued…';
+    pollJobs();
+  }finally{ keep(); } }
+// One audio channel for the whole app: pressing play twice restarts the clip
+// instead of layering a second voice over the first.
+let AUDIO=null;
+function playHash(h){
+  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
+  AUDIO=new Audio('/api/audio?h='+h+'&t='+Date.now());
+  AUDIO.play();
+}
+function playFull(id){
+  const c=DOC.chunks.find(x=>x.id===id); if(!c||!c.ready)return; playHash(c.hash); }
+function playPrev(id){ if(PREV[id]) playHash(PREV[id]); }
+async function splitAt(id){
+  const t=$('t'+id), at=t.selectionStart;
+  if(!at||at>=t.value.length)return alert('Put the cursor where it should split.');
+  // the server splits the text it holds, so it had better be the text the
+  // cursor was sitting in
+  await flush(id);
+  await api('/api/split',{name:DOC.name,id,at}); open_(DOC.name,true); }
+async function merge(id){ await flushAll();
+  await api('/api/merge',{name:DOC.name,id}); open_(DOC.name,true); }
+async function dup(id){ await flushAll();
+  await api('/api/duplicate',{name:DOC.name,id}); open_(DOC.name,true); }
+async function del(id){
+  const c=DOC.chunks.find(x=>x.id===id);
+  const what=c.type==='audio'?`♪ audio card — ${c.clip||'no clip chosen'}`
+    :c.type==='silence'?`${c.secs==null?1:c.secs}s of silence`
+    :c.text.slice(0,90)+'…';
+  if(!confirm(`Remove card #${id}?\n\n${what}`))return;
+  await flushAll();
+  await api('/api/remove',{name:DOC.name,id}); open_(DOC.name,true); }
+async function mute(id,on){ await flushAll();
+  await api('/api/chunk',{name:DOC.name,id,mute:on}); open_(DOC.name,true); }
+async function setProfile(id,p){ await api('/api/chunk',{name:DOC.name,id,profile:p}); await syncCards(); }
+
+// ── audio & silence cards ─────────────────────────────────
+const fmtSecs=s=>s>=60?`${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`
+  :`${Math.round(s*10)/10}s`;
+// rebuild=true for edits that change what the card header says (the clip
+// name); sliders and radios keep their own DOM, so a sync is enough and the
+// control never vanishes mid-drag
+async function setCard(id,patch,rebuild){
+  await api('/api/chunk',{name:DOC.name,id,...patch});
+  if(rebuild)open_(DOC.name,true); else await syncCards();
+}
+function fadeUi(id){
+  const lo=$('flo'+id), hi=$('fhi'+id); if(!lo||!hi)return;
+  let a=+lo.value, b=+hi.value;
+  if(a>b){ a=b; lo.value=a; }        // the thumbs push each other, never cross
+  const f=$('ff'+id);
+  if(f){ f.style.left=a+'%'; f.style.width=(b-a)+'%'; }
+  const l=$('flab'+id);
+  if(l)l.textContent=(a?`fade in ${a}%`:'no fade in')+' · '+(b<100?`fade out ${100-b}%`:'no fade out');
+}
+function fadeSave(id){ fadeUi(id); setCard(id,{fade:[+$('flo'+id).value,+$('fhi'+id).value]}); }
+
+let CLIPTARGET=null;
+function pickClip(id){ CLIPTARGET=id; $('clipfile').click(); }
+$('clipfile').onchange=async e=>{
+  const f=e.target.files[0]; e.target.value='';
+  if(!f||CLIPTARGET==null)return;
+  const id=CLIPTARGET; CLIPTARGET=null;
+  $('status').textContent=`importing ${f.name}…`;
+  let j;
+  try{
+    const r=await fetch('/api/clip/upload?fn='+encodeURIComponent(f.name),
+      {method:'POST',body:f,headers:{'Content-Type':'application/octet-stream'}});
+    j=await r.json();
+  }catch(ex){ j={error:String(ex)}; }
+  if(j.error) return void($('status').innerHTML=`<span class="warn">${esc(j.error)}</span>`);
+  $('status').textContent=`clip “${j.clip}” imported · ${fmtSecs(j.secs)}`;
+  await api('/api/chunk',{name:DOC.name,id,clip:j.clip});
+  await refresh(); open_(DOC.name,true);
+};
+function playClip(id){
+  const c=DOC.chunks.find(x=>x.id===id); if(!c||!c.clip)return;
+  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
+  AUDIO=new Audio('/api/clip?f='+encodeURIComponent(c.clip));
+  AUDIO.volume=Math.min(1,(c.gain==null?100:c.gain)/100);   // fades are a render-time thing
+  AUDIO.play();
+}
+
+// ── insert & reorder ──────────────────────────────────────
+// Both renumber every card, so the per-id caches (dragged heights, previews)
+// would land on the wrong cards — throw them away and let the server's copy,
+// which travels with the card, repopulate.
+async function insertCard(at,kind){
+  await flushAll();
+  await api('/api/insert',{name:DOC.name,at,kind});
+  HEIGHT={}; PREV={};
+  open_(DOC.name,true);
+}
+let DRAGID=null;
+function dragStart(e,id){
+  DRAGID=id;
+  e.dataTransfer.effectAllowed='move';
+  try{ e.dataTransfer.setData('text/plain',String(id)); }catch(_){}
+  const card=$('c'+id); if(card)e.dataTransfer.setDragImage(card,30,14);
+}
+function dragEnd(){ DRAGID=null; clearMarks(); }
+function clearMarks(){ document.querySelectorAll('.dropa,.dropb,.ins.hot')
+  .forEach(el=>el.classList.remove('dropa','dropb','hot')); }
+function bindDrag(){
+  document.querySelectorAll('#main .chunk').forEach(el=>{
+    el.addEventListener('dragover',e=>{
+      if(DRAGID==null)return; e.preventDefault(); e.dataTransfer.dropEffect='move';
+      const r=el.getBoundingClientRect(), before=e.clientY<r.top+r.height/2;
+      clearMarks(); el.classList.add(before?'dropb':'dropa');
+    });
+    el.addEventListener('drop',e=>{
+      if(DRAGID==null)return; e.preventDefault();
+      const r=el.getBoundingClientRect(), before=e.clientY<r.top+r.height/2;
+      moveCard(DRAGID,(+el.id.slice(1))+(before?0:1));
+    });
+  });
+  // the gap between two cards is exactly where a drop aims, so the insert
+  // strips take one too — the Nth strip is slot N
+  document.querySelectorAll('#main .ins').forEach((el,at)=>{
+    el.addEventListener('dragover',e=>{
+      if(DRAGID==null)return; e.preventDefault(); e.dataTransfer.dropEffect='move';
+      clearMarks(); el.classList.add('hot');
+    });
+    el.addEventListener('drop',e=>{
+      if(DRAGID==null)return; e.preventDefault();
+      moveCard(DRAGID,at);
+    });
+  });
+}
+async function moveCard(id,to){
+  DRAGID=null; clearMarks();
+  if(to===id||to===id+1)return;      // dropped back where it already was
+  await flushAll();
+  await api('/api/move',{name:DOC.name,id,to});
+  HEIGHT={}; PREV={};
+  open_(DOC.name,true);
+}
+
+// ── bake / assemble ───────────────────────────────────────
+async function bake(){ if(!DOC)return; await api('/api/bake',{name:DOC.name}); refresh(); }
+async function stopBake(){
+  const b=$('stopb'); b.disabled=true; b.textContent='stopping…';
+  await api('/api/bake_stop',{});
+  refresh();
+}
+// The preview is the assemble mix played straight from the server — same
+// timeline, same fades, byte-for-byte the same math — just never written to
+// out/<name>.mp3. The button toggles, shows where it is in the book, and any
+// other play button stops it: one audio channel for the whole app.
+const fmtTime=t=>`${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')}`;
+let BOOKPLAY=null;
+async function previewBook(){
+  if(!DOC)return void($('status').textContent='open a document first');
+  const b=$('pvbook');
+  if(BOOKPLAY){ BOOKPLAY.pause(); return; }   // the pause handler resets the button
+  b.disabled=true; b.textContent='mixing…';
+  const r=await api('/api/book_preview',{name:DOC.name});
+  b.disabled=false; b.textContent='▶ preview audiobook';
+  if(r.error||!r.ok) return void($('status').innerHTML=r.error
+    ?`<span class="warn">${esc(r.error)}</span>`
+    :'<span class="warn">nothing to preview yet</span> — render or bake some cards first');
+  $('status').innerHTML=(r.missing
+    ?`<span class="warn">${r.missing} card(s) not ready — playing without them</span> · `:'')+
+    `previewing ${fmtTime(r.secs)} of audiobook`;
+  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
+  const a=new Audio('/api/book_audio?name='+encodeURIComponent(DOC.name)+'&t='+Date.now());
+  AUDIO=a; BOOKPLAY=a;
+  const done=()=>{ if(BOOKPLAY===a){ BOOKPLAY=null; b.textContent='▶ preview audiobook'; } };
+  a.addEventListener('pause',done);
+  a.addEventListener('ended',done);
+  a.addEventListener('error',()=>{ done(); $('status').innerHTML=
+    '<span class="warn">could not play the preview</span>'; });
+  a.addEventListener('timeupdate',()=>{ if(BOOKPLAY===a)
+    b.textContent=`■ ${fmtTime(a.currentTime)} / ${fmtTime(r.secs)}`; });
+  a.play();
+  b.textContent='■ 0:00 / '+fmtTime(r.secs);
+}
+
+async function assemble(){
+  if(!DOC)return;
+  $('status').textContent='assembling…';
+  const r=await api('/api/assemble',{name:DOC.name});
+  $('status').innerHTML=r.ok?`<span class="ok">assembled</span> ${esc(r.file)}${
+    r.missing?` <span class="warn">(${r.missing} chunk(s) not rendered)</span>`:''}`
+    :'nothing rendered yet';
+  open_(DOC.name,true); }
+
+// ── discuss ───────────────────────────────────────────────
+async function send(){
+  const q=$('ask').value.trim(); if(!q)return;
+  $('ask').value=''; $('sendb').disabled=true;
+  $('log').innerHTML+=`<div class="m me">${esc(q)}</div>`;
+  $('log').scrollTop=1e6;
+  const r=await api('/api/chat',{name:DOC?DOC.name:null,question:q,
+    chunks:SEL.size?[...SEL]:null});
+  $('log').innerHTML+=`<div class="m">${esc(r.reply)}</div>`;
+  $('log').scrollTop=1e6; $('sendb').disabled=false; }
+$('ask').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))send()});
+
+async function undo(){
+  if(!DOC)return;
+  await flushAll();          // or the pending edit lands on top of the undo
+  const r=await api('/api/undo',{name:DOC.name});
+  $('status').textContent = r.ok ? `undid: ${r.undone} (${r.left} left)` : 'nothing to undo';
+  if(r.ok) open_(DOC.name,true);
+}
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key==='z'&&e.target.tagName!=='TEXTAREA'){e.preventDefault();undo()}
+});
+// Jobs run on the server, so switching document or closing the tab does not
+// stop them. Poll for state rather than holding a request open.
+async function pollJobs(){
+  if(POLL) clearTimeout(POLL);
+  const st=await api('/api/jobs'+(DOC?'?name='+encodeURIComponent(DOC.name):''));
+  let changed=false;
+  const active=new Set();
+  for(const j of st.jobs){
+    const mine=JOBS[j.id];
+    if(j.status==='queued'||j.status==='running'){
+      active.add(j.chunk);
+      const b=$( (j.kind==='preview'?'pv':'rb') + j.chunk);
+      if(b){ b.classList.add('busy');
+             b.textContent = j.status==='running'
+               ? (j.kind==='preview'?'previewing…':'rendering…')
+               : 'queued…'; }
+      const s=$('s'+j.chunk); if(s&&j.status==='running')s.textContent='rendering in background…';
+    }else if(mine){
+      delete JOBS[j.id]; changed=true;
+      const s=$('s'+j.chunk);
+      if(j.status==='error'){ fail(j.chunk,j.error); }
+      else{
+        if(j.kind==='preview'){ PREV[j.chunk]=j.hash;
+          if(s)s.textContent=`previewed ${j.chars} of ${j.of} chars · ${j.seconds}s`;
+          if(mine.play)playHash(j.hash); }
+        else if(s)s.textContent=`rendered in ${j.seconds}s`;
+      }
+    }
+  }
+  // restore any button that is no longer working
+  document.querySelectorAll('button.busy').forEach(b=>{
+    const id=parseInt(b.id.slice(2),10);
+    if(!active.has(id)){ b.classList.remove('busy');
+      if(b.id.startsWith('pv')){ b.textContent='preview selected'; syncPrevBtn(id); }
+      else b.textContent='render'; }
+  });
+  $('busy').textContent = st.busy ? `${st.busy} rendering` : '';
+  // patch, do not rebuild: this fires while you are typing, and it must not
+  // erase the message it just wrote about why a render failed
+  if(changed && DOC) await syncCards();
+  if(st.busy) POLL=setTimeout(pollJobs,1500);
+}
+pollJobs();
+refresh();
+</script>
+</body>
+</html>

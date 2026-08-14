@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Saga Studio</title>
+<style>
+:root{--bg:#0b0d0c;--panel:#101413;--line:#222b28;--fg:#ccd6d0;--bright:#f2f7f4;
+--dim:#6d7d75;--faint:#4a5852;--green:#7fd88f;--amber:#e8b45c;--red:#e05f56;
+--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--fg);font:13.5px/1.6 var(--mono);height:100vh;
+display:flex;align-items:center;justify-content:center;padding:40px 28px;
+-webkit-app-region:drag;user-select:none}
+.card{width:100%;max-width:660px;-webkit-app-region:no-drag}
+h1{font-size:13px;letter-spacing:.18em;color:var(--bright);font-weight:600;margin-bottom:22px}
+h1 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);
+margin-right:9px;vertical-align:1px;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+@media(prefers-reduced-motion:reduce){h1 .dot{animation:none}}
+.msg{color:var(--bright);font-size:15px;margin-bottom:10px;line-height:1.45}
+p{color:var(--dim);margin-bottom:12px}
+.path{color:var(--fg);word-break:break-all}
+pre{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:11px 13px;
+font:12px/1.65 var(--mono);color:var(--fg);overflow:auto;max-height:230px;white-space:pre-wrap;
+user-select:text;-webkit-user-select:text;margin-bottom:14px}
+pre.cmd{color:var(--green);white-space:pre;max-height:none}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
+button{background:#131a17;border:1px solid var(--line);color:var(--fg);border-radius:6px;
+padding:7px 14px;font:12.5px var(--mono);cursor:pointer}
+button:hover{border-color:var(--green);color:var(--green)}
+button.pri{border-color:var(--green);color:var(--green)}
+.warn{color:var(--amber)}
+.hide{display:none}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1><span class="dot"></span>SAGA STUDIO</h1>
+  <div id="body"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id)
+const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))
+const call = (name, ...a) => window.saga && window.saga.call(name, ...a)
+
+const VENV = [
+  'python3.11 -m venv ~/saga-venv',
+  '~/saga-venv/bin/pip install chatterbox-tts torch torchaudio'
+].join('\n')
+
+function render ({ state, detail = {} }) {
+  if (state === 'launching') {
+    $('body').innerHTML = `
+      <div class="msg">Starting the studio…</div>
+      <p>Opening <span class="path">${esc(detail.library || '')}</span></p>`
+    return
+  }
+
+  const kind = detail.kind || 'failed'
+  const heads = {
+    'no-python': 'No Python interpreter found',
+    'no-torch': 'That Python cannot run the voice model',
+    crashed: 'The backend stopped unexpectedly',
+    failed: 'The studio could not start'
+  }
+
+  const needsPython = kind === 'no-python' || kind === 'no-torch'
+  $('body').innerHTML = `
+    <div class="msg warn">${esc(heads[kind] || heads.failed)}</div>
+    <p>${esc(detail.message || '')}</p>
+    ${detail.python ? `<p>Tried: <span class="path">${esc(detail.python)}</span></p>` : ''}
+    ${needsPython ? `
+      <p>Saga Studio speaks with Chatterbox, which needs <b>torch</b>. Point the
+      app at a virtual environment that has it, or make one:</p>
+      <pre class="cmd">${esc(VENV)}</pre>` : ''}
+    ${detail.log ? `<p>What the backend said:</p><pre id="log">${esc(detail.log)}</pre>` : ''}
+    <div class="row">
+      <button class="pri" id="pick">Choose Python…</button>
+      <button id="lib">Choose Library Folder…</button>
+      <button id="retry">Try Again</button>
+      <button id="log-btn">Open Full Log</button>
+      <button id="quit">Quit</button>
+    </div>`
+
+  $('pick').onclick = () => call('choosePython')
+  $('lib').onclick = () => call('chooseLibrary')
+  $('retry').onclick = () => call('restart')
+  $('log-btn').onclick = () => call('openLog')
+  $('quit').onclick = () => call('quit')
+  const log = $('log')
+  if (log) log.scrollTop = log.scrollHeight
+}
+
+render({ state: 'launching' })
+if (window.saga) window.saga.onState(render)
+</script>
+</body>
+</html>
