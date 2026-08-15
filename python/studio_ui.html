@@ -93,6 +93,9 @@ input[type=number]{width:62px}
 .pill{font-size:10.5px;border:1px solid var(--line);border-radius:99px;padding:1px 7px;color:var(--faint)}
 button.tiny{padding:0 5px;font-size:12px;line-height:17px;border-color:transparent;color:var(--faint)}
 .proj:hover button.tiny{border-color:var(--line)}
+/* same bargain in a card header: invisible until the card is under the mouse,
+   so the row reads as text and not as a strip of controls */
+.chunk:hover .top button.tiny{border-color:var(--line)}
 /* The stack: cards no longer carry their own bottom margin — the insert strip
    between them does, so "between two cards" is a real place you can point at,
    both to insert and to drop a dragged card. */
@@ -102,6 +105,10 @@ opacity:0;transition:opacity .15s}
 .ins:hover,.ins.hot{opacity:1}
 .ins::before,.ins::after{content:'';flex:1;height:1px;background:var(--line)}
 .ins button{padding:0 7px;font-size:10.5px;line-height:16px;color:var(--dim)}
+/* Paste is offered only when there is something to paste. An always-present
+   "+ paste" that does nothing four days out of five is a button you learn to
+   read past, and then miss on the day it would have worked. */
+body:not([data-clip="1"]) .ins .pb{display:none}
 .grip{cursor:grab;color:var(--faint);user-select:none;flex:none}
 .grip:active{cursor:grabbing}
 .chunk.dropb{box-shadow:0 -3px 0 var(--green)}
@@ -128,7 +135,7 @@ border-radius:50%;background:var(--green);border:none;cursor:ew-resize}
 body[data-chat=off]{grid-template-columns:270px 1fr}
 body[data-chat=off] #chat{display:none}
 body[data-chat=off] .dchk{display:none}   /* no panel, no "send this as context" */
-#chatb.on{border-color:var(--green);color:var(--green)}
+#chatb.on,#frb.on{border-color:var(--green);color:var(--green)}
 /* take stepper: which roll of the dice this card is speaking */
 .take{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--line);
   border-radius:5px;padding:0 2px;margin-left:2px}
@@ -144,6 +151,8 @@ body[data-chat=off] .dchk{display:none}   /* no panel, no "send this as context"
   <span style="flex:1"></span>
   <span class="pill warn" id="busy"></span>
   <span class="pill" id="model">model: cold</span>
+  <button id="frb" onclick="toggleFind()" disabled
+    title="find and replace across this episode — ⌘F">find</button>
   <button id="chatb" onclick="toggleChat()" title="show or hide the discuss panel">discuss</button>
 </header>
 
@@ -514,18 +523,21 @@ function bindVoiceDrop(){
 function renderDoc(){
   $('main').innerHTML=insBar(0)+DOC.chunks.map(c=>cardHTML(c)+insBar(c.id+1)).join('');
   DOC.chunks.forEach(c=>{ if(c.type==='audio')fadeUi(c.id); });
-  bindDrag();
+  bindDrag(); paintClip();          // the strips are new, so their paste buttons are too
 }
 function cardHTML(c){
   return c.type==='audio'?audioCard(c):c.type==='silence'?silenceCard(c):speechCard(c);
 }
 const insBar=at=>`<div class="ins">
+    <button class="pb" onclick="pasteCard(${at})">+ paste</button>
     <button onclick="insertCard(${at},'speech')" title="insert an empty text card here">+ text</button>
     <button onclick="insertCard(${at},'audio')" title="insert a music / sound-effect card here">+ ♪ audio</button>
     <button onclick="insertCard(${at},'silence')" title="insert a timed pause here">+ silence</button>
   </div>`;
 const grip=id=>`<span class="grip" draggable="true" ondragstart="dragStart(event,${id})"
   ondragend="dragEnd()" title="drag to move this card">⠿</span>`;
+const copyBtn=id=>`<button class="tiny" id="cp${id}" onclick="copyCard(${id})"
+  title="copy this card — then “+ paste” in any gap, in this episode or another">⧉</button>`;
 
 function speechCard(c){return `
    <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
@@ -541,6 +553,7 @@ function speechCard(c){return `
       </select>
       ${c.mute?'<span class="pill warn">muted</span>':''}
       <span style="flex:1"></span>
+      ${copyBtn(c.id)}
       <label class="mut dchk" style="font-size:11px"><input type="checkbox" ${SEL.has(c.id)?'checked':''}
         onchange="pick(${c.id},this.checked)"> discuss</label>
     </div>
@@ -577,6 +590,7 @@ function audioCard(c){
       <span class="mut">${c.clip?esc(c.clip)+(len?' · '+fmtSecs(len):''):'no clip chosen'}</span>
       ${c.mute?'<span class="pill warn">muted</span>':''}
       <span style="flex:1"></span>
+      ${copyBtn(c.id)}
     </div>
     <div class="arow">
       <select onchange="setCard(${c.id},{clip:this.value},true)" style="max-width:230px">
@@ -635,6 +649,7 @@ function silenceCard(c){return `
       <span class="mut" style="font-size:11px">seconds of rest</span>
       ${c.mute?'<span class="pill warn">muted</span>':''}
       <span style="flex:1"></span>
+      ${copyBtn(c.id)}
       <button class="tiny" onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
       <button class="tiny" onclick="del(${c.id})" style="color:var(--red)" title="remove">×</button>
     </div>
@@ -679,19 +694,59 @@ function watchHeights(){
     }).observe(ta);
   });
 }
+// The find bar used to be nailed open above the cards: you searched once and
+// then read the rest of the afternoon around a bar you had finished with, under
+// a hit list that could be 150px of a search you no longer remembered making.
+// So it closes — × or Esc — and ⌘F or the header button brings it back with the
+// caret already in it. Which state it was left in survives a reload, the same
+// way the discuss panel's does.
+let FROPEN=true;
+try{ FROPEN=localStorage.getItem('saga.find')!=='off'; }catch(e){}
+function paintFR(){
+  const on=FROPEN&&!!DOC;
+  $('frbar').hidden=!on;
+  $('frb').classList.toggle('on',on);
+  $('frb').disabled=!DOC;
+}
+function setFR(on){
+  FROPEN=on;
+  try{ localStorage.setItem('saga.find',on?'on':'off'); }catch(e){}
+  // A closed drawer keeps nothing. Coming back to a stale hit list, with
+  // "replace all" still armed under it, is how the wrong word gets replaced.
+  if(!on){
+    const h=$('frHits'), m=$('frMsg'), g=$('frGo');
+    if(h)h.innerHTML=''; if(m)m.textContent=''; if(g)g.disabled=true;
+  }
+  paintFR();
+}
+function findOpen(){          // ⌘F means "search", whether or not the bar is up
+  if(!DOC)return;
+  setFR(true);
+  const i=$('frFind'); if(i){ i.focus(); i.select(); }
+}
+function toggleFind(){ if(!DOC)return; FROPEN?setFR(false):findOpen(); }
+function frKey(e){
+  if(e.key==='Enter'){ e.preventDefault(); frFindAll(); }
+  if(e.key==='Escape'){ e.preventDefault(); setFR(false); }
+}
 function renderFR(){
-  const b=$('frbar'); b.hidden=!DOC; if(!DOC)return;
-  if(b.dataset.built)return; b.dataset.built='1';
-  b.innerHTML=`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-    <input id="frFind" placeholder="find" style="flex:1;min-width:120px">
-    <input id="frRepl" placeholder="replace with" style="flex:1;min-width:120px">
+  const b=$('frbar');
+  if(DOC&&!b.dataset.built){
+    b.dataset.built='1';
+    b.innerHTML=`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+    <input id="frFind" placeholder="find" style="flex:1;min-width:120px" onkeydown="frKey(event)">
+    <input id="frRepl" placeholder="replace with" style="flex:1;min-width:120px" onkeydown="frKey(event)">
     <label class="mut" style="font-size:11px"><input type="checkbox" id="frWhole" checked> whole word</label>
     <label class="mut" style="font-size:11px"><input type="checkbox" id="frCase"> match case</label>
     <label class="mut" style="font-size:11px"><input type="checkbox" id="frRe"> regex</label>
     <button onclick="frFindAll()">find</button>
     <button class="pri" id="frGo" onclick="frApply()" disabled>replace all</button>
     <span class="mut" id="frMsg" style="font-size:11.5px"></span>
+    <button class="tiny" style="margin-left:auto" onclick="setFR(false)"
+      title="close the find bar — ⌘F brings it back">×</button>
   </div><div id="frHits" style="margin-top:6px;font-size:11.5px;max-height:150px;overflow-y:auto"></div>`;
+  }
+  paintFR();
 }
 function frBody(dry){ return {name:DOC.name, find:$('frFind').value, replace:$('frRepl').value,
   whole:$('frWhole').checked, case:$('frCase').checked, regex:$('frRe').checked, dry_run:dry}; }
@@ -991,6 +1046,71 @@ async function insertCard(at,kind){
   // above, so hold the old first card, which is now #1.
   open_(DOC.name,true, at>0?at-1:{from:0,to:1});
 }
+
+// ── copy & paste ──────────────────────────────────────────
+// One card held outside any document, so copying is the same gesture within an
+// episode and between two of them — which is the case that asked for it: the
+// intro music of episode 1 wanted at the top of episode 2, with its fades and
+// its "next card after 5s" already set the way you spent an evening setting
+// them. localStorage rather than a variable, because copying on Tuesday and
+// pasting on Wednesday is worth the two lines.
+//
+// The system clipboard is deliberately not involved. ⌘C inside a card still
+// copies the words you selected, which is a different thing you also want, and
+// this is a card — its profile, its take, its fades — not a piece of text.
+let CLIP=null;
+try{ CLIP=JSON.parse(localStorage.getItem('saga.card')||'null'); }catch(e){}
+const clipLabel=c=>!c?'':
+   c.type==='audio'?`♪ ${c.clip||'no clip'}`
+  :c.type==='silence'?`${c.secs==null?1:c.secs}s of silence`
+  :'“'+(c.text||'').replace(/\s+/g,' ').trim().slice(0,44)+((c.text||'').length>44?'…':'')+'”';
+// The paste buttons live in strips that were built before the copy happened,
+// so this paints them where they stand rather than rebuilding the stack: a
+// rebuild here would drop the caret out of the card you just copied from.
+function paintClip(){
+  document.body.dataset.clip=CLIP?'1':'';
+  const t=CLIP?`paste the copied card here — ${clipLabel(CLIP)}`+(CLIP.from?` · from ${CLIP.from}`:''):'';
+  document.querySelectorAll('#main .ins .pb').forEach(b=>{b.title=t});
+}
+async function copyCard(id){
+  const was=DOC&&DOC.chunks.find(x=>x.id===id); if(!was)return;
+  // Copy the words on screen, not the ones the server last heard about — the
+  // debounce means an edit half a second old is still only in the textarea.
+  if((was.type||'speech')==='speech')await flush(id);
+  const c=(DOC.chunks.find(x=>x.id===id))||was;
+  CLIP={type:c.type||'speech', mute:!!c.mute, from:`${DOC.title} #${id}`};
+  if(CLIP.type==='audio')Object.assign(CLIP,
+    {clip:c.clip||'', mode:c.mode||'full', after:c.after, fade:c.fade, gain:c.gain});
+  else if(CLIP.type==='silence')CLIP.secs=c.secs;
+  else Object.assign(CLIP,
+    {text:c.text, profile:c.profile, seed:c.seed, height:HEIGHT[id]||c.height, params:c.params});
+  try{ localStorage.setItem('saga.card',JSON.stringify(CLIP)); }catch(e){}
+  paintClip();
+  // The button says so itself: a note in the footer is 900px from where you
+  // are looking, and copying is exactly the action that leaves nothing behind.
+  const b=$('cp'+id);
+  if(b){ b.textContent='copied'; setTimeout(()=>{ if($('cp'+id)===b)b.textContent='⧉'; },1200); }
+  $('status').textContent=`copied ${clipLabel(CLIP)} — “+ paste” in any gap puts it back`;
+}
+async function pasteCard(at){
+  if(!CLIP||!DOC)return void($('status').textContent='nothing copied yet — press ⧉ on a card first');
+  await flushAll();
+  const r=await api('/api/paste',{name:DOC.name,at,card:CLIP});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  HEIGHT={}; PREV={}; CUR=null;               // as insertCard: every card is renumbered
+  await open_(DOC.name,true, at>0?at-1:{from:0,to:1});
+  refresh();                                  // the episode has a card more than it did
+  // "Do I have to bake this again?" is the first question a pasted card
+  // raises, so answer it unasked. Usually no: the wav is on disk under a hash
+  // made of the same words in the same voice, so the copy is born rendered.
+  // The one thing worth a warning is an audio card landing next to a clip
+  // library that has no clip by that name — a card that will assemble silently.
+  const c=DOC.chunks.find(x=>x.id===at), kind=c?(c.type||'speech'):'';
+  const note = kind==='speech'&&c.ready ? ' — already rendered'
+    : kind==='audio'&&!c.ready ? ' — <span class="warn">but no clip of that name is in this library</span>'
+    : '';
+  $('status').innerHTML=`pasted ${esc(clipLabel(CLIP))} as card #${at}${note}`;
+}
 let DRAGID=null;
 function dragStart(e,id){
   DRAGID=id;
@@ -1213,6 +1333,12 @@ async function undo(){
 }
 document.addEventListener('keydown',e=>{
   if((e.metaKey||e.ctrlKey)&&e.key==='z'&&e.target.tagName!=='TEXTAREA'){e.preventDefault();undo()}
+  // ⌘F is find-in-manuscript here, not find-in-page: the page is 60 cards of
+  // which the browser can only see the ones the scroller has built.
+  if((e.metaKey||e.ctrlKey)&&e.key==='f'){e.preventDefault();findOpen()}
+  // Esc closes the bar from anywhere except a card you are typing in, where it
+  // would be a keystroke that throws away a panel you were not looking at
+  if(e.key==='Escape'&&FROPEN&&DOC&&e.target.tagName!=='TEXTAREA')setFR(false);
 });
 // Jobs run on the server, so switching document or closing the tab does not
 // stop them. Poll for state rather than holding a request open.
@@ -1258,6 +1384,8 @@ async function pollJobs(){
 }
 pollJobs();
 refresh();
+paintFR();          // the header buttons before any document is open
+paintClip();        // a card copied last session is still on the clipboard
 </script>
 </body>
 </html>

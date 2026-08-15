@@ -193,6 +193,60 @@ def is_speech(c):
     return c.get("type", "speech") == "speech"
 
 
+def _num(v, dflt, lo, hi):
+    try:
+        return max(lo, min(hi, float(v)))
+    except (TypeError, ValueError):
+        return dflt
+
+
+def paste_card(src):
+    """A fresh card built from a copied one.
+
+    The clipboard lives in the browser — it survives a reload in localStorage
+    and it crosses from one project to another — so what arrives here is
+    untrusted input and gets the same whitelist-and-clamp treatment /api/chunk
+    gives an edit. `id` and `note` describe where a card sits rather than what
+    it is, and hash/ready/effective are derived, so all of them are dropped.
+
+    Everything the hash is made of is kept, and audio lives in one pool keyed
+    by that hash: paste a card that was already rendered and its wav is still
+    on disk under the same name, so the copy arrives ready without speaking a
+    word of it again. The same goes for a clip, which cards name rather than
+    contain — which is what makes pasting the intro music into next week's
+    episode a paste and not an import."""
+    kind = src.get("type") or "speech"
+    if kind == "audio":
+        fade = list(src.get("fade") or [])[:2] + [0, 100]
+        lo = _num(fade[0], 0.0, 0.0, 100.0)
+        c = {"id": 0, "type": "audio",
+             "clip": re.sub(r"[^a-z0-9_-]", "", str(src.get("clip") or "")),
+             "mode": "after" if src.get("mode") == "after" else "full",
+             "after": _num(src.get("after"), 5.0, 0.0, 3600.0),
+             "fade": [lo, max(lo, _num(fade[1], 100.0, 0.0, 100.0))],
+             "gain": _num(src.get("gain"), 100.0, 0.0, 200.0),
+             "note": ""}
+    elif kind == "silence":
+        c = {"id": 0, "type": "silence",
+             "secs": _num(src.get("secs"), 1.0, 0.0, 3600.0), "note": ""}
+    else:
+        c = {"id": 0, "text": normalise(str(src.get("text") or "")),
+             "params": {k: v for k, v in (src.get("params") or {}).items()
+                        if k in DEFAULTS and v is not None},
+             "note": ""}
+        if src.get("profile"):
+            c["profile"] = str(src["profile"])[:80]
+        seed = int(_num(src.get("seed"), 0, 0, 10 ** 6))
+        if seed:
+            c["seed"] = seed
+        height = int(_num(src.get("height"), 0, 0, 4000))
+        if height:
+            c["height"] = height
+    if src.get("mute"):
+        c["mute"] = True
+    return c
+
+
 # ── clips ───────────────────────────────────────────────────────────────
 # Everything in clips/ is a PCM wav this program wrote via ffmpeg, so the
 # stdlib wave module can read it — no torch import just to ask a duration.
@@ -1303,6 +1357,19 @@ class H(BaseHTTPRequestHandler):
                     c = {"id": 0, "text": "", "params": {}, "note": ""}
                 at = max(0, min(int(d.get("at", 0)), len(doc["chunks"])))
                 doc["chunks"].insert(at, c)
+                for i, c in enumerate(doc["chunks"]):
+                    c["id"] = i
+                save(doc)
+                return self._send(200, {"ok": True, "id": at})
+
+            if u.path == "/api/paste":
+                doc = load(d["name"])
+                card = d.get("card")
+                if not isinstance(card, dict):
+                    return self._send(400, {"error": "nothing to paste"})
+                snapshot(doc, "paste card")
+                at = max(0, min(int(d.get("at", 0)), len(doc["chunks"])))
+                doc["chunks"].insert(at, paste_card(card))
                 for i, c in enumerate(doc["chunks"]):
                     c["id"] = i
                 save(doc)
