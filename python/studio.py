@@ -2055,13 +2055,24 @@ class H(BaseHTTPRequestHandler):
             f = AUDIO / f"{chunk_hash(c, doc)}.wav"
             if not f.exists():
                 return self._send(404, b"", "text/plain")
-            eff = fx_of(params_for(c, doc))
+            pp = params_for(c, doc)
+            eff = fx_of(pp)
             if eff:
                 try:
                     f = fx_render(f, eff)
                 except Exception as ex:
                     print(f"plugin failed on card {cid}: "
                           f"{type(ex).__name__}: {ex}", flush=True)
+            # level too — the one card must sound like the book will. A gain
+            # is a multiply, so it happens on the way out with no cache.
+            g = float(pp.get("gain", 100))
+            if g != 100.0:
+                import io
+                import soundfile as sf
+                audio, asr = sf.read(str(f), dtype="float32")
+                buf = io.BytesIO()
+                sf.write(buf, audio * (g / 100.0), asr, format="WAV", subtype="FLOAT")
+                return self._send(200, buf.getvalue(), "audio/wav")
             return self._send_file(f, "audio/wav")
         if u.path == "/api/take":
             nm = re.sub(r"[^a-z0-9]", "", q.get("f", [""])[0])
@@ -2509,13 +2520,23 @@ class H(BaseHTTPRequestHandler):
                 except FileNotFoundError as ex:
                     return self._send(404, {"error": str(ex)})
                 pl = str(d.get("plugin") or "")
-                if not plugin_ok(pl):
-                    return self._send(400, {"error": "not a plugin folder this program reads"})
-                try:
-                    out = fx_render(vf, {"plugin": pl, "enabled": True,
-                                         "params": d.get("params") or {}})
-                except Exception as ex:
-                    return self._send(400, {"error": f"{type(ex).__name__}: {ex}"})
+                out = vf
+                if pl:
+                    if not plugin_ok(pl):
+                        return self._send(400, {"error": "not a plugin folder this program reads"})
+                    try:
+                        out = fx_render(vf, {"plugin": pl, "enabled": True,
+                                             "params": d.get("params") or {}})
+                    except Exception as ex:
+                        return self._send(400, {"error": f"{type(ex).__name__}: {ex}"})
+                g = _num(d.get("gain"), 100.0, 0.0, 200.0)
+                if g != 100.0:
+                    import io
+                    import soundfile as sf
+                    audio, asr = sf.read(str(out), dtype="float32")
+                    buf = io.BytesIO()
+                    sf.write(buf, audio * (g / 100.0), asr, format="WAV", subtype="FLOAT")
+                    return self._send(200, buf.getvalue(), "audio/wav")
                 return self._send_file(out, "audio/wav")
 
             if u.path == "/api/profile/impact":

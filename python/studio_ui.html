@@ -1195,7 +1195,8 @@ async function fxAudition(){
   try{
     const r=await fetch('/api/fx_preview',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({voice:v,plugin:fx.plugin,params:fx.params||{}})});
+      body:JSON.stringify({voice:v,plugin:fx.plugin,params:fx.params||{},
+        gain:DRAFT.gain==null?100:DRAFT.gain})});
     if(!r.ok){
       let j={}; try{ j=await r.json(); }catch(e){}
       return void($('status').innerHTML=`<span class="warn">${esc(j.error||'could not process')}</span>`);
