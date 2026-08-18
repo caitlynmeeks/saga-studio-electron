@@ -1639,7 +1639,7 @@ function ctxAsk(suggested,placeholder,label,onOk){
 }
 
 // Every per-card verb that never earned a button lives on the header's
-// right-click: collapse, naming, locking. Delegated once — the stack rebuilds
+// right-click: collapse, naming. Delegated once — the stack rebuilds
 // constantly and per-card listeners would double up. Inputs keep their native
 // menu; only the plain header surface is claimed.
 document.addEventListener('contextmenu',e=>{
@@ -1651,18 +1651,14 @@ document.addEventListener('contextmenu',e=>{
 function cardMenu(e,id){
   const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
   const items=[
-    {label:c.min?'expand':'collapse to a bar', run:()=>setMin(id,!c.min)},
+    {label:c.min?'expand':'collapse', run:()=>setMin(id,!c.min)},
     {label:c.label?'rename…':'name…', run:()=>{ openCtx(e,[]);
        ctxAsk(c.label||'','Maisie discovers the plan','name',v=>setCard(id,{label:v},true)); }},
   ];
   if(c.label)items.push({label:'clear the name', run:()=>setCard(id,{label:''},true)});
-  items.push({label:c.locked?'unlock':'lock',
-    run:()=>setCard(id,{locked:!c.locked},true)});
   if(SEL.size>1)items.unshift(
     {label:`group the ${SEL.size} selected`, run:()=>makeGroup(freeGroupName())},'-');
-  if(c.group)items.push(
-    {label:`step out of “${c.group}”`, run:()=>popFromGroup(id)},
-    {label:`dissolve “${c.group}” — the cards stay`, run:()=>ungroup(c.group)});
+  if(c.group)items.push({label:'ungroup', run:()=>popFromGroup(id)});
   items.push('-',{label:'copy', run:()=>copyCard(id)});
   openCtx(e,items);
 }
@@ -1790,7 +1786,7 @@ function groupMenu(e,g){
     {label:'rename\u2026', run:()=>{ openCtx(e,[]);
        ctxAsk(g,'group name','rename',t=>renameGroup(g,t)); }},
     '-',
-    {label:'ungroup \u2014 the cards stay', run:()=>ungroup(g)},
+    {label:'ungroup all \u2014 the cards stay', run:()=>ungroup(g)},
   ]);
 }
 async function renameGroup(g,to){
@@ -1817,7 +1813,8 @@ async function toggleGmin(g){
 function gbar(g){
   // the name was stripped of quote/angle characters on the way in, so it can
   // sit inside these handlers without breaking out of them
-  const n=DOC.chunks.filter(x=>x.group===g).length, min=isGmin(g);
+  const mem=DOC.chunks.filter(x=>x.group===g), n=mem.length, min=isGmin(g);
+  const allLocked=n>0&&mem.every(c=>c.locked), allMuted=n>0&&mem.every(c=>c.mute);
   return `<div class="gbar" data-g="${esc(g)}" draggable="true"
     title="drag to move the whole group · drop a card on me and it joins · right-click for more"
     oncontextmenu="groupMenu(event,'${esc(g)}')"
@@ -1826,8 +1823,35 @@ function gbar(g){
     <b ondblclick="toggleGmin('${esc(g)}')">${esc(g)}</b>
     <span class="mut" style="font-size:11px">${n} card${n===1?'':'s'}${min?' · folded':''}</span>
     <span style="flex:1"></span>
-    <button class="tiny" onclick="ungroup('${esc(g)}')" title="ungroup — the cards stay where they are">×</button>
+    <button class="tiny" onclick="lockGroup('${esc(g)}')"
+      style="filter:grayscale(1)${allLocked?'':';opacity:.35'}"
+      title="${allLocked?'unlock every card in this group':'lock every card in this group'}">${allLocked?'🔒':'🔓'}</button>
+    <button class="tiny" onclick="copyGroup('${esc(g)}')"
+      title="copy this group — then “+ paste” in any gap puts all ${n} cards back">⧉</button>
+    <button class="tiny" onclick="muteGroup('${esc(g)}')">${allMuted?'unmute':'mute'}</button>
+    <button class="tiny" onclick="ungroup('${esc(g)}')" style="color:var(--red)" title="ungroup all — the cards stay where they are">×</button>
   </div>`;
+}
+// the group bar's card privileges — each acts on every member at once
+async function lockGroup(g){
+  const mem=DOC?DOC.chunks.filter(c=>c.group===g):[]; if(!mem.length)return;
+  const on=!mem.every(c=>c.locked);
+  await flushAll();
+  for(const c of mem)await api('/api/chunk',{name:DOC.name,id:c.id,locked:on});
+  await open_(DOC.name,true);
+  $('status').innerHTML=`<span class="ok">${on?'locked':'unlocked'} “${esc(g)}”</span> — all ${mem.length} cards`;
+}
+async function muteGroup(g){
+  const mem=DOC?DOC.chunks.filter(c=>c.group===g):[]; if(!mem.length)return;
+  const on=!mem.every(c=>c.mute);
+  // /api/chunk refuses content edits on a locked card, and mute is content —
+  // it changes the mix — so locked members sit this one out
+  const skip=mem.filter(c=>c.locked&&!!c.mute!==on).length;
+  await flushAll();
+  for(const c of mem)if(!c.locked)await api('/api/chunk',{name:DOC.name,id:c.id,mute:on});
+  await open_(DOC.name,true);
+  $('status').innerHTML=`<span class="ok">${on?'muted':'unmuted'} “${esc(g)}”</span>`+
+    (skip?` — ${skip} locked card${skip===1?'':'s'} kept as they were`:'');
 }
 function freeGroupName(){
   // born with a name, renamed at leisure — a dialog at creation time is a
@@ -1870,7 +1894,7 @@ async function popFromGroup(id){
   if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
   HEIGHT={}; CUR=null; SEL.clear();
   await open_(DOC.name,true);
-  $('status').innerHTML=`<span class="ok">card stepped out of “${esc(g)}”</span> — it sits just beneath the group`;
+  $('status').innerHTML=`<span class="ok">card ungrouped from “${esc(g)}”</span> — it sits just beneath the group`;
 }
 async function dropIntoGroup(id,g){
   DRAGID=null; clearMarks();
@@ -1941,24 +1965,28 @@ function cardHTML(c){
 // two-hundred-card stack. The name is yours if you set one ("Maisie discovers
 // the plan"), the card's own gist otherwise.
 const cardName=c=>c.label||clipLabel(c)||'(empty card)';
-const minBtn=id=>`<button class="tiny" onclick="setMin(${id},true)"
-  title="collapse to a bar — easier to drag; right-click the header to name it">▾</button>`;
+const foldBtn=c=>c.min
+  ?`<button class="tiny" onclick="setMin(${c.id},false)" title="expand">▸</button>`
+  :`<button class="tiny" onclick="setMin(${c.id},true)"
+     title="collapse — easier to drag; right-click the header to name it">▾</button>`;
 const muteBtn=c=>`<button class="tiny" onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>`;
 const delBtn=id=>`<button class="tiny" onclick="del(${id})" style="color:var(--red)" title="remove this card">×</button>`;
+const lockBtn=c=>`<button class="tiny" onclick="setCard(${c.id},{locked:${!c.locked}},true)"
+  style="filter:grayscale(1)${c.locked?'':';opacity:.35'}"
+  title="${c.locked?'unlock this card':'lock this card — no edits, no deleting'}">${c.locked?'🔒':'🔓'}</button>`;
 function minCard(c){
   return `
    <div class="chunk min ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top" style="border-bottom:0">
-      ${grip(c.id)}
+      ${grip(c.id)}${foldBtn(c)}
       <span class="dot ${c.mute?'':(c.ready?'ready':'stale')}"></span>
       <span>#${c.id}</span>
       <span class="cardname" title="right-click to name this card">${esc(cardName(c))}</span>
       ${c.mute?'<span class="pill warn">muted</span>':''}
       ${tagsUi(c)}
       <span style="flex:1"></span>
-      ${copyBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
-      <button class="tiny" onclick="setMin(${c.id},false)" title="expand">▸</button>
+      ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
    </div>`;
 }
@@ -1992,6 +2020,8 @@ const grip=id=>`<span class="grip" draggable="true" ondragstart="dragStart(event
   ondragend="dragEnd()" title="drag to move this card">⠿</span>`;
 const copyBtn=id=>`<button class="tiny" id="cp${id}" onclick="copyCard(${id})"
   title="copy this card — then “+ paste” in any gap, in this episode or another">⧉</button>`;
+const dupBtn=id=>`<button class="tiny" onclick="dup(${id})"
+  title="duplicate this card — an exact copy lands right after it">⎘</button>`;
 
 // ── tags ──────────────────────────────────────────────────
 // A tag is a label and, once choice cards aim at it, an anchor. TAGN is the
@@ -2004,9 +2034,7 @@ function tagCounts(){
   const dl=$('taglist');
   if(dl)dl.innerHTML=[...TAGN.keys()].sort().map(t=>`<option value="${esc(t)}">`).join('');
 }
-const tagsUi=c=>`<span class="tags" id="tg${c.id}">${
-  c.locked?'<span class="pill" title="locked — right-click the header to unlock">🔒</span>':''
-  }${(c.tags||[]).map(t=>
+const tagsUi=c=>`<span class="tags" id="tg${c.id}">${(c.tags||[]).map(t=>
     `<span class="tag${(TAGN.get(t)||0)>1?' dup':''}"${(TAGN.get(t)||0)>1
       ?' title="this tag is on more than one card — a jump lands on the first"':''
     }>${esc(t)}<i onclick="rmTag(${c.id},'${esc(t)}')" title="remove this tag">×</i></span>`).join('')
@@ -2081,7 +2109,7 @@ function speechCard(c){return `
    <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top">
-      ${grip(c.id)}
+      ${grip(c.id)}${foldBtn(c)}
       <span class="dot ${c.mute?'':(c.ready?'ready':'stale')}"></span>
       <span>#${c.id}</span>
       <span class="mut chars">${c.text.length} ch</span>
@@ -2096,7 +2124,7 @@ function speechCard(c){return `
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
-      ${copyBtn(c.id)}${minBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
+      ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
       <label class="mut dchk" style="font-size:11px"><input type="checkbox" ${SEL.has(c.id)?'checked':''}
         onchange="pick(${c.id},this.checked)"> discuss</label>
     </div>
@@ -2130,7 +2158,7 @@ function audioCard(c){
    <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top">
-      ${grip(c.id)}
+      ${grip(c.id)}${foldBtn(c)}
       <span class="dot ${c.mute?'':(c.ready?'ready':'stale')}"></span>
       <span>#${c.id}</span>
       <span class="pill">♪ audio</span>
@@ -2139,7 +2167,7 @@ function audioCard(c){
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
-      ${copyBtn(c.id)}${minBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
+      ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
     <div class="arow">
       <select onchange="setCard(${c.id},{clip:this.value},true)" style="max-width:230px">
@@ -2203,7 +2231,7 @@ function voicedCard(c){
    <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top">
-      ${grip(c.id)}
+      ${grip(c.id)}${foldBtn(c)}
       <span class="dot ${c.mute?'':(c.ready?'ready':'stale')}"></span>
       <span>#${c.id}</span>
       <span class="pill">◎ voiced</span>
@@ -2217,7 +2245,7 @@ function voicedCard(c){
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
-      ${copyBtn(c.id)}${minBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
+      ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
     <div class="arow">
       <span class="lbl">you said</span>
@@ -2246,7 +2274,7 @@ function silenceCard(c){return `
    <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top" style="border-bottom:0">
-      ${grip(c.id)}
+      ${grip(c.id)}${foldBtn(c)}
       <span class="dot ready"></span>
       <span>#${c.id}</span>
       <span class="pill">— silence</span>
@@ -2257,7 +2285,7 @@ function silenceCard(c){return `
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
-      ${copyBtn(c.id)}${minBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
+      ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
    </div>`;
 }
@@ -2279,7 +2307,7 @@ function visualCard(c){
    <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top">
-      ${grip(c.id)}
+      ${grip(c.id)}${foldBtn(c)}
       <span class="dot ${c.mute?'':(c.ready?'ready':'stale')}"></span>
       <span>#${c.id}</span>
       <span class="pill">⛶ ${kind==='video'?'film':'visual'}</span>
@@ -2287,7 +2315,7 @@ function visualCard(c){
       ${c.mute?'<span class="pill warn">muted</span>':''}
       ${tagsUi(c)}
       <span style="flex:1"></span>
-      ${copyBtn(c.id)}${minBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
+      ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
     <div class="arow">
       <select onchange="setCard(${c.id},{media:this.value},true)" style="max-width:230px">
@@ -2315,7 +2343,7 @@ function choiceCard(c){
    <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top">
-      ${grip(c.id)}
+      ${grip(c.id)}${foldBtn(c)}
       <span class="dot ready"></span>
       <span>#${c.id}</span>
       <span class="pill">⑂ choice</span>
@@ -2325,7 +2353,7 @@ function choiceCard(c){
       ${c.mute?'<span class="pill warn">muted</span>':''}
       ${tagsUi(c)}
       <span style="flex:1"></span>
-      ${copyBtn(c.id)}${minBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
+      ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
     <div id="op${c.id}">${opts.map((o,i)=>optRow(c,o,i)).join('')}</div>
     <div class="act">
@@ -2985,7 +3013,7 @@ async function dup(id){ await flushAll();
 async function del(id){
   const c=DOC.chunks.find(x=>x.id===id);
   if(c&&c.locked)return void($('status').innerHTML=
-    '<span class="warn">that card is locked</span> — right-click its header to unlock it');
+    '<span class="warn">that card is locked</span> — click its <span style="filter:grayscale(1)">🔒</span> to unlock it');
   const what=c.type==='audio'?`♪ audio card — ${c.clip||'no clip chosen'}`
     :c.type==='silence'?`${c.secs==null?1:c.secs}s of silence`
     :c.type==='voiced'?`◎ voiced — ${c.perfname||'no recording yet'}`
@@ -3138,7 +3166,8 @@ async function insertCard(at,kind,ev){
 let CLIP=null;
 try{ CLIP=JSON.parse(localStorage.getItem('saga.card')||'null'); }catch(e){}
 const clipLabel=c=>!c?'':
-   c.type==='audio'?`♪ ${c.clip||'no clip'}`
+   c.multi?`“${c.gname||'group'}” · ${c.multi.length} card${c.multi.length===1?'':'s'}`
+  :c.type==='audio'?`♪ ${c.clip||'no clip'}`
   :c.type==='silence'?`${c.secs==null?1:c.secs}s of silence`
   :c.type==='voiced'?`◎ ${c.perfname||'no recording'}`
   :c.type==='visual'?`⛶ ${c.media||'no visual'}`
@@ -3152,28 +3181,32 @@ function paintClip(){
   const t=CLIP?`paste the copied card here — ${clipLabel(CLIP)}`+(CLIP.from?` · from ${CLIP.from}`:''):'';
   document.querySelectorAll('#main .ins .pb').forEach(b=>{b.title=t});
 }
+function cardClip(c){
+  const k={type:c.type||'speech', mute:!!c.mute, runon:!!c.runon};
+  if(c.tags&&c.tags.length)k.tags=c.tags;
+  if(c.sub)k.sub=c.sub;
+  if(c.when)k.when=c.when;
+  if(c.locked)k.locked=true;
+  if(c.label)k.label=c.label;
+  if(k.type==='audio')Object.assign(k,
+    {clip:c.clip||'', mode:c.mode||'full', after:c.after, fade:c.fade, gain:c.gain});
+  else if(k.type==='silence')k.secs=c.secs;
+  else if(k.type==='visual')k.media=c.media||'';
+  else if(k.type==='choice')Object.assign(k,
+    {options:c.options||[], auto:!!c.auto});
+  else if(k.type==='voiced')Object.assign(k,
+    {perf:c.perf||'', perfname:c.perfname||'', profile:c.profile, seed:c.seed});
+  else Object.assign(k,
+    {text:c.text, profile:c.profile, seed:c.seed, height:HEIGHT[c.id]||c.height, params:c.params});
+  return k;
+}
 async function copyCard(id){
   const was=DOC&&DOC.chunks.find(x=>x.id===id); if(!was)return;
   // Copy the words on screen, not the ones the server last heard about — the
   // debounce means an edit half a second old is still only in the textarea.
   if((was.type||'speech')==='speech')await flush(id);
   const c=(DOC.chunks.find(x=>x.id===id))||was;
-  CLIP={type:c.type||'speech', mute:!!c.mute, runon:!!c.runon, from:`${DOC.title} #${id}`};
-  if(c.tags&&c.tags.length)CLIP.tags=c.tags;
-  if(c.sub)CLIP.sub=c.sub;
-  if(c.when)CLIP.when=c.when;
-  if(c.locked)CLIP.locked=true;
-  if(c.label)CLIP.label=c.label;
-  if(CLIP.type==='audio')Object.assign(CLIP,
-    {clip:c.clip||'', mode:c.mode||'full', after:c.after, fade:c.fade, gain:c.gain});
-  else if(CLIP.type==='silence')CLIP.secs=c.secs;
-  else if(CLIP.type==='visual')CLIP.media=c.media||'';
-  else if(CLIP.type==='choice')Object.assign(CLIP,
-    {options:c.options||[], auto:!!c.auto});
-  else if(CLIP.type==='voiced')Object.assign(CLIP,
-    {perf:c.perf||'', perfname:c.perfname||'', profile:c.profile, seed:c.seed});
-  else Object.assign(CLIP,
-    {text:c.text, profile:c.profile, seed:c.seed, height:HEIGHT[id]||c.height, params:c.params});
+  CLIP={...cardClip(c), from:`${DOC.title} #${id}`};
   try{ localStorage.setItem('saga.card',JSON.stringify(CLIP)); }catch(e){}
   paintClip();
   // The button says so itself: a note in the footer is 900px from where you
@@ -3182,10 +3215,19 @@ async function copyCard(id){
   if(b){ b.textContent='copied'; setTimeout(()=>{ if($('cp'+id)===b)b.textContent='⧉'; },1200); }
   $('status').textContent=`copied ${clipLabel(CLIP)} — “+ paste” in any gap puts it back`;
 }
+async function copyGroup(g){
+  await flushAll();                 // half-typed edits are still only in their textareas
+  const mem=DOC?DOC.chunks.filter(c=>c.group===g):[]; if(!mem.length)return;
+  CLIP={multi:mem.map(cardClip), gname:g, from:DOC.title};
+  try{ localStorage.setItem('saga.card',JSON.stringify(CLIP)); }catch(e){}
+  paintClip();
+  $('status').textContent=`copied “${g}” — ${mem.length} cards; “+ paste” in any gap puts them back`;
+}
 async function pasteCard(at,ev){
   if(!CLIP||!DOC)return void($('status').textContent='nothing copied yet — press ⧉ on a card first');
   await flushAll();
   const wrap=ev&&ev.target.closest('.gmem');
+  if(CLIP.multi)return pasteGroup(at,wrap?wrap.dataset.g:'');
   const r=await api('/api/paste',{name:DOC.name,at,card:CLIP,
     group:wrap?wrap.dataset.g:''});
   if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
@@ -3204,6 +3246,28 @@ async function pasteCard(at,ev){
     : kind==='voiced'&&!c.haveperf ? ' — <span class="warn">but that recording is not in this library</span>'
     : '';
   $('status').innerHTML=`pasted ${esc(clipLabel(CLIP))} as card #${at}${note}`;
+}
+// a copied group pastes card by card into consecutive slots; in the open the
+// run becomes a group again — its old name, or a numbered variant when that
+// name is taken here — while a paste inside another group's indent just joins
+// that group
+async function pasteGroup(at,grp){
+  const cards=CLIP.multi;
+  for(let i=0;i<cards.length;i++){
+    const r=await api('/api/paste',{name:DOC.name,at:at+i,card:cards[i],group:grp});
+    if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  }
+  if(!grp){
+    const base=CLIP.gname||'Group';
+    const used=new Set(DOC.chunks.map(c=>c.group).filter(Boolean));
+    let v=base; for(let k=2;used.has(v);k++)v=`${base} (${k})`;
+    const r=await api('/api/group',{name:DOC.name,ids:cards.map((_,i)=>at+i),gname:v});
+    if(r.error)$('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`;
+  }
+  HEIGHT={}; CUR=null;
+  await open_(DOC.name,true, at>0?at-1:{from:0,to:1});
+  refresh();                                  // the episode has cards more than it did
+  $('status').innerHTML=`pasted ${esc(clipLabel(CLIP))} as cards #${at}–#${at+cards.length-1}`;
 }
 let DRAGID=null;
 function dragStart(e,id){
@@ -3271,7 +3335,11 @@ function bindDrag(){
 }
 async function moveCard(id,to,grp){
   DRAGID=null; clearMarks();
-  if(to===id||to===id+1)return;      // dropped back where it already was
+  // the same slot is still a move when the drop crossed the group's indent —
+  // a last member dragged to the gap just beneath its group lands in its own
+  // slot, but on the OUTSIDE, and the server reads that as "step out"
+  const c=DOC&&DOC.chunks.find(x=>x.id===id);
+  if((to===id||to===id+1)&&((c&&c.group)||null)===(grp||null))return;
   await flushAll();
   // geometry outranks inference: a drop inside a group's indent means "in
   // here", one outside means "in the open" — which is what finally makes

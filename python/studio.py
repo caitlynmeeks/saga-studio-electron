@@ -2872,7 +2872,7 @@ class H(BaseHTTPRequestHandler):
                                 and set(d) - {"name", "id", "locked",
                                               "min", "height", "label"}):
                             return self._send(400, {"error": "that card is locked "
-                                              "— right-click its header to unlock it"})
+                                              "— click its 🔒 to unlock it"})
                         if "locked" in d:
                             c["locked"] = bool(d["locked"])
                         if "text" in d:
