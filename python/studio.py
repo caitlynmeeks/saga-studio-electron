@@ -1735,6 +1735,27 @@ def _kokoro_gen(spoken, p, dest):
     sf.write(str(dest), samples, sr)
 
 
+def kokoro_sample(v, spd):
+    """The audition wav for one (preset, pace) — rendered on first ask,
+    cached ever after. No sample clips ship with the model; at faster-than-
+    realtime on CPU, making one is cheaper than shipping one."""
+    v = re.sub(r"[^a-z0-9_]", "", str(v or "af_heart"))[:24] or "af_heart"
+    line = KOKORO_SAMPLE.get(v[:1], KOKORO_SAMPLE["a"])
+    key = ["kprev", v, float(spd or 0), line]
+    h = "p" + hashlib.sha256(json.dumps(
+        key, sort_keys=True).encode()).hexdigest()[:19]
+    dest = AUDIO / f"{h}.wav"
+    if not dest.exists():
+        tmp = dest.with_name(dest.stem + ".tmp.wav")
+        try:
+            _kokoro_gen(line, {"kvoice": v, "speed": spd}, tmp)
+            tmp.rename(dest)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+    return dest
+
+
 def render_kokoro(c, doc, force=False):
     """Speak one card with Kokoro. Deterministic — no sampling to seed — so
     re-rendering a take reproduces it exactly."""
@@ -3374,10 +3395,22 @@ class H(BaseHTTPRequestHandler):
                 # through whatever the sliders say right now — the *draft*,
                 # unsaved values, because auditioning is what you do before
                 # deciding to keep something. Cached like every other fx pass.
-                try:
-                    vf = voice_file(d.get("voice") or "")
-                except FileNotFoundError as ex:
-                    return self._send(404, {"error": str(ex)})
+                # A kokoro profile has no clip: its preset auditions itself,
+                # through the same loudness and plugin chain as everyone else.
+                if d.get("kvoice"):
+                    if not kokoro_available():
+                        return self._send(400, {"error": "kokoro is not "
+                                                "installed on this machine"})
+                    try:
+                        vf = kokoro_sample(d["kvoice"],
+                                           _num(d.get("speed"), 0.0, 0.0, 3.0))
+                    except BaseException as ex:
+                        return self._send(500, {"error": f"kokoro: {ex}"})
+                else:
+                    try:
+                        vf = voice_file(d.get("voice") or "")
+                    except FileNotFoundError as ex:
+                        return self._send(404, {"error": str(ex)})
                 pl = str(d.get("plugin") or "")
                 out = vf
                 if pl:
@@ -3605,30 +3638,6 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True,
                                         "job": enqueue("preview", d["name"], d["id"], sel)})
 
-            if u.path == "/api/kokoro_preview":
-                # synchronous, not queued: a couple of seconds at worst, and
-                # the button that asked is sitting there waiting to play it.
-                # Cached by (preset, pace) so replays are instant.
-                if not kokoro_available():
-                    return self._send(400, {"error": "kokoro is not installed "
-                                            "on this machine"})
-                v = re.sub(r"[^a-z0-9_]", "",
-                           str(d.get("kvoice") or "af_heart"))[:24] or "af_heart"
-                spd = _num(d.get("speed"), 0.0, 0.0, 3.0)
-                line = KOKORO_SAMPLE.get(v[:1], KOKORO_SAMPLE["a"])
-                key = ["kprev", v, float(spd or 0), line]
-                h = "p" + hashlib.sha256(json.dumps(
-                    key, sort_keys=True).encode()).hexdigest()[:19]
-                dest = AUDIO / f"{h}.wav"
-                if not dest.exists():
-                    tmp = dest.with_name(dest.stem + ".tmp.wav")
-                    try:
-                        _kokoro_gen(line, {"kvoice": v, "speed": spd}, tmp)
-                        tmp.rename(dest)
-                    except BaseException as ex:
-                        tmp.unlink(missing_ok=True)
-                        return self._send(500, {"error": f"kokoro: {ex}"})
-                return self._send(200, {"ok": True, "hash": h})
 
             if u.path == "/api/bake":
                 if _bake["running"]:
