@@ -1003,6 +1003,11 @@ function draftCommit(){ paintProfDirty(); scheduleImpact(); }
 function draftSet(k,v,quiet){
   if(!DRAFT)return;
   DRAFT[k]=v;
+  // the engine decides which sections the editor even has, and the preset
+  // paints its name in the row label — shape changed, so rebuild, the same
+  // way adding a voice does. Sliders must NOT come through here: a rebuild
+  // mid-drag throws the control away under the pointer.
+  if(k==='engine'||k==='kvoice')renderProfiles();
   if(quiet){ paintProfDirty(); return; }   // the note changes nothing about sound
   paintProfDirty(); scheduleImpact();
 }
