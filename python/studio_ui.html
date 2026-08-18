@@ -126,6 +126,16 @@ input[type=number]{width:62px}
 #log .me{color:var(--amber)}
 #ask{width:100%;height:64px;resize:vertical}
 .pill{font-size:10.5px;border:1px solid var(--line);border-radius:99px;padding:1px 7px;color:var(--faint)}
+/* Tag chips live in the card head. Quiet by default — a tag is a label until a
+   choice aims at it — and amber when the same tag is on two cards, because a
+   jump lands on the first and the second is probably a mistake. */
+.tags{display:flex;gap:3px;align-items:center;flex-wrap:wrap;min-width:0}
+.tag{font-size:10px;border:1px solid var(--line);border-radius:99px;padding:0 6px;
+color:var(--dim);white-space:nowrap}
+.tag i{font-style:normal;color:var(--faint);cursor:pointer;margin-left:3px}
+.tag i:hover{color:var(--red)}
+.tag.dup{color:var(--amber);border-color:var(--amber)}
+.tagin{width:92px;font-size:11px;padding:0 6px;border-radius:99px}
 button.tiny{padding:0 5px;font-size:12px;line-height:17px;border-color:transparent;color:var(--faint)}
 .proj:hover button.tiny{border-color:var(--line)}
 /* same bargain in a card header: invisible until the card is under the mouse,
@@ -273,6 +283,8 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
   <span class="pill" id="model">model: cold</span>
   <button id="frb" onclick="toggleFind()" disabled
     title="find and replace across this episode — ⌘F">find</button>
+  <button onclick="openStage()"
+    title="open the stage — a window showing the visuals, for the second screen">stage ⧉</button>
   <button id="chatb" onclick="togglePanel()" title="show or hide the side panel">inspector</button>
 </header>
 
@@ -280,7 +292,7 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
  <div id="stabs">
    <button id="sbStories" onclick="setSide('stories')">stories</button>
    <button id="sbVoices" onclick="setSide('voices')">voices</button>
-   <button id="sbClips" onclick="setSide('clips')">clips</button>
+   <button id="sbClips" onclick="setSide('clips')">media</button>
  </div>
  <div class="pane" id="sideStories">
   <h2>documents</h2>
@@ -306,6 +318,7 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
   <input type="file" id="arch" accept=".sagaproj" hidden>
   <input type="file" id="clipfile" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aif,.aiff" hidden>
   <input type="file" id="perffile" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aif,.aiff" hidden>
+  <datalist id="taglist"></datalist>
   <div id="bkmsg" class="mut" style="font-size:11px;margin-top:6px"></div>
  </div>
 
@@ -327,6 +340,17 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
   <div style="display:flex;gap:5px;margin-top:8px">
     <button onclick="importClip()">import a clip…</button>
   </div>
+
+  <h2 style="margin-top:18px">visuals</h2>
+  <div class="mut" style="font-size:11px;margin-bottom:8px">Pictures and film
+    for the stage, shared like clips. Drag one into the episode.</div>
+  <div id="mediasort"></div>
+  <div id="media"></div>
+  <div style="display:flex;gap:5px;margin-top:8px">
+    <button onclick="importMedia()">import an image or film…</button>
+  </div>
+  <input type="file" id="mediafile" hidden
+    accept="image/*,video/*,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov">
  </div>
 </aside>
 
@@ -542,7 +566,7 @@ async function refresh(){
   STATE=await api('/api/state');
   $('model').textContent='model: '+STATE.model;
   renderProfileList();       // counts move as cards do; the editor is left alone
-  if(document.body.dataset.side==='clips')renderClips();
+  if(document.body.dataset.side==='clips'){ renderClips(); renderMedia(); }
   paintStale();
   // once per session, and only if the second engine is here to need it
   if(STATE.omnivoice&&!LANGS)
@@ -590,7 +614,9 @@ async function refresh(){
 }
 
 // Switching document throws the card list away, so bank the edits first.
-async function openProject(name){ await flushAll(); await open_(name); }
+async function openProject(name){ await flushAll(); await open_(name);
+  if(STAGE)STAGE.postMessage({type:'open',name});     // the stage follows along
+}
 
 // Splitting a card rebuilds the whole stack, and the scroll position does not
 // survive it: every card comes back at its CSS height and only grows to fit
@@ -1137,7 +1163,7 @@ function setSide(t){
   }
   // Guarded on STATE: this runs once at parse time to restore the last tab,
   // and renderClips leans on helpers declared further down the file.
-  if(t==='clips'&&STATE.clips)renderClips();
+  if(t==='clips'&&STATE.clips){ renderClips(); renderMedia(); }
   try{ localStorage.setItem('saga.side',t); }catch(e){}
 }
 try{ setSide(localStorage.getItem('saga.side')||'stories'); }catch(e){ setSide('stories'); }
@@ -1230,7 +1256,7 @@ try{ Object.assign(SORTS,JSON.parse(localStorage.getItem('saga.sorts')||'{}')); 
 function setSort(list,how){
   SORTS[list]=how;
   try{ localStorage.setItem('saga.sorts',JSON.stringify(SORTS)); }catch(e){}
-  if(list==='clips')renderClips(); else refresh();
+  if(list==='clips')renderClips(); else if(list==='media')renderMedia(); else refresh();
 }
 // Stories say "recent" and clips say "newest" because they sort on different
 // things, and the labels should not promise the same. A clip's file is written
@@ -1349,6 +1375,101 @@ async function renameClip(old,to){
   $('status').innerHTML=`<span class="ok">clip renamed to “${esc(r.clip)}”</span> — `+
     `${r.cards} card${r.cards===1?'':'s'} followed it`;
 }
+
+// ── visuals ───────────────────────────────────────────────
+// Pictures and film, pooled like clips and placed the same way: drag one into
+// the stack and it becomes a visual card. A visual takes no time on the audio
+// timeline — it is what the stage shows from that point until the next one.
+let MEDIAVIEW=[];
+function renderMedia(){
+  const n=STATE.media_counts||{};
+  MEDIAVIEW=sortedBy(STATE.media||[],'media','added');
+  $('mediasort').innerHTML=sortBar('media','newest');
+  $('media').innerHTML = MEDIAVIEW.length ? MEDIAVIEW.map((m,i)=>{
+    const used=n[m.name]||0, when=fmtWhen(m.added);
+    const thumb=m.kind==='image'
+      ?`<img src="/api/media?f=${encodeURIComponent(m.name)}" loading="lazy"
+         style="height:30px;width:44px;object-fit:cover;border-radius:4px;flex:none">`
+      :`<span style="width:44px;text-align:center;flex:none" title="film">🎞</span>`;
+    return `<div class="proj" draggable="true" oncontextmenu="mediaMenu(event,${i})"
+      ondragstart="mediaDragStart(event,${i})" ondragend="mediaDragEnd()"
+      title="drag into the episode to place it · right-click to rename">
+      <div style="display:flex;gap:6px;align-items:center">
+        ${thumb}
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+          >${esc(m.name)}</span>
+      </div>
+      <div class="meta">${m.kind==='video'?'film · ':''}${
+        used?used+' card'+(used===1?'':'s'):'not used yet'}${when?' · '+esc(when):''}</div>
+    </div>`;
+  }).join('') : '<span class="mut" style="font-size:12px">none yet — import one below</span>';
+}
+function mediaMenu(e,i){
+  const m=MEDIAVIEW[i]; if(!m)return;
+  const used=(STATE.media_counts||{})[m.name]||0;
+  openCtx(e,[
+    {label:'rename…', run:()=>{ openCtx(e,[]);
+       ctxAsk(m.name,'media name','rename',t=>renameMedia(m.name,t)); }},
+    '-',
+    // no delete, as clips: undo can resurrect a card that points at it
+    {label:used?`used by ${used} card${used===1?'':'s'}`:'not used by any card',disabled:true},
+  ]);
+}
+async function renameMedia(old,to){
+  const r=await api('/api/media/rename',{media:old,to});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await refresh(); renderMedia();
+  if(DOC)open_(DOC.name,true);
+  $('status').innerHTML=`<span class="ok">renamed to “${esc(r.media)}”</span> — `+
+    `${r.cards} card${r.cards===1?'':'s'} followed it`;
+}
+// a second arriving payload through the card drop gates: DRAGID is a card
+// moving, DRAGCLIP a clip arriving, DRAGMEDIA a visual arriving
+let DRAGMEDIA=null;
+function mediaDragStart(e,i){
+  const m=MEDIAVIEW[i]; if(!m)return;
+  DRAGMEDIA=m.name;
+  document.body.dataset.dropclip='1';         // light the gaps, as a clip does
+  e.dataTransfer.effectAllowed='copy';
+  try{ e.dataTransfer.setData('text/plain',m.name); }catch(_){}
+  $('status').textContent=`drop “${m.name}” between two cards to place it`;
+}
+function mediaDragEnd(){ DRAGMEDIA=null; document.body.dataset.dropclip=''; clearMarks(); }
+async function dropMediaAt(at){
+  const media=DRAGMEDIA; DRAGMEDIA=null; clearMarks();
+  document.body.dataset.dropclip='';
+  if(!media)return;
+  if(!DOC)return void($('status').innerHTML=
+    '<span class="warn">open an episode first</span> — a visual needs somewhere to land');
+  await flushAll();
+  const r=await api('/api/insert',{name:DOC.name,at,kind:'visual'});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await api('/api/chunk',{name:DOC.name,id:r.id,media});
+  HEIGHT={}; CUR=null;                        // as insertCard: every card renumbers
+  await open_(DOC.name,true, at>0?at-1:{from:0,to:1});
+  $('status').innerHTML=`<span class="ok">“${esc(media)}” placed as card #${r.id}</span>`+
+    ` — the stage shows it from here until the next visual`;
+}
+let MEDIATARGET=null;
+function pickMedia(id){ MEDIATARGET=id; $('mediafile').click(); }
+function importMedia(){ MEDIATARGET=null; $('mediafile').click(); }
+$('mediafile').onchange=async e=>{
+  const f=e.target.files[0]; e.target.value='';
+  if(!f)return;
+  const id=MEDIATARGET; MEDIATARGET=null;
+  $('status').textContent=`importing ${f.name}…`;
+  let j;
+  try{
+    const r=await fetch('/api/media/upload?fn='+encodeURIComponent(f.name),
+      {method:'POST',body:f,headers:{'Content-Type':'application/octet-stream'}});
+    j=await r.json();
+  }catch(ex){ j={error:String(ex)}; }
+  if(j.error) return void($('status').innerHTML=`<span class="warn">${esc(j.error)}</span>`);
+  $('status').textContent=`“${j.media}” imported`+(j.renamed?` — “${j.asked}” was taken`:'');
+  if(id!=null&&DOC)await api('/api/chunk',{name:DOC.name,id,media:j.media});
+  await refresh(); renderMedia();
+  if(id!=null&&DOC)open_(DOC.name,true,id);
+};
 
 // ── right-click menus ─────────────────────────────────────
 // One element, built where the pointer is and thrown away after. Items carry
@@ -1486,6 +1607,7 @@ async function duplicateProfile(n){
 // strips sit between every pair of cards — and at both ends — so a new card can
 // be born exactly where it belongs.
 function renderDoc(){
+  tagCounts();                        // tagsUi reads TAGN for its dup warnings
   $('main').innerHTML=insBar(0)+DOC.chunks.map(c=>cardHTML(c)+insBar(c.id+1)).join('');
   DOC.chunks.forEach(c=>{ if(c.type==='audio')fadeUi(c.id); });
   bindDrag(); paintClip();          // the strips are new, so their paste buttons are too
@@ -1493,19 +1615,66 @@ function renderDoc(){
 function cardHTML(c){
   return c.type==='audio'?audioCard(c)
     :c.type==='silence'?silenceCard(c)
-    :c.type==='voiced'?voicedCard(c):speechCard(c);
+    :c.type==='voiced'?voicedCard(c)
+    :c.type==='visual'?visualCard(c)
+    :c.type==='choice'?choiceCard(c):speechCard(c);
 }
 const insBar=at=>`<div class="ins">
     <button class="pb" onclick="pasteCard(${at})">+ paste</button>
     <button onclick="insertCard(${at},'speech')" title="insert an empty text card here">+ text</button>
     <button onclick="insertCard(${at},'voiced')" title="insert a card spoken by you, in a character's voice">+ ◎ voiced</button>
     <button onclick="insertCard(${at},'audio')" title="insert a music / sound-effect card here">+ ♪ audio</button>
+    <button onclick="insertCard(${at},'visual')" title="insert a picture or film — the stage shows it from here until the next visual">+ ⛶ visual</button>
     <button onclick="insertCard(${at},'silence')" title="insert a timed pause here">+ silence</button>
   </div>`;
 const grip=id=>`<span class="grip" draggable="true" ondragstart="dragStart(event,${id})"
   ondragend="dragEnd()" title="drag to move this card">⠿</span>`;
 const copyBtn=id=>`<button class="tiny" id="cp${id}" onclick="copyCard(${id})"
   title="copy this card — then “+ paste” in any gap, in this episode or another">⧉</button>`;
+
+// ── tags ──────────────────────────────────────────────────
+// A tag is a label and, once choice cards aim at it, an anchor. TAGN is the
+// per-render count of each tag, so a chip can warn when its tag is on two
+// cards — a jump lands on the first, and the second is probably a mistake.
+let TAGN=new Map();
+function tagCounts(){
+  TAGN=new Map();
+  (DOC?DOC.chunks:[]).forEach(c=>(c.tags||[]).forEach(t=>TAGN.set(t,(TAGN.get(t)||0)+1)));
+  const dl=$('taglist');
+  if(dl)dl.innerHTML=[...TAGN.keys()].sort().map(t=>`<option value="${esc(t)}">`).join('');
+}
+const tagsUi=c=>`<span class="tags" id="tg${c.id}">${(c.tags||[]).map(t=>
+    `<span class="tag${(TAGN.get(t)||0)>1?' dup':''}"${(TAGN.get(t)||0)>1
+      ?' title="this tag is on more than one card — a jump lands on the first"':''
+    }>${esc(t)}<i onclick="rmTag(${c.id},'${esc(t)}')" title="remove this tag">×</i></span>`).join('')
+  }<button class="tiny" onclick="addTag(event,${c.id})"
+    title="tag this card — a label, and somewhere a choice can jump to">+tag</button></span>`;
+function addTag(ev,id){
+  const host=ev.target.parentElement;
+  if(host.querySelector('.tagin'))return;
+  const inp=document.createElement('input');
+  inp.className='tagin'; inp.placeholder='tag-name'; inp.setAttribute('list','taglist');
+  host.insertBefore(inp,ev.target);
+  let done=false;                     // Enter fires blur too; say it once
+  const fin=v=>{ if(done)return; done=true; inp.remove(); if(v.trim())saveTags(id,t=>[...t,v]); };
+  inp.onkeydown=e=>{ if(e.key==='Enter'){e.preventDefault();fin(inp.value)}
+                     if(e.key==='Escape'){e.preventDefault();fin('')} };
+  inp.onblur=()=>fin(inp.value);
+  inp.focus();
+}
+const rmTag=(id,t)=>saveTags(id,tags=>tags.filter(x=>x!==t));
+async function saveTags(id,fn){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const tags=[...new Set(fn(c.tags||[])
+    .map(t=>String(t).toLowerCase().replace(/[^a-z0-9_-]/g,'').slice(0,24))
+    .filter(Boolean))];
+  await api('/api/chunk',{name:DOC.name,id,tags});
+  c.tags=tags; paintTags();
+}
+function paintTags(){
+  tagCounts();      // a removal elsewhere can clear another chip's dup warning
+  (DOC?DOC.chunks:[]).forEach(c=>{ const el=$('tg'+c.id); if(el)el.outerHTML=tagsUi(c); });
+}
 
 function speechCard(c){return `
    <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
@@ -1523,6 +1692,7 @@ function speechCard(c){return `
       </select>
       <span class="engpill">${enginePill(c)}</span>
       ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
       ${copyBtn(c.id)}
@@ -1564,6 +1734,7 @@ function audioCard(c){
       <span class="pill">♪ audio</span>
       <span class="mut">${c.clip?esc(c.clip)+(len?' · '+fmtSecs(len):''):'no clip chosen'}</span>
       ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
       ${copyBtn(c.id)}
@@ -1640,6 +1811,7 @@ function voicedCard(c){
           `<option ${(c.profile||'Default')===p?'selected':''}>${p}</option>`).join('')}
       </select>
       ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
       ${copyBtn(c.id)}
@@ -1678,6 +1850,7 @@ function silenceCard(c){return `
         onchange="setCard(${c.id},{secs:parseFloat(this.value)||0})">
       <span class="mut" style="font-size:11px">seconds of rest</span>
       ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
       ${copyBtn(c.id)}
@@ -1686,6 +1859,51 @@ function silenceCard(c){return `
     </div>
    </div>`;
 }
+// What the stage shows from this point until the next visual. No time on the
+// audio timeline and no sound — which is why there is no runon button and no
+// fade: there is nothing here for the mix to do. Film plays muted, once, and
+// holds its last frame; the soundtrack is the cards around it.
+function visualCard(c){
+  const media=STATE.media||[], cur=media.find(m=>m.name===c.media);
+  const kind=c.mediakind||(cur&&cur.kind)||'';
+  const show=!c.media?'<div class="mut" style="padding:6px 0">no visual chosen</div>'
+    :!c.ready?'<div class="warn" style="padding:6px 0">that file is missing from media/</div>'
+    :kind==='video'
+      ?`<video src="/api/media?f=${encodeURIComponent(c.media)}" muted playsinline
+         controls preload="metadata" style="max-height:150px;max-width:100%;border-radius:6px"></video>`
+      :`<img src="/api/media?f=${encodeURIComponent(c.media)}" loading="lazy"
+         style="max-height:150px;max-width:100%;border-radius:6px;object-fit:contain">`;
+  return `
+   <div class="chunk ${CUR===c.id?'cur':''}" id="c${c.id}"
+     onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
+    <div class="top">
+      ${grip(c.id)}
+      <span class="dot ${c.mute?'':(c.ready?'ready':'stale')}"></span>
+      <span>#${c.id}</span>
+      <span class="pill">⛶ ${kind==='video'?'film':'visual'}</span>
+      <span class="mut">${c.media?esc(c.media):''}</span>
+      ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${tagsUi(c)}
+      <span style="flex:1"></span>
+      ${copyBtn(c.id)}
+    </div>
+    <div class="arow">
+      <select onchange="setCard(${c.id},{media:this.value},true)" style="max-width:230px">
+        <option value="">choose a visual…</option>
+        ${media.map(m=>`<option value="${esc(m.name)}" ${m.name===c.media?'selected':''}>${
+          esc(m.name)}${m.kind==='video'?' (film)':''}</option>`).join('')}
+      </select>
+      <button onclick="pickMedia(${c.id})">import a file…</button>
+    </div>
+    <div class="arow">${show}</div>
+    <div class="act">
+      <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
+      <button onclick="del(${c.id})" style="color:var(--red)">remove</button>
+      <span class="mut" id="s${c.id}" style="font-size:11px"></span>
+    </div>
+   </div>`;
+}
+
 // Cards fit their text by default — no card should hide a line you are trying
 // to read. Dragging the corner sets an explicit height, which then wins in
 // both directions and survives a reload; only cards with no dragged height
@@ -2204,6 +2422,8 @@ async function del(id){
   const what=c.type==='audio'?`♪ audio card — ${c.clip||'no clip chosen'}`
     :c.type==='silence'?`${c.secs==null?1:c.secs}s of silence`
     :c.type==='voiced'?`◎ voiced — ${c.perfname||'no recording yet'}`
+    :c.type==='visual'?`⛶ visual — ${c.media||'nothing chosen'} (the file stays in the library)`
+    :c.type==='choice'?`⑂ choice — ${(c.options||[]).length} option${(c.options||[]).length===1?'':'s'}`
     :c.text.slice(0,90)+'…';
   if(!confirm(`Remove card #${id}?\n\n${what}`))return;
   await flushAll();
@@ -2350,6 +2570,8 @@ const clipLabel=c=>!c?'':
    c.type==='audio'?`♪ ${c.clip||'no clip'}`
   :c.type==='silence'?`${c.secs==null?1:c.secs}s of silence`
   :c.type==='voiced'?`◎ ${c.perfname||'no recording'}`
+  :c.type==='visual'?`⛶ ${c.media||'no visual'}`
+  :c.type==='choice'?`⑂ ${(c.options||[]).length} option${(c.options||[]).length===1?'':'s'}`
   :'“'+(c.text||'').replace(/\s+/g,' ').trim().slice(0,44)+((c.text||'').length>44?'…':'')+'”';
 // The paste buttons live in strips that were built before the copy happened,
 // so this paints them where they stand rather than rebuilding the stack: a
@@ -2366,9 +2588,13 @@ async function copyCard(id){
   if((was.type||'speech')==='speech')await flush(id);
   const c=(DOC.chunks.find(x=>x.id===id))||was;
   CLIP={type:c.type||'speech', mute:!!c.mute, runon:!!c.runon, from:`${DOC.title} #${id}`};
+  if(c.tags&&c.tags.length)CLIP.tags=c.tags;
   if(CLIP.type==='audio')Object.assign(CLIP,
     {clip:c.clip||'', mode:c.mode||'full', after:c.after, fade:c.fade, gain:c.gain});
   else if(CLIP.type==='silence')CLIP.secs=c.secs;
+  else if(CLIP.type==='visual')CLIP.media=c.media||'';
+  else if(CLIP.type==='choice')Object.assign(CLIP,
+    {options:c.options||[], auto:!!c.auto});
   else if(CLIP.type==='voiced')Object.assign(CLIP,
     {perf:c.perf||'', perfname:c.perfname||'', profile:c.profile, seed:c.seed});
   else Object.assign(CLIP,
@@ -2397,6 +2623,7 @@ async function pasteCard(at){
   const c=DOC.chunks.find(x=>x.id===at), kind=c?(c.type||'speech'):'';
   const note = (kind==='speech'||kind==='voiced')&&c.ready ? ' — already rendered'
     : kind==='audio'&&!c.ready ? ' — <span class="warn">but no clip of that name is in this library</span>'
+    : kind==='visual'&&!c.ready ? ' — <span class="warn">but no media of that name is in this library</span>'
     : kind==='voiced'&&!c.haveperf ? ' — <span class="warn">but that recording is not in this library</span>'
     : '';
   $('status').innerHTML=`pasted ${esc(clipLabel(CLIP))} as card #${at}${note}`;
@@ -2414,12 +2641,12 @@ function clearMarks(){ document.querySelectorAll('.dropa,.dropb,.ins.hot')
 // Two things can be dropped on the stack: a card being moved within it, and a
 // clip arriving from the sidebar. Same targets, same marks — only the landing
 // differs, so each handler asks which is in flight rather than which gate it is.
-const dragging=()=>DRAGID!=null||DRAGCLIP!=null;
+const dragging=()=>DRAGID!=null||DRAGCLIP!=null||DRAGMEDIA!=null;
 function bindDrag(){
   document.querySelectorAll('#main .chunk').forEach(el=>{
     el.addEventListener('dragover',e=>{
       if(!dragging())return;
-      e.preventDefault(); e.dataTransfer.dropEffect=DRAGCLIP?'copy':'move';
+      e.preventDefault(); e.dataTransfer.dropEffect=DRAGID!=null?'move':'copy';
       const r=el.getBoundingClientRect(), before=e.clientY<r.top+r.height/2;
       clearMarks(); el.classList.add(before?'dropb':'dropa');
     });
@@ -2428,6 +2655,7 @@ function bindDrag(){
       const r=el.getBoundingClientRect(), before=e.clientY<r.top+r.height/2;
       const at=(+el.id.slice(1))+(before?0:1);
       if(DRAGCLIP)return dropClipAt(at);
+      if(DRAGMEDIA)return dropMediaAt(at);
       moveCard(DRAGID,at);
     });
   });
@@ -2436,12 +2664,13 @@ function bindDrag(){
   document.querySelectorAll('#main .ins').forEach((el,at)=>{
     el.addEventListener('dragover',e=>{
       if(!dragging())return;
-      e.preventDefault(); e.dataTransfer.dropEffect=DRAGCLIP?'copy':'move';
+      e.preventDefault(); e.dataTransfer.dropEffect=DRAGID!=null?'move':'copy';
       clearMarks(); el.classList.add('hot');
     });
     el.addEventListener('drop',e=>{
       if(!dragging())return; e.preventDefault();
       if(DRAGCLIP)return dropClipAt(at);
+      if(DRAGMEDIA)return dropMediaAt(at);
       moveCard(DRAGID,at);
     });
   });
@@ -2493,6 +2722,25 @@ function clearPlaying(){
   document.querySelectorAll('#main .chunk.playing')
     .forEach(el=>el.classList.remove('playing','nores'));
 }
+// ── the stage ─────────────────────────────────────────────
+// A second window showing the audience's view — visuals, captions, and (for
+// stories with choice cards) the chooser. The stage OWNS its playback: this
+// side is a remote control and a listener that highlights whichever card the
+// stage is speaking, exactly as the local preview does. Deliberately so — the
+// editor is the window that gets occluded and throttled when the stage is
+// fullscreen on the second monitor, so nothing time-critical may live here.
+const STAGE='BroadcastChannel' in window?new BroadcastChannel('saga-stage'):null;
+function openStage(){
+  window.open('/stage'+(DOC?'?name='+encodeURIComponent(DOC.name):''),'saga-stage');
+}
+if(STAGE)STAGE.onmessage=e=>{
+  const m=e.data||{};
+  if(m.type==='hello')return void STAGE.postMessage({type:'open',name:DOC?DOC.name:''});
+  if(!DOC||m.name!==DOC.name)return;
+  if(m.type==='playing'&&m.card!=null)followCard(m.card);
+  if(m.type==='stopped'){ clearPlaying();
+    if(m.card!=null){ CUR=m.card; paintCur(); } }   // stop, fix that one — as the local preview
+};
 // Keep the speaking card on screen — the whole point is that when you hear a
 // problem, the card is already in front of you. But do not haul the list about
 // on every card: only move when it has drifted out of the comfortable middle,

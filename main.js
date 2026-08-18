@@ -52,8 +52,21 @@ function createWindow () {
   win.on('closed', () => { win = null })
 
   // Links to the wider world open in the real browser; the app window itself
-  // never leaves the local server.
+  // never leaves the local server. The one exception is the server's own
+  // pages — the stage window — which open as real child windows, detachable
+  // onto a second monitor. No title-bar injection for them: children keep the
+  // normal frame, and only the main window hides its own.
   win.webContents.setWindowOpenHandler(({ url }) => {
+    if (backend.url && url.startsWith(new URL(backend.url).origin)) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          backgroundColor: '#000000',
+          width: 1280,
+          height: 800
+        }
+      }
+    }
     if (/^https?:/.test(url)) shell.openExternal(url)
     return { action: 'deny' }
   })

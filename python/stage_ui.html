@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Saga Stage</title>
+<!--
+The stage is the audience's side of the studio: a dark room that shows the
+current visual, speaks the book, and — when a choice card arrives — asks.
+It OWNS playback. The editor window is a remote control and a listener,
+nothing more, because the editor is exactly the window that gets occluded
+and throttled when this one is fullscreen on the second monitor. One
+persistent audio element, held for the life of the page: the first play()
+happens inside a user gesture, and every later segment reuses the unlocked
+element rather than asking the autoplay policy twice.
+
+Talks to the editor over BroadcastChannel('saga-stage'); works alone in a
+plain tab when no editor is listening.
+-->
+<style>
+:root{--bg:#000;--chrome:#0b0d0c;--line:#222b28;--fg:#ccd6d0;--bright:#f2f7f4;
+--dim:#6d7d75;--green:#7fd88f;--amber:#e8b45c;
+--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--mono);height:100vh;
+display:grid;grid-template-rows:1fr auto auto}
+#room{position:relative;overflow:hidden;min-height:0}
+#room img,#room video{position:absolute;inset:0;width:100%;height:100%;
+object-fit:contain;background:#000}
+#caption{position:absolute;left:0;right:0;bottom:26px;text-align:center;
+padding:0 8vw;font-size:clamp(14px,2.2vw,21px);line-height:1.6;
+color:var(--bright);text-shadow:0 1px 3px #000,0 0 14px #000;
+opacity:0;transition:opacity .35s}
+#caption.on{opacity:1}
+#chooser{display:none;gap:10px;justify-content:center;flex-wrap:wrap;
+padding:14px 16px;background:var(--chrome);border-top:1px solid var(--line)}
+#chooser.on{display:flex}
+#chooser button{background:#131a17;border:1px solid var(--line);color:var(--fg);
+border-radius:7px;padding:10px 18px;font:14px var(--mono);cursor:pointer;max-width:44ch}
+#chooser button:hover{border-color:var(--green);color:var(--green)}
+#bar{display:flex;gap:12px;align-items:center;padding:8px 14px;
+background:var(--chrome);border-top:1px solid var(--line);font-size:12px}
+#bar b{color:var(--bright);letter-spacing:.08em}
+#bar button{background:#131a17;border:1px solid var(--line);color:var(--fg);
+border-radius:5px;padding:3px 11px;font:12px var(--mono);cursor:pointer}
+#bar button:hover{border-color:var(--green);color:var(--green)}
+.mut{color:var(--dim)}.warn{color:var(--amber)}
+#dot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none}
+#dot.on{background:var(--green)}
+</style>
+</head>
+<body>
+<div id="room">
+  <div id="caption"></div>
+</div>
+<div id="chooser"></div>
+<div id="bar">
+  <b>STAGE</b>
+  <span id="title" class="mut">no episode</span>
+  <span style="flex:1"></span>
+  <span id="clock" class="mut"></span>
+  <button id="playb" onclick="toggle()">▶ play</button>
+  <button onclick="playFrom(null)" title="back to the top">⟲ from start</button>
+  <span id="dot" title="editor connection"></span>
+</div>
+<script>
+const $=i=>document.getElementById(i);
+const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+async function api(p,b){const r=await fetch(p,b?{method:'POST',body:JSON.stringify(b)}:undefined);
+  try{return await r.json()}catch(e){return{error:'bad reply'}}}
+
+const qs=new URLSearchParams(location.search);
+let NAME=qs.get('name')||'';
+let DOC=null;              // the open episode, as /api/doc tells it
+let MARKS=[], MARKI=-1;    // card start times of the playing mix
+let SHOWN=null;            // the visual currently on the room's wall
+
+// One audio element for the life of the page. The first .play() lands inside
+// a click, which unlocks it; after that, swapping src keeps working — the
+// pattern that survives autoplay policy everywhere, including iOS.
+const AUDIO=new Audio();
+AUDIO.addEventListener('ended',()=>stopped());
+AUDIO.addEventListener('pause',()=>{ if(!AUDIO.ended)stopped(); });
+AUDIO.addEventListener('timeupdate',tick);
+
+const BC='BroadcastChannel' in window?new BroadcastChannel('saga-stage'):null;
+const say=m=>{ if(BC)BC.postMessage({...m,name:NAME}); };
+if(BC)BC.onmessage=e=>{
+  const m=e.data||{};
+  if(m.type==='hello'){ $('dot').classList.add('on'); return; }
+  $('dot').classList.add('on');
+  if(m.type==='open'&&m.name&&m.name!==NAME){ NAME=m.name; load(); }
+  if(m.type==='play')playFrom(m.from==null?null:m.from);
+  if(m.type==='pause'&&!AUDIO.paused)AUDIO.pause();
+};
+say({type:'hello'});
+
+async function load(){
+  if(!NAME){ $('title').textContent='no episode — open one in the studio'; return; }
+  DOC=await api('/api/doc?name='+encodeURIComponent(NAME));
+  if(!DOC||DOC.error){ DOC=null; $('title').innerHTML=
+    '<span class="warn">could not open “'+esc(NAME)+'”</span>'; return; }
+  $('title').textContent=DOC.title;
+  // show the episode's first visual as the curtain, so the room is never a
+  // black wall with a play button in front of it
+  const first=DOC.chunks.find(c=>c.type==='visual'&&c.ready);
+  show(first||null);
+}
+const card=id=>DOC&&DOC.chunks.find(c=>c.id===id);
+
+function show(c){
+  if(SHOWN&&c&&SHOWN.id===c.id)return;
+  SHOWN=c||null;
+  const room=$('room');
+  room.querySelectorAll('img,video').forEach(el=>el.remove());
+  if(!c||!c.media)return;
+  const url='/api/media?f='+encodeURIComponent(c.media);
+  let el;
+  if(c.mediakind==='video'){
+    el=document.createElement('video');
+    el.src=url; el.muted=true; el.playsInline=true;
+    el.play().catch(()=>{});      // muted film is exempt from autoplay policy
+    // no loop: it plays once and holds its last frame — the soundtrack is
+    // the cards, and a loop would turn a establishing shot into a gif
+  }else{
+    el=document.createElement('img');
+    el.src=url;
+  }
+  room.insertBefore(el,$('caption'));
+}
+
+function caption(text){
+  const el=$('caption');
+  if(text){ el.textContent=text; el.classList.add('on'); }
+  else el.classList.remove('on');
+}
+
+// ── playback ──────────────────────────────────────────────
+async function playFrom(from){
+  if(!NAME)return;
+  if(!DOC)await load();
+  if(!DOC)return;
+  $('playb').textContent='…';
+  const r=await api('/api/book_preview',{name:NAME,from});
+  if(!r.ok){ $('playb').textContent='▶ play';
+    $('title').innerHTML='<span class="warn">nothing to play yet — render some cards first</span>';
+    return; }
+  MARKS=r.marks||[]; MARKI=-1;
+  AUDIO.src='/api/book_audio?name='+encodeURIComponent(NAME)+'&t='+Date.now();
+  AUDIO.play();
+  $('playb').textContent='⏸ pause';
+}
+function toggle(){
+  if(!AUDIO.paused)return void AUDIO.pause();
+  if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended){ AUDIO.play();
+    $('playb').textContent='⏸ pause'; return; }
+  playFrom(null);
+}
+function stopped(){
+  $('playb').textContent='▶ play';
+  const m=MARKS[MARKI];
+  say({type:'stopped',card:m?m.id:null});
+  caption('');
+}
+function tick(){
+  const t=AUDIO.currentTime;
+  $('clock').textContent=fmt(t)+(AUDIO.duration?' / '+fmt(AUDIO.duration):'');
+  let i=MARKI<0?0:MARKI;
+  while(i+1<MARKS.length&&MARKS[i+1].at<=t)i++;
+  if(!MARKS.length||i===MARKI)return;
+  MARKI=i;
+  const c=card(MARKS[i].id);
+  if(c){
+    // the wall shows the last visual at or before this moment
+    let vis=null;
+    for(let k=0;k<=i;k++){ const x=card(MARKS[k].id);
+      if(x&&x.type==='visual'&&x.ready)vis=x; }
+    show(vis);
+    caption((c.type||'speech')==='speech'?c.text:'');
+  }
+  say({type:'playing',card:MARKS[i].id});
+}
+const fmt=s=>{ s=Math.floor(s||0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
+
+document.addEventListener('keydown',e=>{
+  if(e.key===' '){ e.preventDefault(); toggle(); }
+});
+
+load();
+</script>
+</body>
+</html>

@@ -22,11 +22,14 @@ Layout:
     studio/takes/<sha>.wav           performances driving voiced cards
     studio/<project>/out/*.mp3       assembled book
 
-Cards come in four kinds. A card with no "type" is speech — the original kind,
+Cards come in six kinds. A card with no "type" is speech — the original kind,
 rendered by the model and content-addressed as above. type "audio" places an
 imported clip on the timeline (music, an effect), and type "silence" is a
 timed rest. Neither of those is rendered or hashed: their audio either exists
-in clips/ or is nothing at all.
+in clips/ or is nothing at all. type "visual" shows a picture or film on the
+stage and takes no time at all — a mark on the timeline, not a sound. type
+"choice" is where interactive playback stops and asks; the audiobook walks
+straight past it.
 
 type "voiced" is speech-to-speech: you perform the line yourself and Chatterbox
 re-speaks your recording in a character's voice, keeping your timing and
@@ -62,6 +65,9 @@ AUDIO = ROOT / "audio"
 # and cards reference a clip by name, never by path. Nothing in the app ever
 # deletes a clip file — undo can resurrect a card that points at one.
 CLIPS = ROOT / "clips"
+# Pictures and film for visual cards. Global like clips, and never deleted for
+# the same reason — a card names its media, and undo can resurrect the card.
+MEDIA = ROOT / "media"
 # Performances driving voiced cards. Named by the sha256 of the wav itself, not
 # by the file you imported: re-importing the same recording costs nothing, and
 # a second take can never overwrite the first one the way a name-based stem
@@ -98,6 +104,7 @@ AUDIO.mkdir(parents=True, exist_ok=True)
 CLIPS.mkdir(parents=True, exist_ok=True)
 TAKES.mkdir(parents=True, exist_ok=True)
 FX.mkdir(parents=True, exist_ok=True)
+MEDIA.mkdir(parents=True, exist_ok=True)
 
 # What this process actually loaded. studio_ui.html is re-read from disk on
 # every page request, so a plain reload picks up front-end changes and looks
@@ -313,7 +320,7 @@ def library_counts():
 
     One pass and no hashing: the sidebar only needs to say how much a thing is
     carrying, which is cheap next to asking what is rendered."""
-    profs, clips = {}, {}
+    profs, clips, media = {}, {}, {}
     for d in sorted(ROOT.iterdir()):
         f = d / "doc.json"
         if not f.exists():
@@ -328,7 +335,9 @@ def library_counts():
                 profs[k] = profs.get(k, 0) + 1
             elif c.get("type") == "audio" and c.get("clip"):
                 clips[c["clip"]] = clips.get(c["clip"], 0) + 1
-    return profs, clips
+            elif c.get("type") == "visual" and c.get("media"):
+                media[c["media"]] = media.get(c["media"], 0) + 1
+    return profs, clips, media
 
 
 def params_for(c, doc, profs=None):
@@ -405,6 +414,21 @@ def _num(v, dflt, lo, hi):
         return dflt
 
 
+def clean_tags(v):
+    """A card's tags, made safe. A tag is two things at once: a label you can
+    read down the deck, and — for choice cards — the anchor a jump lands on.
+    It is never part of any hash, because a tag changes nothing about how a
+    card sounds, so tagging is always free. Slug characters only: a tag gets
+    typed into option fields and compared by name, and case or whitespace
+    would quietly make two spellings of one anchor."""
+    out = []
+    for t in list(v or [])[:8]:
+        t = re.sub(r"[^a-z0-9_-]", "", str(t).lower())[:24]
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
 def paste_card(src):
     """A fresh card built from a copied one.
 
@@ -434,6 +458,10 @@ def paste_card(src):
     elif kind == "silence":
         c = {"id": 0, "type": "silence",
              "secs": _num(src.get("secs"), 1.0, 0.0, 3600.0), "note": ""}
+    elif kind == "visual":
+        c = {"id": 0, "type": "visual",
+             "media": re.sub(r"[^a-z0-9_-]", "", str(src.get("media") or "")),
+             "note": ""}
     elif kind == "voiced":
         # `perf` is a checksum this program wrote, so it is hex and nothing
         # else; `perfname` is only what to call it on screen.
@@ -466,6 +494,11 @@ def paste_card(src):
         c["mute"] = True
     if src.get("runon"):
         c["runon"] = True
+    # tags travel with a copy — but landing in another project they may collide
+    # with an anchor already there; the duplicate-tag chip is what says so
+    tags = clean_tags(src.get("tags"))
+    if tags:
+        c["tags"] = tags
     return c
 
 
@@ -492,6 +525,48 @@ def clips_of(doc):
     """The clip names a project's audio cards point at."""
     return {c["clip"] for c in doc["chunks"]
             if c.get("type") == "audio" and c.get("clip")}
+
+
+# ── media ───────────────────────────────────────────────────────────────
+# Pictures and film for visual cards. Stored exactly as they arrive — no
+# ffmpeg, no transcode — because the browser shows these formats natively and,
+# unlike audio, no mixdown ever needs them at one common rate. A visual card
+# takes no time on the audio timeline: it is a mark the stage and the exports
+# read, and the sound is not one sample different for it being there.
+IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+VID_EXT = (".mp4", ".webm", ".mov")
+MEDIA_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+              ".webp": "image/webp", ".gif": "image/gif", ".mp4": "video/mp4",
+              ".webm": "video/webm", ".mov": "video/quicktime"}
+
+
+def media_file(name):
+    for ext in IMG_EXT + VID_EXT:
+        p = MEDIA / f"{name}{ext}"
+        if p.exists():
+            return p
+    raise FileNotFoundError(f"no media '{name}'")
+
+
+def media_kind(p):
+    return "video" if p.suffix.lower() in VID_EXT else "image"
+
+
+def media_list():
+    if not MEDIA.is_dir():
+        return []
+    return sorted(({"name": p.stem, "kind": media_kind(p),
+                    "added": round(p.stat().st_mtime)}
+                   for p in MEDIA.iterdir()
+                   if p.suffix.lower() in IMG_EXT + VID_EXT
+                   and not p.name.startswith(".")),
+                  key=lambda m: m["name"])
+
+
+def media_of(doc):
+    """The media names a project's visual cards point at."""
+    return {c["media"] for c in doc["chunks"]
+            if c.get("type") == "visual" and c.get("media")}
 
 
 # ── takes ───────────────────────────────────────────────────────────────
@@ -642,6 +717,7 @@ ARC_MEMBER = re.compile(
     r"|projects/[a-z0-9_-]{1,60}/(doc\.json|source\.md)"
     r"|voices/[a-z0-9_.-]{1,44}\.(wav|mp3|flac|m4a)"
     r"|clips/[a-z0-9_.-]{1,44}\.wav"
+    r"|media/[a-z0-9_.-]{1,44}\.(png|jpe?g|webp|gif|mp4|webm|mov)"
     r"|takes/[a-z0-9]{1,40}\.wav"
     r"|audio/[a-z0-9]{1,40}\.wav)$")
 _EXTRACT = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
@@ -691,10 +767,11 @@ def plan_export(names, with_audio):
     profs = profiles()
     plan = {"schema": ARCHIVE_SCHEMA, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "with_audio": bool(with_audio), "projects": [], "voices": {},
-            "clips": {}, "takes": {}, "unreadable": [],
-            "missing_voices": [], "missing_clips": [], "missing_takes": [],
-            "bytes": 0}
+            "clips": {}, "media": {}, "takes": {}, "unreadable": [],
+            "missing_voices": [], "missing_clips": [], "missing_media": [],
+            "missing_takes": [], "bytes": 0}
     vnames, pnames, cnames, tnames, audio = set(), set(), set(), set(), {}
+    mnames = set()
     for nm in names:
         try:
             doc = load(nm)
@@ -708,6 +785,7 @@ def plan_export(names, with_audio):
         vnames |= vs
         pnames |= ps
         cnames |= clips_of(doc)
+        mnames |= media_of(doc)
         tnames |= takes_of(doc)
         rendered = 0
         for c in doc["chunks"]:
@@ -745,6 +823,17 @@ def plan_export(names, with_audio):
             plan["missing_clips"].append(cn)
             continue
         plan["clips"][cn] = {"file": f.name, "sha": sha256_file(f),
+                             "bytes": f.stat().st_size}
+        plan["bytes"] += f.stat().st_size
+    for mn in sorted(mnames):
+        # like takes, always packed: media is source material, not a render —
+        # an export leaving it out would restore visual cards that show nothing
+        try:
+            f = media_file(mn)
+        except FileNotFoundError:
+            plan["missing_media"].append(mn)
+            continue
+        plan["media"][mn] = {"file": f.name, "sha": sha256_file(f),
                              "bytes": f.stat().st_size}
         plan["bytes"] += f.stat().st_size
     for tn in sorted(tnames):
@@ -803,6 +892,8 @@ def write_archive(plan, dest):
             _add_file(tar, VOICES / meta["file"], f"voices/{meta['file']}")
         for meta in plan["clips"].values():
             _add_file(tar, CLIPS / meta["file"], f"clips/{meta['file']}")
+        for meta in plan["media"].values():
+            _add_file(tar, MEDIA / meta["file"], f"media/{meta['file']}")
         for meta in plan["takes"].values():
             _add_file(tar, TAKES / meta["file"], f"takes/{meta['file']}")
         for name, f in sorted(audio.items()):
@@ -848,7 +939,7 @@ def import_archive(path, mode="skip"):
     each cached WAV is filed under its new name. A plain restore onto the
     machine that made the archive renames nothing and takes the fast path."""
     rep = {"projects": [], "voices": [], "profiles": [], "clips": [],
-           "audio": 0, "takes": 0, "skipped": []}
+           "media": [], "audio": 0, "takes": 0, "skipped": []}
     tmp = Path(tempfile.mkdtemp(prefix=".import-", dir=ROOT))
     try:
         with tarfile.open(path, "r:gz") as tar:
@@ -907,6 +998,30 @@ def import_archive(path, mode="skip"):
                 rep["clips"].append(f"clip “{f.stem}” arrived as “{new}” — a "
                                     f"different clip already had that name")
 
+        # ── media ── the clips rule again: never overwrite, rename around a
+        # collision, and repoint only the arriving projects at the copy. Like
+        # a clip and unlike a voice, no hash names media, so a rename costs
+        # nothing beyond the pointer.
+        MEDIA.mkdir(parents=True, exist_ok=True)
+        seen_media = {p.stem for p in MEDIA.iterdir() if p.is_file()}
+        mmap = {}
+        mdir = tmp / "media"
+        for f in sorted(mdir.iterdir()) if mdir.is_dir() else []:
+            try:
+                local = media_file(f.stem)
+            except FileNotFoundError:
+                local = None
+            if local is not None and sha256_file(local) == sha256_file(f):
+                mmap[f.stem] = f.stem
+                continue
+            new = f.stem if local is None else _free_name(seen_media, f.stem)
+            shutil.copy2(f, MEDIA / f"{new}{f.suffix}")
+            seen_media.add(new)
+            mmap[f.stem] = new
+            if new != f.stem:
+                rep["media"].append(f"media “{f.stem}” arrived as “{new}” — a "
+                                    f"different file already had that name")
+
         # ── takes ── a take is named by its own checksum, so a name that is
         # already here *is* the same recording, byte for byte. Nothing to
         # compare, nothing to rename, and no card pointer to rewrite — which is
@@ -963,6 +1078,8 @@ def import_archive(path, mode="skip"):
             for c in doc["chunks"]:
                 if c.get("type") == "audio" and c.get("clip"):
                     c["clip"] = cmap.get(c["clip"], c["clip"])
+                if c.get("type") == "visual" and c.get("media"):
+                    c["media"] = mmap.get(c["media"], c["media"])
                 # Only write the key back if it was there or the name actually
                 # moved. Adding an explicit "Default" to a card that never had
                 # one would mean a plain restore did not return the document it
@@ -1729,6 +1846,14 @@ def mixdown(doc, gap=0.35, frm=None, chime=False):
         if c.get("mute"):                     # muted cards are simply not in the book
             continue
         kind = c.get("type", "speech")
+        # A visual takes no time and makes no sound: it is a mark the stage
+        # and the exports read, nothing more. A choice card likewise — it is
+        # where interactive playback stops, and the audiobook does not stop.
+        # Both must turn back HERE: the default branch below hashes the card,
+        # and hashing starts by reading text these kinds have not got.
+        if kind in ("visual", "choice"):
+            note(c)
+            continue
         # "runs on": no rest before this card, so a sentence split across two
         # cards is still one sentence. Splitting mid-sentence to give a phrase
         # its own delivery is what this exists for — without it the phrase
@@ -1931,8 +2056,13 @@ class H(BaseHTTPRequestHandler):
             return self.wfile.write(body)
         if u.path == "/":
             return self._send(200, (HERE / "studio_ui.html").read_bytes(), "text/html; charset=utf-8")
+        if u.path == "/stage":
+            # the audience's window: visuals, captions and — for stories with
+            # choice cards — the chooser. Read from disk per request like the
+            # editor page, so a reload picks up front-end changes.
+            return self._send(200, (HERE / "stage_ui.html").read_bytes(), "text/html; charset=utf-8")
         if u.path == "/api/state":
-            pcounts, ccounts = library_counts()
+            pcounts, ccounts, mcounts = library_counts()
             return self._send(200, {
                 "projects": projects(),
                 # with durations: the editor shows them, and a reference clip
@@ -1947,8 +2077,9 @@ class H(BaseHTTPRequestHandler):
                                   "added": round(p.stat().st_mtime)}
                                  for p in CLIPS.glob("*.wav")),
                                 key=lambda c: c["name"]),
+                "media": media_list(),
                 "profiles": profiles(), "profile_counts": pcounts,
-                "clip_counts": ccounts,
+                "clip_counts": ccounts, "media_counts": mcounts,
                 "defaults": DEFAULTS, "bake": _bake,
                 "engines": list(ENGINES), "omnivoice": ov_available(),
                 "stale_build": build_stale(),
@@ -1978,6 +2109,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "no such project"})
             for c in doc["chunks"]:
                 c.setdefault("mute", False)
+                c.setdefault("tags", [])
                 if is_speech(c):
                     h = chunk_hash(c, doc)
                     c["hash"] = h
@@ -2004,6 +2136,13 @@ class H(BaseHTTPRequestHandler):
                     f = CLIPS / f"{c.get('clip', '')}.wav"
                     c["ready"] = bool(c.get("clip")) and f.exists()
                     c["cliplen"] = clip_secs(f) if c["ready"] else 0
+                elif c["type"] == "visual":
+                    try:
+                        f = media_file(c.get("media") or "")
+                    except FileNotFoundError:
+                        f = None
+                    c["ready"] = f is not None
+                    c["mediakind"] = media_kind(f) if f else ""
                 else:                          # silence has nothing to render
                     c["ready"] = True
             return self._send(200, doc)
@@ -2080,6 +2219,17 @@ class H(BaseHTTPRequestHandler):
             if not nm or not f.exists():
                 return self._send(404, b"", "text/plain")
             return self._send_file(f, "audio/wav")
+        if u.path == "/api/media":
+            nm = re.sub(r"[^a-z0-9_-]", "", q.get("f", [""])[0])
+            try:
+                f = media_file(nm) if nm else None
+            except FileNotFoundError:
+                f = None
+            if not f:
+                return self._send(404, b"", "text/plain")
+            # film runs to real megabytes; stream it like a book
+            return self._send_file(f, MEDIA_MIME.get(f.suffix.lower(),
+                                                     "application/octet-stream"))
         if u.path == "/api/book_audio":
             f = pdir(q.get("name", [""])[0]) / "out" / ".preview.wav"
             if not f.exists():
@@ -2283,13 +2433,57 @@ class H(BaseHTTPRequestHandler):
             if wav:
                 Path(wav).unlink(missing_ok=True)
 
+    def _media_upload(self, u):
+        """A picture or a piece of film for visual cards.
+
+        Raw body like every other upload, but no ffmpeg and no transcode: the
+        browser shows these formats natively, and unlike audio there is no
+        mixdown needing everything at one rate — what arrives is what is kept,
+        checked only against the short list of extensions the stage and the
+        exports know how to show. Never overwrites, same rule as clips: media
+        is global, and replacing a name would change every episode showing it."""
+        fn = parse_qs(u.query).get("fn", ["media"])[0]
+        ext = Path(fn).suffix.lower()
+        if ext not in IMG_EXT + VID_EXT:
+            return self._send(400, {"error": f"cannot show “{ext or fn}” — images "
+                                    "are png/jpg/webp/gif, film is mp4/webm/mov"})
+        stem = re.sub(r"[^a-z0-9_-]+", "-", Path(fn).stem.lower()).strip("-")[:40] or "media"
+        fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".media-", suffix=ext)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                self._read_body_to(f)
+            MEDIA.mkdir(parents=True, exist_ok=True)
+            name = stem
+            try:
+                existing = media_file(stem)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None:
+                if sha256_file(existing) == sha256_file(Path(tmp)):
+                    return self._send(200, {"ok": True, "media": stem,
+                                            "kind": media_kind(existing)})
+                taken = {p.stem for p in MEDIA.iterdir() if p.is_file()}
+                name = _free_name(taken, stem, "new")
+            dest = MEDIA / f"{name}{ext}"
+            os.replace(tmp, dest)              # same filesystem: tmp lives in ROOT
+            os.chmod(dest, 0o644)              # mkstemp makes it 0600
+            return self._send(200, {"ok": True, "media": name,
+                                    "kind": media_kind(dest),
+                                    "renamed": name != stem, "asked": stem})
+        except Exception as ex:
+            return self._send(400, {"error": f"{type(ex).__name__}: {ex}"})
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+
     def do_POST(self):
         u = urlparse(self.path)
         if not self._authed():
             return self._send(401, {"error": "unauthorised"})
         if u.path == "/api/import_archive":
             return self._import_archive(u)
-        if u.path == "/api/clip/upload":       # raw body, so before the JSON parse
+        if u.path == "/api/media/upload":      # raw body, so before the JSON parse
+            return self._media_upload(u)
+        if u.path == "/api/clip/upload":       # likewise
             return self._clip_upload(u)
         if u.path == "/api/take/upload":       # likewise
             return self._take_upload(u)
@@ -2339,6 +2533,8 @@ class H(BaseHTTPRequestHandler):
                             c["text"] = normalise(d["text"])
                         if "note" in d:
                             c["note"] = d["note"]
+                        if "tags" in d:
+                            c["tags"] = clean_tags(d["tags"])
                         if "profile" in d:
                             c["profile"] = d["profile"]
                         if "mute" in d:
@@ -2369,6 +2565,8 @@ class H(BaseHTTPRequestHandler):
                         # never put a negative duration on the timeline
                         if "clip" in d:
                             c["clip"] = re.sub(r"[^a-z0-9_-]", "", d["clip"] or "")
+                        if "media" in d:       # visual-card pointer, clip-shaped
+                            c["media"] = re.sub(r"[^a-z0-9_-]", "", d["media"] or "")
                         if d.get("mode") in ("full", "after"):
                             c["mode"] = d["mode"]
                         if "after" in d:
@@ -2400,6 +2598,8 @@ class H(BaseHTTPRequestHandler):
                          "after": 5.0, "fade": [0, 100], "gain": 100, "note": ""}
                 elif kind == "silence":
                     c = {"id": 0, "type": "silence", "secs": 1.0, "note": ""}
+                elif kind == "visual":
+                    c = {"id": 0, "type": "visual", "media": "", "note": ""}
                 elif kind == "voiced":
                     c = {"id": 0, "type": "voiced", "perf": "", "perfname": "",
                          "note": ""}
@@ -2681,6 +2881,10 @@ class H(BaseHTTPRequestHandler):
                         a, b = c["text"][:d["at"]].strip(), c["text"][d["at"]:].strip()
                         out.append({**c, "text": a})
                         tail = {**c, "text": b, "note": ""}
+                        # a jump lands at the start of a card, and the start
+                        # stays with the head — copying the tags would make
+                        # every anchor on this card ambiguous
+                        tail.pop("tags", None)
                         # Splitting mid-sentence is how a phrase gets a delivery
                         # of its own, and the rest that normally follows a card
                         # would drop a pause into the middle of a sentence that
@@ -2707,7 +2911,14 @@ class H(BaseHTTPRequestHandler):
                     if (c["id"] == d["id"] and i + 1 < len(doc["chunks"])
                             and is_speech(c) and is_speech(doc["chunks"][i + 1])):
                         nxt = doc["chunks"][i + 1]
-                        out.append({**c, "text": f'{c["text"]} {nxt["text"]}'.strip()})
+                        merged = {**c, "text": f'{c["text"]} {nxt["text"]}'.strip()}
+                        # the vanished card's tags ride along rather than
+                        # dangle: a jump aimed at it should land here
+                        tags = clean_tags((c.get("tags") or [])
+                                          + (nxt.get("tags") or []))
+                        if tags:
+                            merged["tags"] = tags
+                        out.append(merged)
                         skip = True
                     else:
                         out.append(c)
@@ -2825,6 +3036,41 @@ class H(BaseHTTPRequestHandler):
                     if touched:
                         save(doc)
                 return self._send(200, {"ok": True, "clip": new, "cards": cards})
+
+            if u.path == "/api/media/rename":
+                # exactly the clip rename: no hash names media, so this is a
+                # file rename and a pointer sweep, never onto a taken name
+                old = re.sub(r"[^a-z0-9_-]", "", str(d.get("media") or ""))
+                new = re.sub(r"[^a-z0-9_-]+", "-",
+                             str(d.get("to") or "").lower()).strip("-")[:40]
+                if not new:
+                    return self._send(400, {"error": "a name is needed"})
+                try:
+                    src = media_file(old) if old else None
+                except FileNotFoundError:
+                    src = None
+                if src is None:
+                    return self._send(404, {"error": f"no media “{old}”"})
+                if new == old:
+                    return self._send(200, {"ok": True, "media": old, "cards": 0})
+                try:
+                    media_file(new)
+                    return self._send(400, {"error": f"media called “{new}” is already here"})
+                except FileNotFoundError:
+                    pass
+                src.rename(MEDIA / f"{new}{src.suffix}")
+                cards = 0
+                for pr in projects():
+                    doc = load(pr["name"])
+                    touched = False
+                    for c in doc["chunks"]:
+                        if c.get("type") == "visual" and c.get("media") == old:
+                            c["media"] = new
+                            cards += 1
+                            touched = True
+                    if touched:
+                        save(doc)
+                return self._send(200, {"ok": True, "media": new, "cards": cards})
 
             if u.path == "/api/voice/rename":
                 try:
