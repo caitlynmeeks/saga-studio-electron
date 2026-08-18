@@ -1914,6 +1914,11 @@ async function saveTags(id,fn){
 function paintTags(){
   tagCounts();      // a removal elsewhere can clear another chip's dup warning
   (DOC?DOC.chunks:[]).forEach(c=>{ const el=$('tg'+c.id); if(el)el.outerHTML=tagsUi(c); });
+  // A tag is also every choice card's list of destinations, so the option
+  // rows repaint with the chips: the dropdowns gain an anchor the moment it
+  // is made, a deleted one shows "(missing)" immediately instead of on the
+  // next reload, and one that just came back stops claiming to be missing.
+  (DOC?DOC.chunks:[]).forEach(c=>{ if(c.type==='choice')redrawOpts(c.id); });
 }
 // ── a card's condition ────────────────────────────────────
 // "plays only when" — the other half of what a choice's set ops are for. The
