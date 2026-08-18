@@ -2,7 +2,7 @@
   "name": "saga-studio-desktop",
   "productName": "Saga Studio",
   "version": "0.1.0",
-  "description": "Saga Studio as a standalone desktop app — a local audiobook editor",
+  "description": "Saga Studio as a standalone desktop app \u2014 a local audiobook editor",
   "main": "main.js",
   "license": "MIT",
   "author": "Caitlyn Meeks",
@@ -24,6 +24,7 @@
       "lib/**/*",
       "python/studio.py",
       "python/studio_ui.html",
+      "python/omnivoice_server.py",
       "python/requirements.txt"
     ],
     "mac": {

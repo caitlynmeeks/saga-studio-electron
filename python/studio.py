@@ -19,14 +19,21 @@ Layout:
     studio/<project>/source.md       the import, never modified
     studio/audio/<hash>.wav          shared cache; identical text is free
     studio/clips/<name>.wav          music and sound effects, shared like voices
+    studio/takes/<sha>.wav           performances driving voiced cards
     studio/<project>/out/*.mp3       assembled book
 
-Cards come in three kinds. A card with no "type" is speech — the original kind,
+Cards come in four kinds. A card with no "type" is speech — the original kind,
 rendered by the model and content-addressed as above. type "audio" places an
 imported clip on the timeline (music, an effect), and type "silence" is a
 timed rest. Neither of those is rendered or hashed: their audio either exists
-in clips/ or is nothing at all, so every c["text"] / chunk_hash site guards
-with is_speech() rather than assuming the world is made of prose.
+in clips/ or is nothing at all.
+
+type "voiced" is speech-to-speech: you perform the line yourself and Chatterbox
+re-speaks your recording in a character's voice, keeping your timing and
+delivery. It is rendered and hashed like speech, but its input is a wav rather
+than prose — which is why "does this card have words in it?" (is_speech) and
+"does this card render to a wav?" (is_renderable) are two questions now, and
+why every c["text"] site must ask the first one.
 """
 import hashlib
 import io
@@ -55,8 +62,26 @@ AUDIO = ROOT / "audio"
 # and cards reference a clip by name, never by path. Nothing in the app ever
 # deletes a clip file — undo can resurrect a card that points at one.
 CLIPS = ROOT / "clips"
+# Performances driving voiced cards. Named by the sha256 of the wav itself, not
+# by the file you imported: re-importing the same recording costs nothing, and
+# a second take can never overwrite the first one the way a name-based stem
+# would. Global like clips, and never deleted for the same reason.
+TAKES = ROOT / "takes"
 VOICES = Path(os.environ.get("SAGA_VOICES") or (HERE / "voices")).expanduser()
 PORT = int(os.environ.get("PORT", "5010"))
+# Two engines speak text here. Chatterbox is the original and the default, and
+# it is the only one that can do a voiced card, because it is the only one with
+# speech-to-speech. OmniVoice is roughly 3x faster and speaks 600-odd languages,
+# which is the whole reason it is here — the Spanish editions.
+#
+# They cannot share a virtualenv: chatterbox pins transformers==5.2.0 and
+# safetensors==0.5.3 as exact equalities, and OmniVoice needs transformers 5.3+.
+# So OmniVoice runs in its own interpreter as a warm worker process and is
+# spoken to over localhost. See omnivoice_server.py.
+ENGINES = ("chatterbox", "omnivoice")
+OV_PYTHON = Path(os.environ.get("SAGA_OV_PYTHON")
+                 or (Path.home() / "git/voice-studio/.venv-omnivoice/bin/python")).expanduser()
+OV_PORT = int(os.environ.get("SAGA_OV_PORT", "5021"))
 # Localhost by default. SAGA_HOST=0.0.0.0 exposes it to the LAN — see the
 # README: there is no login, and the discuss window shells out to Claude, so
 # anyone who can reach the port can read the manuscript and spend tokens.
@@ -69,8 +94,30 @@ OPEN_CMD = "open" if sys.platform == "darwin" else "xdg-open"
 ROOT.mkdir(parents=True, exist_ok=True)
 AUDIO.mkdir(parents=True, exist_ok=True)
 CLIPS.mkdir(parents=True, exist_ok=True)
+TAKES.mkdir(parents=True, exist_ok=True)
+
+# What this process actually loaded. studio_ui.html is re-read from disk on
+# every page request, so a plain reload picks up front-end changes and looks
+# like it picked up everything — but the Python is whatever was on disk when
+# the process started. A new front end talking to an old route fails in ways
+# that look like bugs in the new code, and twice now that has cost an evening.
+# So the program watches its own source and says when it is out of date.
+_SRC = [Path(__file__), HERE / "omnivoice_server.py"]
+BUILD_MTIME = max((p.stat().st_mtime for p in _SRC if p.exists()), default=0.0)
+
+
+def build_stale():
+    """Has the source changed since this process loaded it?"""
+    try:
+        now = max((p.stat().st_mtime for p in _SRC if p.exists()), default=0.0)
+    except OSError:
+        return False
+    return now > BUILD_MTIME + 1        # a second of slack for copy timestamps
+
 
 _model = None
+_vc = None
+_vc_voice = [None]                # which voice the VC model is currently holding
 _lock = threading.Lock()          # MPS: one generate() at a time
 _bake = {"running": False, "done": 0, "total": 0, "project": "", "label": "",
          "cancel": False, "stopped": False}
@@ -78,6 +125,18 @@ _docmut = threading.Lock()        # one doc.json read-modify-write at a time
 
 DEFAULTS = {"voice": "caitlyn2", "exag": 0.4, "cfg": 0.35,
             "temp": 0.7, "rep": 1.2}
+
+# What a single card may override for itself, on top of its profile. The four
+# chatterbox dials, the two OmniVoice ones, and the engine — so one line can be
+# spoken by the other model without a profile of its own. `params_for` merges
+# these last, so a card always wins over the profile it names, and chunk_hash
+# reads the merged result, so an override renames that card's wav and nothing
+# else's.
+CARD_PARAMS = {
+    "engine": (None, None),          # validated against ENGINES, not clamped
+    "exag": (0.0, 2.0), "cfg": (0.0, 1.0), "temp": (0.05, 2.0), "rep": (1.0, 2.0),
+    "speed": (0.0, 3.0), "duration": (0.0, 300.0),
+}
 
 # ❦ deliberately survives normalisation here: it marks a scene break, and
 # assemble() gives those a longer rest. render() strips it before speaking,
@@ -138,8 +197,13 @@ def strip_markdown(md):
 # built once should be usable everywhere. "Default" always exists and cannot
 # be deleted — every card falls back to it.
 PROFILES = ROOT / "profiles.json"
+# `engine` defaults to chatterbox so that adding a second engine changes nothing
+# until a profile is deliberately moved across — every wav already on disk keeps
+# its name and stays valid. `lang` and `speed` mean nothing to chatterbox and are
+# only read when the engine is omnivoice.
 BASE_PROFILE = {"voices": ["caitlyn2"], "active": 0, "exag": 0.4, "cfg": 0.35,
-                "temp": 0.7, "rep": 1.2, "note": ""}
+                "temp": 0.7, "rep": 1.2, "note": "",
+                "engine": "chatterbox", "lang": "en", "speed": 0}
 
 
 def profiles():
@@ -165,9 +229,94 @@ def profile_params(name, profs=None):
     prof = p.get(name) or p.get("Default") or BASE_PROFILE
     voices = prof.get("voices") or ["caitlyn2"]
     idx = min(prof.get("active", 0), len(voices) - 1)
+    eng = prof.get("engine", "chatterbox")
     return {"voice": voices[idx],
             "exag": prof.get("exag", 0.4), "cfg": prof.get("cfg", 0.35),
-            "temp": prof.get("temp", 0.7), "rep": prof.get("rep", 1.2)}
+            "temp": prof.get("temp", 0.7), "rep": prof.get("rep", 1.2),
+            "engine": eng if eng in ENGINES else "chatterbox",
+            "lang": prof.get("lang", "en") or "en",
+            "speed": prof.get("speed", 0) or 0}
+
+
+# How many previous settings a profile remembers. A profile is five numbers, so
+# a stack of ten costs nothing — and it is the difference between "put it back"
+# and working out what the number used to be from the hashes on disk.
+PROFILE_HISTORY = 10
+
+
+def profile_usage(name, proposed=None):
+    """Who uses this profile, and what changing it would cost.
+
+    A profile's numbers are part of every hash its cards render to, so moving
+    one by 0.05 re-points every card that uses it at a wav that has never been
+    made. That is not destructive — nothing is ever deleted, and the old
+    renders sit on disk under their old names — but it is invisible, and a
+    library can go from finished to four hundred amber dots without a word.
+    So: say the number first.
+
+    `proposed` is the profile as it would be after the edit. Because the cache
+    is content-addressed and permanent, "how many would already be rendered at
+    the new settings" is answerable before anything changes — and the answer is
+    often "some", because you have been at those settings before. Which also
+    makes the reverse true: going back restores exactly what going forward
+    took away."""
+    profs = profiles()
+    after = None
+    if proposed is not None:
+        after = json.loads(json.dumps(profs))
+        after[name] = proposed
+    out = {"profile": name, "cards": 0, "ready": 0, "projects": []}
+    lost = gained = ready_after = 0
+    for meta in projects():
+        if meta.get("broken"):
+            continue
+        doc = load(meta["name"])
+        if not doc:
+            continue
+        n = r = ra = 0
+        for c in doc["chunks"]:
+            if not is_renderable(c) or c.get("profile", "Default") != name:
+                continue
+            n += 1
+            a = (AUDIO / f"{chunk_hash(c, doc, profs)}.wav").exists()
+            z = after is not None and (AUDIO / f"{chunk_hash(c, doc, after)}.wav").exists()
+            r += a
+            ra += z
+            lost += a and not z
+            gained += z and not a
+        if not n:
+            continue
+        out["projects"].append({"name": doc["name"],
+                                "title": doc.get("title", doc["name"]),
+                                "cards": n, "ready": r, "ready_after": ra})
+        out["cards"] += n
+        out["ready"] += r
+        ready_after += ra
+    out["projects"].sort(key=lambda p: -p["cards"])
+    if after is not None:
+        out.update(ready_after=ready_after, lost=lost, gained=gained)
+    return out
+
+
+def profile_counts():
+    """How many cards each profile speaks for, library-wide.
+
+    No hashing — the sidebar only needs to say how much a profile is carrying,
+    and walking the documents is cheap next to asking what is rendered."""
+    n = {}
+    for d in sorted(ROOT.iterdir()):
+        f = d / "doc.json"
+        if not f.exists():
+            continue
+        try:
+            doc = json.loads(f.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        for c in doc.get("chunks", []):
+            if is_renderable(c):
+                k = c.get("profile", "Default")
+                n[k] = n.get(k, 0) + 1
+    return n
 
 
 def params_for(c, doc, profs=None):
@@ -179,7 +328,38 @@ def params_for(c, doc, profs=None):
 
 def chunk_hash(c, doc, profs=None):
     p = params_for(c, doc, profs)
-    key = [c["text"], p["voice"], p["exag"], p["cfg"], p["temp"], p["rep"]]
+    if c.get("type") == "voiced":
+        # Only two things decide what a voiced card sounds like: the recording
+        # and the voice it is being spoken in. Chatterbox VC takes no
+        # exaggeration, cfg, temperature or repetition penalty — it has no such
+        # knobs — so folding them in would invalidate every voiced card the
+        # moment a profile slider moved, for a re-render that produced exactly
+        # the same audio. The recording is already named by its own checksum,
+        # so naming it here is naming its contents.
+        # A voiced card is always chatterbox: it is speech-to-speech, and
+        # OmniVoice does not do that. So the engine is not part of its key.
+        key = ["voiced", c.get("perf") or "", p["voice"]]
+    elif p["engine"] == "chatterbox":
+        key = [c["text"], p["voice"], p["exag"], p["cfg"], p["temp"], p["rep"]]
+    else:
+        # Which engine spoke it has to be in the name, or the same words in the
+        # same voice collide on one filename whichever model made them, and a
+        # chapter quietly mixes the two. The default engine stays unmarked, so
+        # every wav chatterbox has already rendered keeps the name it has.
+        #
+        # And only what OmniVoice actually reads goes in: it has no
+        # exaggeration, cfg, temperature or repetition penalty, so folding
+        # those in would make a slider that does nothing to this profile
+        # invalidate every card it speaks for.
+        ext = {"engine": p["engine"], "lang": p["lang"],
+               "speed": float(p["speed"] or 0)}
+        # duration is per-card only and rarely set, so it stays out of the key
+        # unless it is actually asked for — same discipline as takes and the
+        # engine itself, and for the same reason: nothing already rendered
+        # should go stale because a new option was added to the program.
+        if p.get("duration"):
+            ext["duration"] = float(p["duration"])
+        key = [c["text"], p["voice"], ext]
     # Take 0 hashes exactly as it did before takes existed, so nothing already
     # rendered goes stale — only a card you have actually re-rolled gets a new
     # name, and each take keeps its own file, so stepping back to take 2 plays
@@ -190,7 +370,20 @@ def chunk_hash(c, doc, profs=None):
 
 
 def is_speech(c):
+    """Does this card have prose in it? Guards every c["text"] access."""
     return c.get("type", "speech") == "speech"
+
+
+def is_renderable(c):
+    """Does this card produce a wav the model has to make?
+
+    Speech and voiced cards both do, and both are content-addressed into
+    audio/. Audio and silence cards do not — their audio is a file you imported
+    or nothing at all. This is a different question from is_speech(): a voiced
+    card renders but has no text, so anything counting work to be done (bake,
+    the progress bar, what an export must carry) asks this one, and anything
+    touching words asks the other."""
+    return c.get("type", "speech") in ("speech", "voiced")
 
 
 def _num(v, dflt, lo, hi):
@@ -229,10 +422,25 @@ def paste_card(src):
     elif kind == "silence":
         c = {"id": 0, "type": "silence",
              "secs": _num(src.get("secs"), 1.0, 0.0, 3600.0), "note": ""}
+    elif kind == "voiced":
+        # `perf` is a checksum this program wrote, so it is hex and nothing
+        # else; `perfname` is only what to call it on screen.
+        c = {"id": 0, "type": "voiced",
+             "perf": re.sub(r"[^a-z0-9]", "", str(src.get("perf") or ""))[:40],
+             "perfname": str(src.get("perfname") or "")[:80],
+             "note": ""}
+        if src.get("profile"):
+            c["profile"] = str(src["profile"])[:80]
+        seed = int(_num(src.get("seed"), 0, 0, 10 ** 6))
+        if seed:
+            c["seed"] = seed
     else:
         c = {"id": 0, "text": normalise(str(src.get("text") or "")),
+             # CARD_PARAMS, not DEFAULTS: a card's per-card delivery and its
+             # engine are part of what you copied, and dropping them would make
+             # the pasted card sound different from the one you pointed at.
              "params": {k: v for k, v in (src.get("params") or {}).items()
-                        if k in DEFAULTS and v is not None},
+                        if k in CARD_PARAMS and v is not None},
              "note": ""}
         if src.get("profile"):
             c["profile"] = str(src["profile"])[:80]
@@ -244,6 +452,8 @@ def paste_card(src):
             c["height"] = height
     if src.get("mute"):
         c["mute"] = True
+    if src.get("runon"):
+        c["runon"] = True
     return c
 
 
@@ -270,6 +480,29 @@ def clips_of(doc):
     """The clip names a project's audio cards point at."""
     return {c["clip"] for c in doc["chunks"]
             if c.get("type") == "audio" and c.get("clip")}
+
+
+# ── takes ───────────────────────────────────────────────────────────────
+# A take is a performance you recorded, driving a voiced card. Like a clip it
+# is always a PCM wav this program wrote via ffmpeg, so wave can read its
+# length without importing torch — but it is named by its checksum rather than
+# by you, so importing the same recording twice is free and importing a second
+# one can never quietly replace the first.
+def take_path(name):
+    return TAKES / f"{name}.wav"
+
+
+def take_file(name):
+    p = take_path(name or "")
+    if not name or not p.exists():
+        raise FileNotFoundError(f"no performance '{name}' in takes/")
+    return p
+
+
+def takes_of(doc):
+    """The performances a project's voiced cards point at."""
+    return {c["perf"] for c in doc["chunks"]
+            if c.get("type") == "voiced" and c.get("perf")}
 
 
 # ── projects ────────────────────────────────────────────────────────────
@@ -337,14 +570,16 @@ def projects():
                 out.append({"name": d.name, "title": f"{d.name} (unreadable)",
                             "chunks": 0, "ready": 0, "words": 0, "broken": True})
                 continue
-            # the progress bar tracks what needs rendering, which is speech —
-            # an audio or silence card is never stale
-            sp = [c for c in doc["chunks"] if is_speech(c)]
-            ready = sum(1 for c in sp
+            # the progress bar tracks what needs rendering — speech and voiced
+            # both do; an audio or silence card is never stale. Words are a
+            # separate count: a voiced card carries a recording, not prose.
+            rend = [c for c in doc["chunks"] if is_renderable(c)]
+            ready = sum(1 for c in rend
                         if (AUDIO / f"{chunk_hash(c, doc, profs)}.wav").exists())
             out.append({"name": doc["name"], "title": doc.get("title", doc["name"]),
-                        "chunks": len(sp), "ready": ready,
-                        "words": sum(len(c["text"].split()) for c in sp)})
+                        "chunks": len(rend), "ready": ready,
+                        "words": sum(len(c["text"].split())
+                                     for c in doc["chunks"] if is_speech(c))})
     return out
 
 
@@ -371,6 +606,7 @@ def import_md(title, md):
 #   projects/<name>/doc.json  cards, params, notes
 #   projects/<name>/source.md the untouched import
 #   voices/<stem>.wav         only the clips those profiles can speak with
+#   takes/<sha>.wav           the performances voiced cards are driven by
 #   audio/<hash>.wav          rendered chunks — optional, and nearly all the size
 #
 # The manifest is written first so that reading "what is in here?" does not
@@ -388,6 +624,7 @@ ARC_MEMBER = re.compile(
     r"|projects/[a-z0-9_-]{1,60}/(doc\.json|source\.md)"
     r"|voices/[a-z0-9_.-]{1,44}\.(wav|mp3|flac|m4a)"
     r"|clips/[a-z0-9_.-]{1,44}\.wav"
+    r"|takes/[a-z0-9]{1,40}\.wav"
     r"|audio/[a-z0-9]{1,40}\.wav)$")
 _EXTRACT = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
 
@@ -410,7 +647,9 @@ def voices_and_profiles(doc, profs):
     falls back to when its profile has gone."""
     pnames, vnames = {"Default"}, set()
     for c in doc["chunks"]:
-        if not is_speech(c):
+        # voiced cards name a profile too — the voice they are converted into
+        # is exactly as necessary to the backup as the one speech is read in
+        if not is_renderable(c):
             continue
         pnames.add(c.get("profile", "Default"))
         v = (c.get("params") or {}).get("voice")
@@ -434,9 +673,10 @@ def plan_export(names, with_audio):
     profs = profiles()
     plan = {"schema": ARCHIVE_SCHEMA, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "with_audio": bool(with_audio), "projects": [], "voices": {},
-            "clips": {}, "unreadable": [],
-            "missing_voices": [], "missing_clips": [], "bytes": 0}
-    vnames, pnames, cnames, audio = set(), set(), set(), {}
+            "clips": {}, "takes": {}, "unreadable": [],
+            "missing_voices": [], "missing_clips": [], "missing_takes": [],
+            "bytes": 0}
+    vnames, pnames, cnames, tnames, audio = set(), set(), set(), set(), {}
     for nm in names:
         try:
             doc = load(nm)
@@ -450,9 +690,10 @@ def plan_export(names, with_audio):
         vnames |= vs
         pnames |= ps
         cnames |= clips_of(doc)
+        tnames |= takes_of(doc)
         rendered = 0
         for c in doc["chunks"]:
-            if not is_speech(c):
+            if not is_renderable(c):
                 continue
             f = AUDIO / f"{chunk_hash(c, doc, profs)}.wav"
             if not f.exists():
@@ -487,6 +728,17 @@ def plan_export(names, with_audio):
             continue
         plan["clips"][cn] = {"file": f.name, "sha": sha256_file(f),
                              "bytes": f.stat().st_size}
+        plan["bytes"] += f.stat().st_size
+    for tn in sorted(tnames):
+        # Always packed, even without audio: a take is the *source* of a voiced
+        # card, not a derived artefact. Leaving it out would restore a card
+        # that can never be rendered again — the rest of the archive holds a
+        # recording of the performance, not the performance.
+        f = take_path(tn)
+        if not f.exists():
+            plan["missing_takes"].append(tn)
+            continue
+        plan["takes"][tn] = {"file": f.name, "bytes": f.stat().st_size}
         plan["bytes"] += f.stat().st_size
     plan["kind"] = "library" if len(plan["projects"]) > 1 else "project"
     plan["_profiles"] = {n: profs[n] for n in sorted(pnames) if n in profs}
@@ -533,6 +785,8 @@ def write_archive(plan, dest):
             _add_file(tar, VOICES / meta["file"], f"voices/{meta['file']}")
         for meta in plan["clips"].values():
             _add_file(tar, CLIPS / meta["file"], f"clips/{meta['file']}")
+        for meta in plan["takes"].values():
+            _add_file(tar, TAKES / meta["file"], f"takes/{meta['file']}")
         for name, f in sorted(audio.items()):
             _add_file(tar, f, f"audio/{name}")
     return dest
@@ -552,7 +806,8 @@ def _same_profile(a, b):
     """`note` is prose about when to use the profile; it does not change how a
     single character sounds, so it is not grounds for forking a second copy."""
     return all(a.get(k, BASE_PROFILE.get(k)) == b.get(k, BASE_PROFILE.get(k))
-               for k in ("voices", "active", "exag", "cfg", "temp", "rep"))
+               for k in ("voices", "active", "exag", "cfg", "temp", "rep",
+                         "engine", "lang", "speed"))
 
 
 def import_archive(path, mode="skip"):
@@ -575,7 +830,7 @@ def import_archive(path, mode="skip"):
     each cached WAV is filed under its new name. A plain restore onto the
     machine that made the archive renames nothing and takes the fast path."""
     rep = {"projects": [], "voices": [], "profiles": [], "clips": [],
-           "audio": 0, "skipped": []}
+           "audio": 0, "takes": 0, "skipped": []}
     tmp = Path(tempfile.mkdtemp(prefix=".import-", dir=ROOT))
     try:
         with tarfile.open(path, "r:gz") as tar:
@@ -634,6 +889,19 @@ def import_archive(path, mode="skip"):
                 rep["clips"].append(f"clip “{f.stem}” arrived as “{new}” — a "
                                     f"different clip already had that name")
 
+        # ── takes ── a take is named by its own checksum, so a name that is
+        # already here *is* the same recording, byte for byte. Nothing to
+        # compare, nothing to rename, and no card pointer to rewrite — which is
+        # the whole reason performances are content-addressed and clips, which
+        # you name yourself, are not.
+        TAKES.mkdir(parents=True, exist_ok=True)
+        tdir = tmp / "takes"
+        for f in sorted(tdir.iterdir()) if tdir.is_dir() else []:
+            local = TAKES / f.name
+            if not local.exists():
+                shutil.copy2(f, local)
+                rep["takes"] += 1
+
         # ── profiles ──
         local_profs = profiles()
         pmap = {}
@@ -669,7 +937,7 @@ def import_archive(path, mode="skip"):
                     target, copied = _free_name(taken, target, "copy"), True
 
             # hashes as the archive knew them, before anything is repointed
-            old = [chunk_hash(c, doc, arc_profs) if is_speech(c) else None
+            old = [chunk_hash(c, doc, arc_profs) if is_renderable(c) else None
                    for c in doc["chunks"]]
             doc["name"] = target
             if copied:
@@ -691,7 +959,7 @@ def import_archive(path, mode="skip"):
             dp = doc.get("params") or {}
             if dp.get("voice"):
                 dp["voice"] = vmap.get(dp["voice"], dp["voice"])
-            new = [chunk_hash(c, doc, local_profs) if is_speech(c) else None
+            new = [chunk_hash(c, doc, local_profs) if is_renderable(c) else None
                    for c in doc["chunks"]]
 
             for o, n in zip(old, new):
@@ -737,6 +1005,97 @@ def voice_file(name):
     raise FileNotFoundError(f"no voice '{name}'")
 
 
+def rename_voice(old, new):
+    """Rename a voice clip, and take its renders with it.
+
+    A voice's name is part of every chunk hash, so renaming one re-points every
+    card that uses it at a wav that has never been made — nine thousand of them,
+    for the voice most of this library is read in. That is not a rename, it is a
+    silent invalidation, and the only sign would be a library that had gone
+    amber overnight.
+
+    So the audio moves too. Every card is hashed once under the old name and
+    once under the new, and each cached wav is filed under the name it now
+    answers to. That is the same manoeuvre import_archive performs when an
+    incoming voice has to be renamed around a collision, for the same reason.
+
+    Pointers are rewritten first and the hashes recomputed after, so what gets
+    moved is decided by the document as it will be, not as it was."""
+    old = str(old or "")
+    new = re.sub(r"[^a-z0-9_-]+", "-", str(new or "").lower()).strip("-")[:40]
+    if not new:
+        raise ValueError("a name is needed")
+    src = voice_file(old)                        # raises if there is no such voice
+    if new == old:
+        return {"voice": old, "cards": 0, "audio": 0, "profiles": 0, "overrides": 0}
+    try:
+        voice_file(new)
+        raise ValueError(f"a voice called “{new}” is already here")
+    except FileNotFoundError:
+        pass
+
+    profs = profiles()
+    docs, before = {}, {}
+    for meta in projects():
+        if meta.get("broken"):
+            continue
+        doc = load(meta["name"])
+        if not doc:
+            continue
+        docs[meta["name"]] = doc
+        before[meta["name"]] = [chunk_hash(c, doc, profs) if is_renderable(c) else None
+                                for c in doc["chunks"]]
+
+    nprof = 0
+    for pr in profs.values():
+        if old in (pr.get("voices") or []):
+            pr["voices"] = [new if v == old else v for v in pr["voices"]]
+            nprof += 1
+        # the stack of previous settings names clips too; leaving the old name
+        # in there would make "put it back" restore a voice that is not there
+        for h in (pr.get("_history") or []):
+            if old in (h.get("voices") or []):
+                h["voices"] = [new if v == old else v for v in h["voices"]]
+    if nprof:
+        save_profiles(profs)
+
+    overrides = 0
+    for doc in docs.values():
+        touched = False
+        dp = doc.get("params") or {}
+        if dp.get("voice") == old:
+            dp["voice"] = new
+            touched = True
+        for c in doc["chunks"]:
+            cp = c.get("params") or {}
+            if cp.get("voice") == old:
+                cp["voice"] = new
+                overrides += 1
+                touched = True
+        if touched:
+            save(doc)
+
+    src.rename(VOICES / f"{new}{src.suffix}")
+
+    cards = moved = 0
+    for nm, doc in docs.items():
+        for c, o in zip(doc["chunks"], before[nm]):
+            if not o:
+                continue
+            n = chunk_hash(c, doc, profs)
+            if n == o:
+                continue
+            cards += 1
+            a, b = AUDIO / f"{o}.wav", AUDIO / f"{n}.wav"
+            # two cards with the same words in the same voice share one wav, so
+            # the second finds the first has already moved it
+            if a.exists() and not b.exists():
+                a.rename(b)
+                moved += 1
+    return {"voice": new, "cards": cards, "audio": moved,
+            "profiles": nprof, "overrides": overrides}
+
+
 def seed_take(n):
     """Pin the sampler for take n, or leave it running free for take 0.
 
@@ -750,6 +1109,267 @@ def seed_take(n):
     if n:
         import torch
         torch.manual_seed(int(n))
+
+
+# ── voice conversion ────────────────────────────────────────────────────
+VC_SR = 16000             # chatterbox VC consumes 16k mono, whatever you give it
+VC_CHUNK_SECS = 25        # convert at most this much performance per model call
+VC_TOP_DB = 40            # silence threshold when splitting a long take
+
+
+def get_vc():
+    """The voice-conversion model — which is s3gen, and nothing else.
+
+    VC renders speech tokens through the same decoder the TTS model already
+    holds, so when that model is warm this borrows its s3gen rather than
+    loading a second gigabyte of identical weights. Cold, it loads only s3gen
+    (~1 GB) and never the ~2 GB language model, which has no part in converting
+    a recording: the tokens come from your performance, not from text."""
+    global _vc
+    if _vc is None:
+        from chatterbox.vc import ChatterboxVC
+        import torch
+        dev = "mps" if torch.backends.mps.is_available() else "cpu"
+        if _model is not None:
+            print("voice conversion: borrowing the warm s3gen", flush=True)
+            _vc = ChatterboxVC(s3gen=_model.s3gen, device=dev)
+        else:
+            print(f"loading Chatterbox VC on {dev} …", flush=True)
+            _vc = ChatterboxVC.from_pretrained(device=dev)
+        _vc_voice[0] = None
+        print("voice conversion warm", flush=True)
+    return _vc
+
+
+def speech_spans(y):
+    """(start, end) sample spans of at most VC_CHUNK_SECS, cut only inside
+    silences so a word is never bisected.
+
+    Chatterbox VC has no length cap and no chunking of its own, but a long take
+    costs memory linearly and drifts, so a whole scene is converted a breath at
+    a time and laid back onto the original timeline — which is also what keeps
+    your pauses yours."""
+    max_len = VC_CHUNK_SECS * VC_SR
+    if len(y) <= max_len:
+        return [(0, len(y))]
+    import librosa
+    iv = librosa.effects.split(y, top_db=VC_TOP_DB)
+    if len(iv) == 0:
+        return [(0, len(y))]
+    spans, start, prev_end = [], iv[0][0], iv[0][1]
+    for s, e in iv[1:]:
+        if e - start > max_len:
+            spans.append((start, prev_end))
+            start = s
+        prev_end = e
+    spans.append((start, prev_end))
+    out = []
+    for s, e in spans:            # continuous speech with no silence to cut at
+        while e - s > max_len:
+            out.append((s, s + max_len))
+            s += max_len
+        out.append((s, e))
+    return out
+
+
+def render_voiced(c, doc, force=False):
+    """Re-speak a recorded performance in a character's voice.
+
+    VC tokenises the take into speech tokens — which carry the words, the
+    timing and the delivery — then renders those through the decoder
+    conditioned on the target voice. The performance stays yours; the timbre
+    becomes the character's. That is the whole card.
+
+    There are no parameters, because VC has none: it takes two audio files and
+    nothing else. A profile contributes its voice here and only its voice —
+    exaggeration, cfg, temperature and repetition penalty have no meaning for
+    conversion, which is why chunk_hash leaves them out."""
+    import torch, torchaudio as ta, librosa
+    h = chunk_hash(c, doc)
+    dest = AUDIO / f"{h}.wav"
+    if dest.exists() and not force:
+        return h, True
+    p = params_for(c, doc)
+    src = take_file(c.get("perf"))
+    voice = str(voice_file(p["voice"]))
+    m = get_vc()
+    y, _ = librosa.load(str(src), sr=VC_SR, mono=True)
+    if not len(y):
+        raise ValueError("that performance has no audio in it")
+    spans = speech_spans(y)
+    ratio = m.sr / VC_SR
+    pieces = []
+    with _lock:
+        # embed_ref is the costly half and the voice rarely changes from one
+        # card to the next, so hold it and re-embed only when it actually moves
+        if _vc_voice[0] != voice:
+            m.set_target_voice(voice)
+            _vc_voice[0] = voice
+        seed_take(c.get("seed"))
+        with tempfile.TemporaryDirectory(dir=ROOT, prefix=".vc-") as tmpd:
+            piece = Path(tmpd) / "piece.wav"
+            for s, e in spans:
+                ta.save(str(piece), torch.from_numpy(y[s:e]).unsqueeze(0), VC_SR)
+                pieces.append((int(s * ratio), m.generate(str(piece)).cpu()))
+    # Size to whichever is longer, the original timeline or the last converted
+    # span — a conversion can run past its source, and clipping it would eat
+    # the end of the final word.
+    total = max(int(len(y) * ratio), max(pos + w.shape[-1] for pos, w in pieces))
+    out = torch.zeros(1, total)
+    for pos, w in pieces:
+        out[:, pos:pos + w.shape[-1]] = w
+    tmp = dest.with_name(dest.stem + ".tmp.wav")
+    ta.save(str(tmp), out, m.sr)
+    tmp.rename(dest)                       # atomic, as render()
+    return h, False
+
+
+# ── the omnivoice worker ────────────────────────────────────────────────
+_ov = {"proc": None}
+OV_LOG = ROOT / "omnivoice.log"
+
+
+_langs = None
+
+
+def languages():
+    """The 646 languages OmniVoice speaks, as [{name, code}, …].
+
+    Read straight off disk rather than imported. studio.py runs in the
+    chatterbox virtualenv, which has no omnivoice in it, and lang_map.py is
+    pure data with no imports of its own — so ast can lift the table out
+    without executing anything, and without loading three gigabytes of model to
+    answer a question about spelling. Empty when OmniVoice is not installed,
+    which is the UI's cue to leave the picker as a plain box."""
+    global _langs
+    if _langs is not None:
+        return _langs
+    _langs = []
+    base = OV_PYTHON.parent.parent / "lib"
+    src = next(base.glob("python*/site-packages/omnivoice/utils/lang_map.py"), None)
+    if src is None:
+        return _langs
+    try:
+        import ast
+        for node in ast.parse(src.read_text()).body:
+            if (isinstance(node, ast.Assign) and node.targets
+                    and getattr(node.targets[0], "id", "") == "LANG_NAME_TO_ID"):
+                m = ast.literal_eval(node.value)
+                _langs = sorted(({"name": n, "code": c} for n, c in m.items()),
+                                key=lambda x: x["name"])
+                break
+    except (SyntaxError, ValueError, OSError, TypeError):
+        _langs = []
+    return _langs
+
+
+def ov_available():
+    return OV_PYTHON.exists() and (HERE / "omnivoice_server.py").exists()
+
+
+def _ov_health(timeout=1.0):
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{OV_PORT}/health",
+                                    timeout=timeout) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
+def get_ov(wait=300):
+    """Start the OmniVoice worker if it is not up, and wait until it is warm.
+
+    Lazy, like get_model(): a library that never uses the second engine should
+    never pay its load time or its memory. The child's output goes to a log
+    file rather than a pipe — nobody drains a pipe here, and a full one would
+    wedge the worker mid-render."""
+    if not ov_available():
+        raise RuntimeError(f"OmniVoice is not installed — no interpreter at "
+                           f"{OV_PYTHON}. Set SAGA_OV_PYTHON, or keep this "
+                           f"profile on chatterbox.")
+    h = _ov_health()
+    if h and h.get("ready"):
+        return OV_PORT
+    if h is None and (_ov["proc"] is None or _ov["proc"].poll() is not None):
+        print("starting the OmniVoice worker …", flush=True)
+        log = open(OV_LOG, "ab", buffering=0)
+        _ov["proc"] = subprocess.Popen(
+            [str(OV_PYTHON), str(HERE / "omnivoice_server.py"), "--port", str(OV_PORT)],
+            stdout=log, stderr=log)
+    t0 = time.time()
+    while time.time() - t0 < wait:
+        h = _ov_health()
+        if h and h.get("ready"):
+            print("OmniVoice worker warm", flush=True)
+            return OV_PORT
+        if h and h.get("error"):
+            raise RuntimeError(f"OmniVoice failed to load: {h['error']}")
+        pr = _ov["proc"]
+        if pr is not None and pr.poll() is not None:
+            tail = ""
+            if OV_LOG.exists():
+                tail = OV_LOG.read_text(errors="replace").strip()[-300:]
+            raise RuntimeError(f"the OmniVoice worker exited. {tail}")
+        time.sleep(0.5)
+    raise RuntimeError("the OmniVoice worker did not come up in time")
+
+
+def _ov_gen(spoken, p, dest):
+    """One line through the worker. It writes the wav itself — both processes
+    are on this machine, so there is nothing to gain by copying the audio back
+    over a socket."""
+    import urllib.request, urllib.error
+    port = get_ov()
+    body = json.dumps({"text": spoken, "ref_audio": str(voice_file(p["voice"])),
+                       "language": p["lang"], "speed": p["speed"],
+                       "duration": p.get("duration") or 0,
+                       "out": str(dest)}).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/gen", data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=1800) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as ex:
+        try:
+            msg = json.loads(ex.read()).get("error") or str(ex)
+        except Exception:
+            msg = str(ex)
+        raise RuntimeError(f"omnivoice: {msg}") from None
+
+
+def render_omnivoice(c, doc, force=False):
+    """Speak one card with OmniVoice.
+
+    No seed, because the model has none — so a take still gets its own file and
+    stepping back to it still plays that file, but re-rendering the same take
+    will not reproduce it the way a seeded chatterbox take does."""
+    h = chunk_hash(c, doc)
+    dest = AUDIO / f"{h}.wav"
+    if dest.exists() and not force:
+        return h, True
+    p = params_for(c, doc)
+    spoken = c["text"].replace("❦", " ").strip()      # scene mark: silent
+    tmp = dest.with_name(dest.stem + ".tmp.wav")
+    try:
+        _ov_gen(spoken, p, tmp)
+        tmp.rename(dest)                   # atomic, as everywhere else here
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return h, False
+
+
+def render_any(c, doc, force=False):
+    """Render whichever kind of card this is, with whichever engine it names.
+
+    A voiced card is always chatterbox — it is speech-to-speech, which is the
+    one thing OmniVoice cannot do."""
+    if c.get("type") == "voiced":
+        return render_voiced(c, doc, force)
+    if params_for(c, doc)["engine"] == "omnivoice":
+        return render_omnivoice(c, doc, force)
+    return render(c, doc, force)
 
 
 def render(c, doc, force=False):
@@ -785,12 +1405,26 @@ def render_preview(c, doc, force=False, text=None):
     import torchaudio as ta
     p = params_for(c, doc)
     spoken = (text if text is not None else c["text"]).replace("❦", " ").strip()
-    key = json.dumps([spoken, p["voice"], p["exag"], p["cfg"], p["temp"], p["rep"],
-                      "prev", int(c.get("seed") or 0)], sort_keys=True)
-    h = "p" + hashlib.sha256(key.encode()).hexdigest()[:19]
+    if p["engine"] == "chatterbox":         # as chunk_hash: default stays unmarked
+        k = [spoken, p["voice"], p["exag"], p["cfg"], p["temp"], p["rep"],
+             "prev", int(c.get("seed") or 0)]
+    else:
+        k = [spoken, p["voice"], "prev", int(c.get("seed") or 0),
+             {"engine": p["engine"], "lang": p["lang"],
+              "speed": float(p["speed"] or 0)}]
+    h = "p" + hashlib.sha256(json.dumps(k, sort_keys=True).encode()).hexdigest()[:19]
     dest = AUDIO / f"{h}.wav"
     if dest.exists() and not force:
         return h, True, spoken
+    if p["engine"] == "omnivoice":
+        tmp = dest.with_name(dest.stem + ".tmp.wav")
+        try:
+            _ov_gen(spoken, p, tmp)
+            tmp.rename(dest)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        return h, False, spoken
     m = get_model()
     with _lock:
         seed_take(c.get("seed"))
@@ -841,7 +1475,7 @@ def worker():
                 h, cached, spoken = render_preview(c, doc, force=True, text=j["text"])
                 j.update(hash=h, chars=len(spoken), of=len(c["text"]))
             else:
-                h, cached = render(c, doc, force=True)
+                h, cached = render_any(c, doc, force=True)
                 j.update(hash=h)
             j.update(status="done", seconds=round(time.time() - t0, 1))
         except Exception as ex:
@@ -863,7 +1497,7 @@ def bake(name):
     already rendered stays on disk, so a later bake resumes where this left
     off rather than starting over."""
     doc = load(name)
-    todo = [c for c in doc["chunks"] if is_speech(c) and not c.get("mute")
+    todo = [c for c in doc["chunks"] if is_renderable(c) and not c.get("mute")
             and not (AUDIO / f"{chunk_hash(c, doc)}.wav").exists()]
     _bake.update(running=True, done=0, total=len(todo), project=name, label="",
                  cancel=False, stopped=False)
@@ -872,8 +1506,9 @@ def bake(name):
             if _bake["cancel"]:
                 _bake["stopped"] = True
                 break
-            _bake["label"] = c["text"][:60]
-            render(c, doc)
+            _bake["label"] = (c["text"][:60] if is_speech(c)
+                              else "◎ " + (c.get("perfname") or "performance"))
+            render_any(c, doc)
             _bake["done"] += 1
     finally:
         _bake.update(running=False, label="", cancel=False)
@@ -920,7 +1555,8 @@ def mixdown(doc, gap=0.35, frm=None, chime=False):
 
     A cursor walks the cards in order. Speech is placed at the cursor and
     advances it by its own length plus a rest (scene breaks get a longer one,
-    as before). A silence card just advances it. An audio card is placed at
+    as before); a voiced card behaves identically, since it is rendered into
+    the same content-addressed pool. A silence card just advances it. An audio card is placed at
     the cursor and advances it either past the whole clip (mode "full") or by
     its "after" seconds — in which case the rest of the clip keeps playing
     *under* whatever the cursor reaches next, which is how music fades out
@@ -940,27 +1576,40 @@ def mixdown(doc, gap=0.35, frm=None, chime=False):
         if i is not None:
             cards = cards[i:]
     events, cursor, missing, marks = [], 0.0, 0, []
+    # The rest between cards is added *after* the card that earns it, so a card
+    # that runs on has to reach back and take it off again. Hence remembering
+    # how big the last one was rather than looking ahead.
+    last_gap = 0.0
 
     def note(c):                              # where this card begins
         marks.append({"id": c["id"], "at": round(cursor, 3)})
 
     def unready(c):
         """Not in the book. In a preview, at least make it audible."""
-        nonlocal cursor, missing
+        nonlocal cursor, missing, last_gap
         missing += 1
         if not chime:
             return
         note(c)
         events.append((cursor, "chime", None, None, c))
         cursor += CHIME_SECS + gap
+        last_gap = gap
 
     for c in cards:
         if c.get("mute"):                     # muted cards are simply not in the book
             continue
         kind = c.get("type", "speech")
+        # "runs on": no rest before this card, so a sentence split across two
+        # cards is still one sentence. Splitting mid-sentence to give a phrase
+        # its own delivery is what this exists for — without it the phrase
+        # arrives after a beat of silence that was never in the writing.
+        if c.get("runon"):
+            cursor = max(0.0, cursor - last_gap)
+            last_gap = 0.0
         if kind == "silence":
             note(c)
             cursor += max(0.0, float(c.get("secs", 1.0)))
+            last_gap = 0.0                    # the silence *is* the rest
             continue
         if kind == "audio":
             f = CLIPS / f"{c.get('clip', '')}.wav"
@@ -972,6 +1621,7 @@ def mixdown(doc, gap=0.35, frm=None, chime=False):
             events.append((cursor, kind, w, wsr, c))
             cursor += (max(0.0, float(c.get("after", 0.0)))
                        if c.get("mode") == "after" else w.shape[-1] / wsr)
+            last_gap = 0.0                    # a clip is not followed by a rest
             continue
         f = AUDIO / f"{chunk_hash(c, doc)}.wav"
         if not f.exists():
@@ -980,13 +1630,17 @@ def mixdown(doc, gap=0.35, frm=None, chime=False):
         w, wsr = ta.load(str(f))
         note(c)
         events.append((cursor, kind, w, wsr, c))
-        cursor += w.shape[-1] / wsr + (1.1 if c["text"].strip().startswith("❦") else gap)
+        # a voiced card lands here too — rendered and content-addressed exactly
+        # as speech is — but it has no text to carry a scene mark
+        g = 1.1 if is_speech(c) and c["text"].strip().startswith("❦") else gap
+        cursor += w.shape[-1] / wsr + g
+        last_gap = g
     if not events:
         return None, 0, missing, []
     # every speech chunk is at the model's rate; only clips ever need resampling.
     # A preview of a chapter nobody has rendered yet is all chimes and carries no
     # rate of its own, so fall back to a clip's, then to the model's.
-    sr = (next((e[3] for e in events if e[1] == "speech"), None)
+    sr = (next((e[3] for e in events if e[1] in ("speech", "voiced")), None)
           or next((e[3] for e in events if e[3]), None) or 24000)
     pieces = []
     for start, kind, w, wsr, c in events:
@@ -1134,13 +1788,24 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/state":
             return self._send(200, {
                 "projects": projects(),
-                "voices": sorted(p.stem for p in VOICES.glob("*.wav")),
+                # with durations: the editor shows them, and a reference clip
+                # past ten seconds is worth seeing, since chatterbox reads only
+                # the first ten and the rest has never been heard
+                "voices": sorted(({"name": p.stem, "secs": clip_secs(p)}
+                                  for p in VOICES.glob("*.wav")),
+                                 key=lambda v: v["name"]),
                 "clips": sorted(({"name": p.stem, "secs": clip_secs(p)}
                                  for p in CLIPS.glob("*.wav")),
                                 key=lambda c: c["name"]),
-                "profiles": profiles(),
+                "profiles": profiles(), "profile_counts": profile_counts(),
                 "defaults": DEFAULTS, "bake": _bake,
+                "engines": list(ENGINES), "omnivoice": ov_available(),
+                "stale_build": build_stale(),
                 "model": "warm" if _model else "cold"})
+        if u.path == "/api/languages":
+            # fetched once and cached in the page: 646 entries is too much to
+            # send with every /api/state, and it never changes while we run
+            return self._send(200, {"languages": languages()})
         if u.path == "/api/doc":
             doc = load(q.get("name", [""])[0])
             if not doc:
@@ -1155,6 +1820,20 @@ class H(BaseHTTPRequestHandler):
                     c.setdefault("profile", "Default")
                     c.setdefault("height", 0)
                     c.setdefault("seed", 0)
+                elif c["type"] == "voiced":
+                    h = chunk_hash(c, doc)
+                    c["hash"] = h
+                    c["effective"] = params_for(c, doc)
+                    c.setdefault("profile", "Default")
+                    c.setdefault("seed", 0)
+                    c.setdefault("perfname", "")
+                    f = take_path(c.get("perf") or "")
+                    c["haveperf"] = bool(c.get("perf")) and f.exists()
+                    c["perflen"] = clip_secs(f) if c["haveperf"] else 0
+                    # A card whose performance has gone is never ready, whatever
+                    # is in the cache — it cannot be rendered again, and saying
+                    # otherwise would hide the one thing worth knowing.
+                    c["ready"] = c["haveperf"] and (AUDIO / f"{h}.wav").exists()
                 elif c["type"] == "audio":
                     f = CLIPS / f"{c.get('clip', '')}.wav"
                     c["ready"] = bool(c.get("clip")) and f.exists()
@@ -1181,6 +1860,23 @@ class H(BaseHTTPRequestHandler):
             if not nm or not f.exists():
                 return self._send(404, b"", "text/plain")
             return self._send_file(f, "audio/wav")   # music runs to megabytes
+        if u.path == "/api/voice":
+            # auditioning the reference clip itself — what the model is being
+            # asked to sound like, before any of it is spoken
+            nm = re.sub(r"[^a-z0-9_.-]", "", q.get("f", [""])[0])
+            try:
+                f = voice_file(nm) if nm else None
+            except FileNotFoundError:
+                f = None
+            if not f:
+                return self._send(404, b"", "text/plain")
+            return self._send_file(f, "audio/wav")
+        if u.path == "/api/take":
+            nm = re.sub(r"[^a-z0-9]", "", q.get("f", [""])[0])
+            f = take_path(nm)
+            if not nm or not f.exists():
+                return self._send(404, b"", "text/plain")
+            return self._send_file(f, "audio/wav")
         if u.path == "/api/book_audio":
             f = pdir(q.get("name", [""])[0]) / "out" / ".preview.wav"
             if not f.exists():
@@ -1275,6 +1971,115 @@ class H(BaseHTTPRequestHandler):
         finally:
             Path(tmp).unlink(missing_ok=True)
 
+    def _take_upload(self, u):
+        """A performance to drive a voiced card.
+
+        Same raw-body, let-ffmpeg-read-it approach as _clip_upload, with two
+        differences. It is stored as 16k mono, because that is exactly what
+        Chatterbox VC consumes — anything more is thrown away on the way in,
+        and a backup carrying whole takes should not carry it. And it is named
+        by the sha256 of that wav rather than by the file you picked: importing
+        the same recording twice is then free, and a second take can never
+        overwrite the first, which matters because every card that has already
+        rendered points at its performance by name."""
+        fn = parse_qs(u.query).get("fn", ["take"])[0]
+        if not shutil.which("ffmpeg"):
+            return self._send(400, {"error": "ffmpeg is needed to import a performance"})
+        fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".take-",
+                                   suffix=Path(fn).suffix or ".bin")
+        wav = None
+        try:
+            with os.fdopen(fd, "wb") as f:
+                self._read_body_to(f)
+            TAKES.mkdir(parents=True, exist_ok=True)
+            fd2, wav = tempfile.mkstemp(dir=TAKES, prefix=".take-", suffix=".wav")
+            os.close(fd2)
+            r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                                "-i", tmp, "-ac", "1", "-ar", str(VC_SR), wav],
+                               capture_output=True, text=True)
+            if r.returncode:
+                return self._send(400, {"error": "ffmpeg could not read that file: "
+                                        + (r.stderr or "").strip()[-300:]})
+            name = sha256_file(Path(wav))[:20]
+            dest = take_path(name)
+            if dest.exists():
+                Path(wav).unlink(missing_ok=True)      # already have this one
+            else:
+                os.replace(wav, dest)
+                os.chmod(dest, 0o644)                  # mkstemp makes it 0600
+            wav = None
+            return self._send(200, {"ok": True, "perf": name, "secs": clip_secs(dest),
+                                    "perfname": Path(fn).stem[:80] or "performance"})
+        except Exception as ex:
+            return self._send(400, {"error": f"{type(ex).__name__}: {ex}"})
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+            if wav:
+                Path(wav).unlink(missing_ok=True)
+
+    def _voice_upload(self, u):
+        """A reference clip for a profile.
+
+        Raw body and ffmpeg, like clips and takes. The route this replaces took
+        base64 inside JSON, which the browser built with
+        `String.fromCharCode(...bytes)` — one argument per byte, so anything
+        past about 64 KB blew the stack rather than uploading. It also wrote
+        whatever arrived under a .wav name, so an mp3 dropped here became a file
+        claiming to be something it was not.
+
+        And it never overwrites. A voice name is part of every chunk hash, so
+        replacing the file behind one would change what every card using it
+        sounds like on its next render while every hash stayed valid — the
+        renders on disk would be the old voice and the new ones the new voice,
+        with nothing to mark the seam. Same rule as import: a different clip
+        wanting a taken name lands beside it instead."""
+        fn = parse_qs(u.query).get("fn", ["voice"])[0]
+        stem = re.sub(r"[^a-z0-9_-]+", "-", Path(fn).stem.lower()).strip("-")[:40] or "voice"
+        if not shutil.which("ffmpeg"):
+            return self._send(400, {"error": "ffmpeg is needed to import a voice"})
+        fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".voiceup-",
+                                   suffix=Path(fn).suffix or ".bin")
+        wav = None
+        try:
+            with os.fdopen(fd, "wb") as f:
+                self._read_body_to(f)
+            VOICES.mkdir(parents=True, exist_ok=True)
+            fd2, wav = tempfile.mkstemp(dir=VOICES, prefix=".voiceup-", suffix=".wav")
+            os.close(fd2)
+            r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                                "-i", tmp, "-ac", "1", wav],
+                               capture_output=True, text=True)
+            if r.returncode:
+                return self._send(400, {"error": "ffmpeg could not read that file: "
+                                        + (r.stderr or "").strip()[-300:]})
+            name, renamed = stem, False
+            try:
+                existing = voice_file(stem)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None and sha256_file(existing) != sha256_file(Path(wav)):
+                taken = {p.stem for p in VOICES.iterdir() if p.is_file()}
+                name, renamed = _free_name(taken, stem, "new"), True
+            dest = VOICES / f"{name}.wav"
+            if existing is not None and not renamed:
+                Path(wav).unlink(missing_ok=True)     # byte for byte what is here
+            else:
+                os.replace(wav, dest)
+                # mkstemp makes it 0600; every other voice on disk is readable,
+                # and an export carrying one should be too
+                os.chmod(dest, 0o644)
+            wav = None
+            secs = clip_secs(dest)
+            return self._send(200, {"ok": True, "voice": name, "secs": secs,
+                                    "renamed": renamed, "asked": stem,
+                                    "long": secs > 10})
+        except Exception as ex:
+            return self._send(400, {"error": f"{type(ex).__name__}: {ex}"})
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+            if wav:
+                Path(wav).unlink(missing_ok=True)
+
     def do_POST(self):
         u = urlparse(self.path)
         if not self._authed():
@@ -1283,8 +2088,22 @@ class H(BaseHTTPRequestHandler):
             return self._import_archive(u)
         if u.path == "/api/clip/upload":       # raw body, so before the JSON parse
             return self._clip_upload(u)
-        n = int(self.headers.get("Content-Length") or 0)
-        d = json.loads(self.rfile.read(n) or "{}")
+        if u.path == "/api/take/upload":       # likewise
+            return self._take_upload(u)
+        if u.path == "/api/voice/upload":      # likewise
+            return self._voice_upload(u)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            d = json.loads(self.rfile.read(n) or "{}")
+        except ValueError as ex:
+            # A non-JSON body reaching a JSON route used to raise right here,
+            # outside every try below — which killed the connection instead of
+            # answering it, and surfaced in the browser as ERR_EMPTY_RESPONSE:
+            # no status, no message, nothing in the log to work from. The case
+            # that found it was a raw upload arriving at an older build whose
+            # route still expected base64 in JSON, and the silence cost more
+            # than the mismatch did.
+            return self._send(400, {"error": f"this route expects JSON: {ex}"})
         # Every mutating route needs a real project; without this a bad name
         # surfaces as an opaque 500 from subscripting None.
         if u.path not in ("/api/import", "/api/chat") and d.get("name") is not None:
@@ -1297,8 +2116,10 @@ class H(BaseHTTPRequestHandler):
         # — would otherwise both read the old document and the slower one would
         # write back a copy that never saw the other's edit. Chat and assemble
         # are slow and read-only, so they stay outside and never block typing.
+        # impact scans every project in the library to count cards, so it is
+        # slow and read-only — exactly the shape that must not hold the lock
         lock = None if u.path in ("/api/chat", "/api/assemble", "/api/book_preview",
-                                  "/api/reveal") else _docmut
+                                  "/api/reveal", "/api/profile/impact") else _docmut
         if lock:
             lock.acquire()
         try:
@@ -1319,10 +2140,26 @@ class H(BaseHTTPRequestHandler):
                             c["profile"] = d["profile"]
                         if "mute" in d:
                             c["mute"] = bool(d["mute"])
+                        if "runon" in d:       # no rest before this card
+                            c["runon"] = bool(d["runon"])
                         if "height" in d:          # editor height, persisted
                             c["height"] = int(d["height"])
                         if "params" in d:
-                            c["params"] = {k: v for k, v in d["params"].items() if v is not None}
+                            # A card's own overrides. Clamped here because they
+                            # land in the hash: a stray value would name a wav
+                            # that can never be rendered, and the card would sit
+                            # amber for ever with nothing to explain it.
+                            got = {}
+                            for k, v in (d["params"] or {}).items():
+                                if v is None or k not in CARD_PARAMS:
+                                    continue
+                                if k == "engine":
+                                    if v in ENGINES:
+                                        got[k] = v
+                                else:
+                                    lo, hi = CARD_PARAMS[k]
+                                    got[k] = _num(v, lo, lo, hi)
+                            c["params"] = got
                         if "seed" in d:            # which take of this card to speak
                             c["seed"] = max(0, int(d["seed"] or 0))
                         # audio-card fields; clamp here so a stray value can
@@ -1341,6 +2178,13 @@ class H(BaseHTTPRequestHandler):
                             c["fade"] = [lo, max(lo, min(100.0, float(hi)))]
                         if "secs" in d:            # silence-card length
                             c["secs"] = max(0.0, float(d["secs"] or 0))
+                        # voiced-card fields. `perf` is a checksum this program
+                        # wrote, so hex and nothing else; `perfname` is only
+                        # what to call it on screen and is never hashed.
+                        if "perf" in d:
+                            c["perf"] = re.sub(r"[^a-z0-9]", "", d["perf"] or "")[:40]
+                        if "perfname" in d:
+                            c["perfname"] = str(d["perfname"] or "")[:80]
                 save(doc)
                 return self._send(200, {"ok": True})
 
@@ -1353,6 +2197,9 @@ class H(BaseHTTPRequestHandler):
                          "after": 5.0, "fade": [0, 100], "gain": 100, "note": ""}
                 elif kind == "silence":
                     c = {"id": 0, "type": "silence", "secs": 1.0, "note": ""}
+                elif kind == "voiced":
+                    c = {"id": 0, "type": "voiced", "perf": "", "perfname": "",
+                         "note": ""}
                 else:
                     c = {"id": 0, "text": "", "params": {}, "note": ""}
                 at = max(0, min(int(d.get("at", 0)), len(doc["chunks"])))
@@ -1423,9 +2270,78 @@ class H(BaseHTTPRequestHandler):
                 nm = (d.get("profile") or "").strip()
                 if not nm:
                     return self._send(400, {"error": "profile name required"})
-                p[nm] = {**BASE_PROFILE, **p.get(nm, {}), **d.get("data", {})}
+                cur = p.get(nm)
+                new = {**BASE_PROFILE, **(cur or {}), **d.get("data", {})}
+                # engine and its two companions are part of the hash, so a
+                # stray value here would name a wav that can never be rendered
+                if new.get("engine") not in ENGINES:
+                    new["engine"] = "chatterbox"
+                new["lang"] = re.sub(r"[^a-zA-Z_-]", "", str(new.get("lang") or "en"))[:12] or "en"
+                new["speed"] = _num(new.get("speed"), 0.0, 0.0, 3.0)
+                # Remember what it was. Only when something that changes how it
+                # sounds actually moved — editing the note, or saving the same
+                # numbers again, should not push the real settings off the end
+                # of the stack.
+                if cur is not None and not _same_profile(cur, new):
+                    hist = list(cur.get("_history") or [])
+                    hist.append({"at": time.strftime("%Y-%m-%d %H:%M"),
+                                 **{k: cur.get(k, BASE_PROFILE.get(k))
+                                    for k in ("voices", "active", "exag",
+                                              "cfg", "temp", "rep")}})
+                    new["_history"] = hist[-PROFILE_HISTORY:]
+                p[nm] = new
                 save_profiles(p)
                 return self._send(200, {"ok": True, "profiles": p})
+
+            if u.path == "/api/profile/impact":
+                nm = (d.get("profile") or "").strip()
+                if not nm:
+                    return self._send(400, {"error": "profile name required"})
+                cur = profiles().get(nm)
+                prop = d.get("data")
+                return self._send(200, profile_usage(
+                    nm, None if prop is None else {**BASE_PROFILE, **(cur or {}), **prop}))
+
+            if u.path == "/api/profile/revert":
+                p = profiles()
+                nm = d.get("profile")
+                pr = p.get(nm)
+                if not pr or not (pr.get("_history") or []):
+                    return self._send(400, {"error": "no earlier settings to go back to"})
+                hist = list(pr["_history"])
+                prev = hist.pop()
+                p[nm] = {**pr, **{k: v for k, v in prev.items() if k != "at"},
+                         "_history": hist}
+                save_profiles(p)
+                return self._send(200, {"ok": True, "profiles": p, "at": prev.get("at")})
+
+            if u.path == "/api/reprofile":
+                # Move cards from one profile to another. The profiles are not
+                # touched, so nothing outside this project changes — which is
+                # the difference between "this character sounds different now"
+                # and "these lines are that character now".
+                doc = load(d["name"])
+                src, dst = d.get("from"), (d.get("to") or "").strip()
+                if not dst:
+                    return self._send(400, {"error": "no profile to move to"})
+                if dst not in profiles():
+                    return self._send(404, {"error": f"no profile {dst!r}"})
+                ids = d.get("ids")
+                snapshot(doc, f"move cards to “{dst}”")
+                moved = 0
+                for c in doc["chunks"]:
+                    if not is_renderable(c):
+                        continue
+                    if ids is not None and c["id"] not in ids:
+                        continue
+                    if src and c.get("profile", "Default") != src:
+                        continue
+                    if c.get("profile", "Default") == dst:
+                        continue
+                    c["profile"] = dst
+                    moved += 1
+                save(doc)
+                return self._send(200, {"ok": True, "moved": moved})
 
             if u.path == "/api/replace":
                 doc = load(d["name"])
@@ -1486,12 +2402,6 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "undone": last["label"],
                                         "left": len(stack)})
 
-            if u.path == "/api/voice/upload":
-                import base64
-                stem = re.sub(r"[^a-z0-9_-]+", "-", Path(d["filename"]).stem.lower())[:40]
-                dest = VOICES / f"{stem}.wav"
-                dest.write_bytes(base64.b64decode(d["data"]))
-                return self._send(200, {"ok": True, "voice": stem})
 
             if u.path == "/api/profile/delete":
                 nm = d.get("profile")
@@ -1524,7 +2434,15 @@ class H(BaseHTTPRequestHandler):
                     if c["id"] == d["id"] and is_speech(c) and 0 < d["at"] < len(c["text"]):
                         a, b = c["text"][:d["at"]].strip(), c["text"][d["at"]:].strip()
                         out.append({**c, "text": a})
-                        out.append({**c, "text": b, "note": ""})
+                        tail = {**c, "text": b, "note": ""}
+                        # Splitting mid-sentence is how a phrase gets a delivery
+                        # of its own, and the rest that normally follows a card
+                        # would drop a pause into the middle of a sentence that
+                        # never had one. Ending punctuation means the break was
+                        # intended, so that case is left alone.
+                        if not re.search(r"[.!?…:;❦]$", a):
+                            tail["runon"] = True
+                        out.append(tail)
                     else:
                         out.append(c)
                 for i, c in enumerate(out):
@@ -1600,6 +2518,90 @@ class H(BaseHTTPRequestHandler):
                 subprocess.run([OPEN_CMD, str(target)], check=False)
                 return self._send(200, {"ok": True, "path": str(target),
                                         "assembled": out.is_dir()})
+            if u.path == "/api/rename":
+                # The title only. `name` is the folder and every path derived
+                # from it, and renaming that would move a project's audio,
+                # source and out/ for the sake of a label.
+                doc = load(d["name"])
+                t = (d.get("title") or "").strip()
+                if not t:
+                    return self._send(400, {"error": "a title is needed"})
+                doc["title"] = t[:120]
+                save(doc)
+                return self._send(200, {"ok": True, "title": doc["title"]})
+
+            if u.path == "/api/project/duplicate":
+                # Free, near enough: the copy's cards hash to exactly what the
+                # original's did, so every wav already on disk serves both and
+                # the duplicate is born fully rendered.
+                doc = load(d["name"])
+                taken = {p.name for p in ROOT.iterdir() if (p / "doc.json").exists()}
+                new = _free_name(taken, doc["name"], "copy")
+                src = pdir(doc["name"])
+                doc = json.loads(json.dumps(doc))
+                doc["name"] = new
+                doc["title"] = f"{doc.get('title', new)} (copy)"[:120]
+                doc.pop("_undo", None)          # the copy has nothing to undo yet
+                pdir(new).mkdir(parents=True, exist_ok=True)
+                if (src / "source.md").exists():
+                    shutil.copy2(src / "source.md", pdir(new) / "source.md")
+                save(doc)
+                return self._send(200, {"ok": True, "name": new, "title": doc["title"]})
+
+            if u.path == "/api/voice/rename":
+                try:
+                    return self._send(200, {"ok": True,
+                                            **rename_voice(d.get("voice"), d.get("to"))})
+                except FileNotFoundError as ex:
+                    return self._send(404, {"error": str(ex)})
+                except ValueError as ex:
+                    return self._send(400, {"error": str(ex)})
+
+            if u.path == "/api/profile/rename":
+                # A profile's name is not part of any hash — cards resolve
+                # through it to a voice and some numbers, and those are what get
+                # hashed. So this is free: every card follows the new name and
+                # none of them go stale.
+                p = profiles()
+                old, new = d.get("profile"), (d.get("to") or "").strip()
+                if old == "Default":
+                    return self._send(400, {"error": "the Default profile cannot be renamed"})
+                if not new:
+                    return self._send(400, {"error": "a name is needed"})
+                if old not in p:
+                    return self._send(404, {"error": f"no profile {old!r}"})
+                if new in p:
+                    return self._send(400, {"error": f"“{new}” already exists"})
+                p[new] = p.pop(old)
+                save_profiles(p)
+                cards = 0
+                for pr in projects():
+                    doc = load(pr["name"])
+                    touched = False
+                    for c in doc["chunks"]:
+                        if c.get("profile") == old:
+                            c["profile"] = new
+                            touched = True
+                            cards += 1
+                    if touched:
+                        save(doc)
+                return self._send(200, {"ok": True, "profiles": p, "cards": cards})
+
+            if u.path == "/api/profile/duplicate":
+                p = profiles()
+                src = d.get("profile")
+                if src not in p:
+                    return self._send(404, {"error": f"no profile {src!r}"})
+                new = (d.get("to") or "").strip() or _free_name(set(p), src, "copy")
+                if new in p:
+                    return self._send(400, {"error": f"“{new}” already exists"})
+                # the copy starts with no history of its own: what it was before
+                # is a fact about the profile it came from, not about this one
+                p[new] = {k: v for k, v in json.loads(json.dumps(p[src])).items()
+                          if k != "_history"}
+                save_profiles(p)
+                return self._send(200, {"ok": True, "profiles": p, "name": new})
+
             if u.path == "/api/delete":
                 shutil.rmtree(pdir(d["name"]), ignore_errors=True)
                 return self._send(200, {"ok": True})
@@ -1609,6 +2611,19 @@ class H(BaseHTTPRequestHandler):
             if lock:
                 lock.release()
         return self._send(404, {"error": "?"})
+
+
+@__import__("atexit").register
+def _stop_ov():
+    """Take the worker down with us. It holds three gigabytes and has no reason
+    to outlive the studio that started it."""
+    pr = _ov.get("proc")
+    if pr is not None and pr.poll() is None:
+        pr.terminate()
+        try:
+            pr.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pr.kill()
 
 
 if __name__ == "__main__":

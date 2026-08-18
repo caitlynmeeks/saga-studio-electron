@@ -14,9 +14,35 @@ header{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:0 14px;
 background:var(--chrome);border-bottom:1px solid var(--line)}
 header b{color:var(--bright);letter-spacing:.08em}
 .mut{color:var(--dim)}.warn{color:var(--amber)}.ok{color:var(--green)}
-aside,#chat{background:var(--panel);overflow-y:auto;padding:12px}
-aside{border-right:1px solid var(--line)}
-#chat{border-left:1px solid var(--line);display:flex;flex-direction:column}
+aside,#right{background:var(--panel)}
+/* The sidebar is two lists that had no business sharing a scrollbar: the
+   documents grow with the series, the profile editor grows when you open it,
+   and scrolling past twenty-eight episodes to reach a slider was the cost of
+   putting them in one column. Two panes, one scrollbar each — and the split
+   moves, because an open profile editor needs the room more than the document
+   list does, and nothing needs it when the editor is closed. */
+aside{border-right:1px solid var(--line);padding:0;overflow:hidden;min-height:0;
+display:grid;grid-template-rows:1fr auto}
+aside .pane{overflow-y:auto;padding:12px;min-height:0}
+/* the profile list is short and the editor now lives in the inspector, so the
+   bottom pane takes what it needs and the documents keep the rest */
+aside .pane+.pane{border-top:1px solid var(--line);max-height:38vh}
+/* The right column is an inspector: what it shows belongs to whatever is
+   selected, and it is wider than the sidebar, which the profile editor had
+   outgrown. Discuss shares it as a second tab rather than a second column —
+   three panels of chrome around one column of cards is more frame than
+   picture. */
+#right{border-left:1px solid var(--line);display:grid;
+grid-template-rows:auto 1fr;min-height:0;overflow:hidden}
+#rtabs{display:flex;gap:2px;align-items:center;padding:7px 8px 0;
+border-bottom:1px solid var(--line)}
+#rtabs button{border:0;border-bottom:2px solid transparent;border-radius:0;
+background:none;color:var(--dim);padding:3px 9px 5px;font-size:11.5px}
+#rtabs button:hover{color:var(--fg)}
+#rtabs button.on{color:var(--bright);border-bottom-color:var(--amber)}
+.rpane{overflow-y:auto;padding:12px;min-height:0;display:none}
+body[data-tab=inspect] #inspect{display:block}
+body[data-tab=chat] #chat{display:flex;flex-direction:column}
 /* The centre column is one grid cell holding two stacked children: the
    find/replace bar and the scrolling card list. Left as siblings of <main>
    they became grid items of their own and shunted every later panel a
@@ -109,7 +135,17 @@ opacity:0;transition:opacity .15s}
    "+ paste" that does nothing four days out of five is a button you learn to
    read past, and then miss on the day it would have worked. */
 body:not([data-clip="1"]) .ins .pb{display:none}
-.grip{cursor:grab;color:var(--faint);user-select:none;flex:none}
+/* The grip sits ahead of everything, badges included, and that is load-bearing
+   rather than cosmetic. Both status badges are flex-ordered to the far left of
+   the header (order:-1), and pressing a card's grip is also what selects it —
+   so on an unselected card the "EDITING" badge appeared *left* of the grip, the
+   grip slid right by the badge's width, and it was no longer under the cursor
+   that had just pressed it. The drag then never started: not a cancelled drag,
+   no dragstart at all. Which is why it looked like drag-to-reorder had broken,
+   and why it "worked" if you clicked the card first and grabbed the grip where
+   it had moved to. order:-2 keeps the grip put and lets the badge open to its
+   right, so the thing under your finger stays under your finger. */
+.grip{cursor:grab;color:var(--faint);user-select:none;flex:none;order:-2}
 .grip:active{cursor:grabbing}
 .chunk.dropb{box-shadow:0 -3px 0 var(--green)}
 .chunk.dropa{box-shadow:0 3px 0 var(--green)}
@@ -129,12 +165,75 @@ input[type=range]{border:0;background:none;padding:0;accent-color:var(--green)}
 width:13px;height:13px;border-radius:50%;background:var(--green);border:none;margin-top:4px;cursor:ew-resize}
 .dual input[type=range]::-moz-range-thumb{pointer-events:auto;width:13px;height:13px;
 border-radius:50%;background:var(--green);border:none;cursor:ew-resize}
+/* right-click menus */
+.ctx{position:fixed;z-index:200;min-width:168px;background:var(--chrome);
+border:1px solid var(--line);border-radius:7px;padding:4px;
+box-shadow:0 8px 24px rgba(0,0,0,.45)}
+.ctx button{display:block;width:100%;text-align:left;border:0;background:none;
+border-radius:4px;padding:5px 9px;font-size:12px;color:var(--fg)}
+.ctx button:hover:not(:disabled){background:var(--panel);color:var(--bright)}
+.ctx button:disabled{color:var(--faint)}
+.ctx button.danger{color:var(--red)}
+.ctx hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
+.ctx .ctxask{display:flex;gap:5px;padding:2px}
+.ctx .ctxask input{flex:1;min-width:120px}
+/* the running server is older than the code on disk */
+#stalebar{position:fixed;left:0;right:0;bottom:0;z-index:99;
+background:var(--amber);color:#141008;font-size:12px;padding:7px 14px;text-align:center}
+#stalebar b{font-weight:700}
+/* asking for a name, inline — Electron has no window.prompt */
+.askname{display:flex;gap:5px;align-items:center;width:100%;margin-top:6px;
+padding-top:6px;border-top:1px solid var(--line)}
+.askname input{flex:1;min-width:90px}
+/* a card that runs straight on from the one above, with no rest between */
+button.tiny.runon.on{color:var(--amber);border-color:var(--amber)}
+/* per-card delivery: one row that opens under the text, holding only the knobs
+   the card's engine actually has */
+.deliv{display:flex;gap:10px;align-items:center;padding:5px 9px;flex-wrap:wrap;
+border-top:1px solid var(--line);background:#0b0f0e}
+.deliv .lbl{font-size:11px;color:var(--dim)}
+.deliv select{font-size:11px;padding:1px 4px;max-width:190px}
+.dv{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--dim)}
+.dv label{min-width:64px}
+.dv input[type=range]{width:86px}
+.dv b{font-variant-numeric:tabular-nums;min-width:30px;color:var(--dim);font-weight:400}
+/* an overridden knob is the one thing here worth spotting at a glance */
+.dv.on label,.dv.on b{color:var(--amber);font-weight:600}
+/* the profile editor */
+.pedit{border:1px solid var(--line);border-radius:7px;padding:10px;margin-top:8px}
+.phead{display:flex;align-items:baseline;gap:7px;font-size:12.5px;margin-bottom:2px}
+.phead .mut{font-size:11px;margin-left:auto}
+/* Section labels rather than a wall of controls: which voice it speaks with and
+   how it reads are two different questions, and the second one does not apply
+   to voiced cards at all. */
+.psec{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);
+margin:11px 0 5px;font-weight:600}
+.vrow{display:flex;gap:6px;align-items:center;font-size:12px;padding:1px 0}
+.vrow .vn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vrow .vs{font-size:11px}
+.vdrop{border:1px dashed var(--line);border-radius:6px;padding:7px;text-align:center;
+font-size:11px;color:var(--dim)}
+.vdrop.over{border-color:var(--green);color:var(--green)}
+/* A bare number box asks you to know the useful span of a parameter you have
+   never seen the ends of. A slider shows you where you are inside it. */
+.prow{margin-bottom:7px}
+.plab{display:flex;font-size:11px;color:var(--dim);margin-bottom:1px}
+.plab .pv{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--fg)}
+.prow input[type=range]{width:100%}
+.phelp{font-size:10.5px;color:var(--faint);margin-top:1px}
+/* The cost of the edit, counted while you drag — before the save, not after */
+.pimpact{font-size:11px;margin-top:9px;min-height:15px;line-height:1.45}
+.pact{display:flex;gap:5px;margin-top:9px;flex-wrap:wrap}
+.prev,.mvrow{display:flex;gap:6px;align-items:center;font-size:11px;flex-wrap:wrap}
+.prev .mut{flex:1}
+.mvrow select{max-width:110px}
 /* The discuss panel is off by default and the third column simply stops
    existing — collapsing it rather than hiding it is what gives the width back
    to the cards, which is the column you actually read. */
-body[data-chat=off]{grid-template-columns:270px 1fr}
-body[data-chat=off] #chat{display:none}
-body[data-chat=off] .dchk{display:none}   /* no panel, no "send this as context" */
+body[data-panel=off]{grid-template-columns:270px 1fr}
+body[data-panel=off] #right{display:none}
+/* "send this as context" only means something while discuss is the visible tab */
+body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
 #chatb.on,#frb.on{border-color:var(--green);color:var(--green)}
 /* take stepper: which roll of the dice this card is speaking */
 .take{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--line);
@@ -144,7 +243,7 @@ body[data-chat=off] .dchk{display:none}   /* no panel, no "send this as context"
 .take button:hover:not(:disabled){color:var(--green)}
 </style>
 </head>
-<body data-chat="off">
+<body data-panel="off" data-tab="inspect">
 <header>
   <b>SAGA STUDIO</b>
   <span class="mut" id="hdr">no project</span>
@@ -153,10 +252,11 @@ body[data-chat=off] .dchk{display:none}   /* no panel, no "send this as context"
   <span class="pill" id="model">model: cold</span>
   <button id="frb" onclick="toggleFind()" disabled
     title="find and replace across this episode — ⌘F">find</button>
-  <button id="chatb" onclick="toggleChat()" title="show or hide the discuss panel">discuss</button>
+  <button id="chatb" onclick="togglePanel()" title="show or hide the side panel">inspector</button>
 </header>
 
 <aside>
+ <div class="pane">
   <h2>documents</h2>
   <div id="drop">drop .md or .sagaproj here<br><span style="font-size:11px">or click to choose</span></div>
   <input type="file" id="file" accept=".md,.markdown,.txt,.sagaproj" multiple hidden>
@@ -178,15 +278,18 @@ body[data-chat=off] .dchk{display:none}   /* no panel, no "send this as context"
   </div>
   <input type="file" id="arch" accept=".sagaproj" hidden>
   <input type="file" id="clipfile" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aif,.aiff" hidden>
+  <input type="file" id="perffile" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aif,.aiff" hidden>
   <div id="bkmsg" class="mut" style="font-size:11px;margin-top:6px"></div>
+ </div>
 
-  <h2 style="margin-top:18px">voice profiles</h2>
+ <div class="pane">
+  <h2>voice profiles</h2>
   <div id="profiles"></div>
   <div style="display:flex;gap:5px;margin-top:7px">
     <input id="newprof" placeholder="new profile name" style="flex:1">
     <button onclick="addProfile()">+</button>
   </div>
-  <div id="profedit"></div>
+ </div>
 </aside>
 
 <div id="center">
@@ -194,7 +297,21 @@ body[data-chat=off] .dchk{display:none}   /* no panel, no "send this as context"
   <main id="main"><p class="mut">Drop a markdown file on the left to begin.</p></main>
 </div>
 
-<div id="chat">
+<div id="right">
+ <div id="rtabs">
+   <button id="tabInspect" onclick="setTab('inspect')">inspector</button>
+   <button id="tabChat" onclick="setTab('chat')">discuss</button>
+   <span style="flex:1"></span>
+   <button class="tiny" onclick="setPanel(false)" title="hide this panel">×</button>
+ </div>
+ <div id="inspect" class="rpane">
+   <datalist id="langlist"></datalist>
+   <div id="profedit"></div>
+   <div id="nosel" class="mut" style="font-size:12px">
+     Pick a voice profile on the left to edit it here.
+   </div>
+ </div>
+ <div id="chat" class="rpane">
   <h2>discuss</h2>
   <div id="log"><div class="m mut">Ask about pacing, pronunciation, or a specific passage.
 Selected chunks are sent as context.</div></div>
@@ -203,12 +320,13 @@ Selected chunks are sent as context.</div></div>
     <button class="pri" onclick="send()" id="sendb">ask</button>
     <span class="mut" id="chatnote" style="font-size:11px;align-self:center"></span>
   </div>
+ </div>
 </div>
 
 <footer>
   <button id="undob" onclick="undo()" title="⌘Z">undo</button>
   <button class="pri" id="bakeb" onclick="bake()">bake all stale</button>
-  <button id="stopb" onclick="stopBake()" style="color:var(--red);border-color:var(--red)" hidden>stop</button>
+  <button id="stopb" onclick="stopBake()" style="color:var(--red);border-color:var(--red)" hidden>stop baking</button>
   <button id="pvbook" onclick="previewBook()"
     title="mix and play the book right here, without exporting the mp3">▶ preview audiobook</button>
   <button id="pvtop" onclick="previewFromTop()" hidden
@@ -222,7 +340,7 @@ Selected chunks are sent as context.</div></div>
 
 <script>
 const $=i=>document.getElementById(i);
-let DOC=null, SEL=new Set(), STATE={}, PREV={}, JOBS={}, POLL=null, HEIGHT={};
+let DOC=null, SEL=new Set(), STATE={}, JOBS={}, POLL=null, HEIGHT={};
 let BAKETIMER=null, WASBAKING=false;
 // CUR is the card you are working in — the one edit-then-listen starts from.
 // SEL is a different idea entirely (which cards go to the discuss panel as
@@ -232,13 +350,34 @@ let CUR=null;
 // ── the discuss panel ─────────────────────────────────────
 // Off by default: it is the panel you want twice an afternoon, and the rest of
 // the afternoon it is 340px that the cards could be using.
-function setChat(on){
-  document.body.dataset.chat=on?'on':'off';
-  $('chatb').classList.toggle('on',on);
-  try{ localStorage.setItem('saga.chat',on?'on':'off'); }catch(e){}
+// The right column is one panel with two tabs. Both bits of state are worth
+// keeping: which tab you were on is a working preference, and whether the panel
+// is open at all is the difference between three columns and two.
+function paintPanel(){
+  const open=document.body.dataset.panel==='on', tab=document.body.dataset.tab;
+  $('tabInspect').classList.toggle('on',tab==='inspect');
+  $('tabChat').classList.toggle('on',tab==='chat');
+  $('chatb').classList.toggle('on',open);
 }
-function toggleChat(){ setChat(document.body.dataset.chat!=='on'); }
-try{ setChat(localStorage.getItem('saga.chat')==='on'); }catch(e){ setChat(false); }
+function setPanel(on){
+  document.body.dataset.panel=on?'on':'off';
+  paintPanel();
+  try{ localStorage.setItem('saga.panel',on?'on':'off'); }catch(e){}
+}
+function setTab(t){
+  document.body.dataset.tab=t;
+  paintPanel();
+  try{ localStorage.setItem('saga.tab',t); }catch(e){}
+}
+function showPanel(t){ setPanel(true); setTab(t); }
+// The header button shows and hides the whole panel, keeping whichever tab you
+// were last on. Which pane you want is the tabs' job; this button only decides
+// whether there is a third column at all.
+function togglePanel(){ setPanel(document.body.dataset.panel!=='on'); }
+try{
+  setTab(localStorage.getItem('saga.tab')||'inspect');
+  setPanel(localStorage.getItem('saga.panel')==='on');
+}catch(e){ setTab('inspect'); setPanel(false); }
 
 // ── the current card ──────────────────────────────────────
 // Painted by toggling a class, never by rebuilding: this runs on mousedown, and
@@ -364,8 +503,14 @@ async function importArchive(f){
 async function refresh(){
   STATE=await api('/api/state');
   $('model').textContent='model: '+STATE.model;
+  renderProfileList();       // counts move as cards do; the editor is left alone
+  paintStale();
+  // once per session, and only if the second engine is here to need it
+  if(STATE.omnivoice&&!LANGS)
+    loadLangs().then(()=>{ if(EDITING)renderProfiles(); });
   $('projects').innerHTML=STATE.projects.map(p=>`
-    <div class="proj ${DOC&&DOC.name===p.name?'sel':''}" onclick="openProject('${p.name}')">
+    <div class="proj ${DOC&&DOC.name===p.name?'sel':''}" onclick="openProject('${p.name}')"
+      oncontextmenu="projMenu(event,'${p.name}')">
       <div style="display:flex;gap:6px;align-items:center">
         <span style="flex:1">${esc(p.title)}</span>
         <button class="tiny" title="show this episode's folder"
@@ -391,7 +536,7 @@ async function refresh(){
     BAKETIMER=setTimeout(()=>{refresh();if(DOC)syncCards()},2500);
   } else {
     clearTimeout(BAKETIMER); BAKETIMER=null;
-    $('stopb').disabled=false; $('stopb').textContent='stop';
+    $('stopb').disabled=false; $('stopb').textContent='stop baking';
     if(WASBAKING){ WASBAKING=false;
       $('status').innerHTML = b.stopped
         ? `<span class="warn">bake stopped at ${b.done}/${b.total}</span> — bake again to resume`
@@ -435,7 +580,7 @@ async function open_(name,quiet,anchor){
   // start from — say so rather than pointing the preview at a stranger
   if(!quiet||!DOC.chunks.some(c=>c.id===CUR))CUR=null;
   // fit before observing, so the initial sizing is never mistaken for a drag
-  renderFR(); renderDoc(); fitAll(); watchHeights(); renderProfiles(); bindVoiceDrop();
+  renderFR(); renderDoc(); fitAll(); watchHeights(); renderProfiles();
   keepPlace(an,was);          // after fitAll: the heights must be final first
   syncBookBtn();
   if(!quiet)refresh();
@@ -443,94 +588,596 @@ async function open_(name,quiet,anchor){
   $('dl').hidden=rd<DOC.chunks.length; $('dl').href='/api/download?name='+encodeURIComponent(name);
 }
 
-let EDITING=null;
-function renderProfiles(){
-  const P=STATE.profiles||{};
-  $('profiles').innerHTML=Object.keys(P).map(n=>{
-    const pr=P[n], v=(pr.voices||[])[pr.active||0]||'—';
-    return `<div class="proj ${EDITING===n?'sel':''}" onclick="editProfile('${n}')">
-      <div>${esc(n)}${n==='Default'?' <span class="pill">always</span>':''}</div>
-      <div class="meta">${esc(v)} · pace ${pr.cfg} · feel ${pr.exag}</div></div>`;
-  }).join('');
-  $('profedit').innerHTML = EDITING ? profEditor(EDITING) : '';
+// ── voices & profiles ─────────────────────────────────────
+// A profile's numbers are part of every hash its cards render to, so nudging
+// one by 0.05 silently re-points every card that uses it at a wav that has
+// never been made. Editing used to save on every keystroke, which meant a
+// library could go from finished to four hundred amber dots without a word.
+//
+// So edits are held in a DRAFT and only committed when you say so, the cost is
+// counted while you drag, and the previous settings are kept so putting them
+// back is a click. None of it is destructive — renders are content-addressed
+// and never deleted, so the old audio is still on disk under its old name, and
+// changing a setting back restores exactly what changing it took away. That is
+// worth saying out loud in the dialog: the mistake feels fatal and is not.
+let EDITING=null, DRAFT=null, IMPACT=null, IMPACTT=null;
+const SOUNDKEYS=['voices','active','cfg','exag','temp','rep','engine','lang','speed'];
+const sameSound=(a,b)=>SOUNDKEYS.every(k=>JSON.stringify(a[k])===JSON.stringify(b[k]));
+// 646 languages is too many for a menu and too many to remember the codes of,
+// so the box is a plain input backed by a datalist: the browser does the
+// substring search, keyboard and all, and what gets stored is still the code.
+let LANGS=null, LANGBYCODE={}, LANGBYNAME={};
+const titleish=s=>String(s).replace(/\b\w/g,c=>c.toUpperCase());
+const langName=code=>LANGBYCODE[code]||code||'en';
+async function loadLangs(){
+  if(LANGS)return LANGS;
+  const r=await api('/api/languages');
+  LANGS=(r&&r.languages)||[];
+  for(const l of LANGS){ LANGBYCODE[l.code]=titleish(l.name); LANGBYNAME[l.name]=l.code; }
+  const dl=$('langlist');
+  if(dl)dl.innerHTML=LANGS.map(l=>
+    `<option value="${esc(titleish(l.name))}">${esc(l.code)}</option>`).join('');
+  return LANGS;
 }
+// Accepts either half of the pair: the name from the menu, or a code typed
+// from memory. Anything else is left alone rather than silently reset — a
+// half-typed word should not throw away the language you already had.
+function setLang(v){
+  const s=String(v||'').trim();
+  const code=LANGBYNAME[s.toLowerCase()] || (LANGBYCODE[s]?s:null)
+             || (LANGBYCODE[s.toLowerCase()]?s.toLowerCase():null);
+  if(!code){
+    const box=$('langbox');
+    if(box)box.value=langName((DRAFT||{}).lang||'en');
+    return void($('status').innerHTML=
+      `<span class="warn">no language called “${esc(s)}”</span> — pick one from the list`);
+  }
+  draftSet('lang',code);
+  const box=$('langbox'); if(box)box.value=langName(code);
+}
+const profNames=()=>Object.keys(STATE.profiles||{});
+const draftOf=n=>JSON.parse(JSON.stringify((STATE.profiles||{})[n]||{}));
+function draftData(){
+  const d={}; for(const k of SOUNDKEYS) d[k]=DRAFT[k];
+  d.note=DRAFT.note||''; return d;
+}
+
+// The list repaints freely — a bake calls refresh() every 2.5s. The editor does
+// not: rebuilding it under you would throw away a slider you were dragging and
+// the unsaved draft behind it, so it is rebuilt only when the edit state itself
+// changes.
+function renderProfileList(){
+  const P=STATE.profiles||{}, N=STATE.profile_counts||{};
+  $('profiles').innerHTML=profNames().map((n,i)=>{
+    const pr=P[n], v=(pr.voices||[])[pr.active||0]||'—', c=N[n]||0;
+    const ov=(pr.engine||'chatterbox')==='omnivoice';
+    return `<div class="proj ${EDITING===n?'sel':''}" onclick="editProfileAt(${i})"
+      oncontextmenu="profMenu(event,${i})">
+      <div>${esc(n)}${n==='Default'?' <span class="pill">always</span>':''}${
+        ov?` <span class="pill">${esc(pr.lang||'en')}</span>`:''}</div>
+      <div class="meta">${esc(v)} · ${c?c+' card'+(c===1?'':'s'):'not used yet'}${
+        ov?' · OmniVoice':''}</div></div>`;
+  }).join('');
+}
+function renderProfiles(){
+  renderProfileList();
+  $('profedit').innerHTML = EDITING ? profEditor(EDITING) : '';
+  const ns=$('nosel'); if(ns)ns.hidden=!!EDITING;
+  if(EDITING){
+    bindVoiceDrop(); paintProfDirty(); paintImpact();
+    const p=$('inspect'); if(p)p.scrollTop=0;   // a new profile starts at its top
+  }
+}
+
 function profEditor(n){
-  const pr=(STATE.profiles||{})[n]||{}, vs=pr.voices||[];
-  const f=(k,label,step)=>`<label class="mut" style="font-size:11px">${label}
-    <input type="number" step="${step}" value="${pr[k]}" onchange="setProf('${n}','${k}',this.value)"></label>`;
-  return `<div style="border:1px solid var(--line);border-radius:7px;padding:9px;margin-top:8px">
-    <div style="font-size:11px;color:var(--dim);margin-bottom:6px">editing <b>${esc(n)}</b></div>
-    <div id="vdrop" class="mut" style="border:1px dashed var(--line);border-radius:6px;
-      padding:8px;text-align:center;font-size:11px;margin-bottom:7px">drop a .wav here to add a voice</div>
-    ${vs.map((v,i)=>`<div style="display:flex;gap:5px;align-items:center;margin-bottom:3px">
+  const saved=(STATE.profiles||{})[n]||{}, pr=DRAFT||saved;
+  const vs=pr.voices||[], VS=STATE.voices||[];
+  const cnt=(STATE.profile_counts||{})[n]||0;
+  const ov=(pr.engine||'chatterbox')==='omnivoice';
+  const hist=(saved._history||[]);
+  const last=hist.length?hist[hist.length-1]:null;
+  // range, not a bare number box: the useful span of each of these is narrow
+  // and unguessable, and seeing where you are inside it is most of the answer
+  const sl=(k,label,lo,hi,help)=>`
+    <div class="prow">
+      <div class="plab">${label}<span class="pv" id="pv_${k}">${(+pr[k]).toFixed(2)}</span></div>
+      <input type="range" min="${lo}" max="${hi}" step="0.05" value="${pr[k]}"
+        oninput="draftLive('${k}',this.value)" onchange="draftCommit()">
+      <div class="phelp">${help}</div>
+    </div>`;
+  return `<div class="pedit">
+    <div class="phead">
+      <b>${esc(n)}</b>
+      <span class="mut">${cnt?cnt+' card'+(cnt===1?'':'s'):'not used yet'}</span>
+    </div>
+
+    <div class="psec">voice</div>
+    ${vs.length?vs.map((v,i)=>{
+      const meta=VS.find(x=>x.name===v);
+      return `<div class="vrow">
         <input type="radio" name="av" ${i===(pr.active||0)?'checked':''}
-          onchange="setProf('${n}','active',${i})" title="use this clip">
-        <span style="flex:1;font-size:12px">${esc(v)}</span>
-        <button onclick="dropVoice('${n}',${i})">×</button></div>`).join('')}
-    <select onchange="addVoice('${n}',this.value)" style="width:100%;margin:4px 0">
+          onchange="draftSet('active',${i})" title="speak with this one">
+        <span class="vn">${esc(v)}</span>
+        ${meta?`<span class="mut vs">${fmtSecs(meta.secs)}</span>`
+              :'<span class="warn vs">missing</span>'}
+        ${meta&&meta.secs>10?`<span class="pill warn" title="only the first 10 seconds are used — the rest of this clip has never been heard">10s+</span>`:''}
+        <button class="tiny" onclick="playVoiceAt(${i})" title="hear the reference clip">▶</button>
+        <button class="tiny" onclick="renameVoiceAt(${i})"
+          title="rename this voice everywhere it is used">✎</button>
+        <button class="tiny" onclick="dropDraftVoice(${i})" title="remove from this profile">×</button>
+      </div>`}).join('')
+      :'<div class="mut" style="font-size:11px;padding:2px 0">no voice yet</div>'}
+    <select onchange="addDraftVoice(this.value);this.value=''" style="width:100%;margin:5px 0">
       <option value="">+ add an existing voice…</option>
-      ${(STATE.voices||[]).map(v=>`<option>${v}</option>`).join('')}</select>
-    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:5px">
-      ${f('cfg','pace',0.05)}${f('exag','feeling',0.05)}
-      ${f('temp','steadiness',0.05)}${f('rep','anti-stutter',0.05)}</div>
+      ${VS.map(v=>`<option value="${esc(v.name)}">${esc(v.name)} (${fmtSecs(v.secs)})</option>`).join('')}</select>
+    <div id="vdrop" class="vdrop">drop a .wav here to add a new voice</div>
+
+    <div class="psec">engine</div>
+    <select onchange="draftSet('engine',this.value)" style="width:100%"
+      ${STATE.omnivoice?'':'disabled'}>
+      <option value="chatterbox" ${!ov?'selected':''}>Chatterbox — English, four delivery controls, seeded takes</option>
+      <option value="omnivoice" ${ov?'selected':''}>OmniVoice — 600+ languages, about 3× faster</option>
+    </select>
+    <div class="phelp">${STATE.omnivoice
+      ? '◎ voiced cards always use Chatterbox — it is the only one that can re-speak a recording.'
+      : '<span class="warn">OmniVoice is not installed on this machine.</span>'}</div>
+
+    ${ov?`
+    <div class="psec">delivery
+      <span class="mut" style="font-weight:400"> — OmniVoice has no pace or feeling controls</span></div>
+    <div class="prow">
+      <div class="plab">language<span class="pv">${esc(pr.lang||'en')}</span></div>
+      <input list="langlist" id="langbox" style="width:100%"
+        value="${esc(langName(pr.lang||'en'))}"
+        placeholder="type to search — english, german, spanish…"
+        onchange="setLang(this.value)">
+      <div class="phelp">${LANGS?LANGS.length+' languages — type to search':'the code this profile reads in'}
+        · es for the Spanish editions</div>
+    </div>
+    ${sl('speed','speed',0,2,'0 leaves it to the model; 1 is its normal pace')}
+    `:`
+    <div class="psec">delivery
+      <span class="mut" style="font-weight:400"> — text cards only; ◎ voiced cards ignore these</span></div>
+    ${sl('cfg','pace',0,1,'lower is slower and more deliberate')}
+    ${sl('exag','feeling',0,1.5,'how much colour goes into the reading')}
+    ${sl('temp','steadiness',0.05,1.5,'higher wanders more; lower stays flat')}
+    ${sl('rep','anti-stutter',1,2,'raise it if words repeat')}
+    `}
+
     <input placeholder="note — when to use this" value="${esc(pr.note||'')}"
-      onchange="setProf('${n}','note',this.value)" style="width:100%;margin-top:6px">
-    <div style="display:flex;gap:5px;margin-top:7px">
-      <button onclick="EDITING=null;renderProfiles()">close</button>
-      ${n==='Default'?'':`<button onclick="delProfile('${n}')" style="color:var(--red)">delete</button>`}
+      oninput="draftSet('note',this.value,true)" style="width:100%;margin-top:7px">
+
+    <div id="pimpact" class="pimpact"></div>
+
+    <div class="pact">
+      <button id="psave" class="pri" onclick="saveProf()" disabled>save changes</button>
+      <button id="pdisc" onclick="discardProf()" disabled>discard</button>
+      <button onclick="saveProfAs()" title="keep this profile as it is and put these settings in a new one">save as new…</button>
+    </div>
+
+    ${last?`<div class="psec">was</div>
+      <div class="prev">
+        <span class="mut">${esc(fmtProf(last))} · ${esc(last.at||'')}</span>
+        <button class="tiny" onclick="revertProf()">put it back</button>
+      </div>`:''}
+
+    ${DOC?`<div class="psec">move cards</div>
+      <div class="mvrow">
+        <span class="mut">in “${esc(DOC.title)}”, move</span>
+        <select id="mvfrom">
+          <option value="">every card</option>
+          ${profNames().filter(p=>p!==n).map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join('')}
+        </select>
+        <span class="mut">→ ${esc(n)}</span>
+        <button onclick="moveCards()">move</button>
+      </div>`:''}
+
+    <div class="pact" style="margin-top:9px">
+      <button onclick="closeProf()">close</button>
+      ${n==='Default'?'':`<button onclick="delProfile()" style="color:var(--red)">delete profile</button>`}
     </div></div>`;
 }
-function editProfile(n){ EDITING=(EDITING===n?null:n); renderProfiles(); bindVoiceDrop(); }
+const fmtProf=p=>`pace ${(+p.cfg).toFixed(2)} · feel ${(+p.exag).toFixed(2)}`+
+  ` · steady ${(+p.temp).toFixed(2)} · anti ${(+p.rep).toFixed(2)}`+
+  ((p.voices||[])[p.active||0]?` · ${(p.voices||[])[p.active||0]}`:'');
+
+function editProfileAt(i){ editProfile(profNames()[i]); }
+function editProfile(n){
+  if(EDITING===n)return closeProf();
+  if(!confirmDiscard())return;
+  EDITING=n; DRAFT=draftOf(n); IMPACT=null;
+  showPanel('inspect');            // clicking a voice is what opens the inspector
+  renderProfiles();
+}
+function closeProf(){
+  if(!confirmDiscard())return;
+  EDITING=null; DRAFT=null; IMPACT=null; renderProfiles();
+}
+function confirmDiscard(){
+  if(!EDITING||!DRAFT)return true;
+  const saved=(STATE.profiles||{})[EDITING]||{};
+  if(sameSound(DRAFT,saved)&&(DRAFT.note||'')===(saved.note||''))return true;
+  return confirm('Discard the unsaved changes to this profile?');
+}
+
+// A range fires oninput for every pixel of the drag. Writing the value into the
+// draft and the readout is cheap; re-rendering the panel would destroy the
+// slider under the mouse, so the rest waits for the release.
+function draftLive(k,v){
+  if(!DRAFT)return;
+  DRAFT[k]=parseFloat(v);
+  const el=$('pv_'+k); if(el)el.textContent=(+v).toFixed(2);
+}
+function draftCommit(){ paintProfDirty(); scheduleImpact(); }
+function draftSet(k,v,quiet){
+  if(!DRAFT)return;
+  DRAFT[k]=v;
+  if(quiet){ paintProfDirty(); return; }   // the note changes nothing about sound
+  paintProfDirty(); scheduleImpact();
+}
+function addDraftVoice(v){
+  if(!v||!DRAFT)return;
+  const vs=[...(DRAFT.voices||[])];
+  if(!vs.includes(v))vs.push(v);
+  DRAFT.voices=vs; renderProfiles(); paintProfDirty(); scheduleImpact();
+}
+function dropDraftVoice(i){
+  if(!DRAFT)return;
+  const vs=[...(DRAFT.voices||[])]; vs.splice(i,1);
+  DRAFT.voices=vs; DRAFT.active=0;
+  renderProfiles(); paintProfDirty(); scheduleImpact();
+}
+// Renaming a voice is not like renaming a profile: the clip's name is part of
+// every hash made with it, so the server moves the rendered audio across as it
+// goes. The row turns into a field rather than opening a dialog, for the same
+// reason everything else here does — Electron has no window.prompt.
+function renameVoiceAt(i){
+  const v=((DRAFT||{}).voices||[])[i]; if(!v)return;
+  const row=document.querySelectorAll('#profedit .vrow')[i]; if(!row)return;
+  const was=row.innerHTML;
+  row.innerHTML=`<input value="${esc(v)}" style="flex:1;min-width:80px">
+    <button class="tiny">rename</button><button class="tiny">cancel</button>`;
+  const inp=row.querySelector('input'), b=row.querySelectorAll('button');
+  const restore=()=>{ row.innerHTML=was; };
+  b[0].onclick=()=>renameVoice(v,inp.value.trim(),restore);
+  b[1].onclick=restore;
+  inp.onkeydown=e=>{ e.stopPropagation();
+    if(e.key==='Enter'){e.preventDefault();b[0].onclick();}
+    if(e.key==='Escape'){e.preventDefault();restore();} };
+  inp.focus(); inp.select();
+}
+async function renameVoice(old,to,restore){
+  if(!to||to===old)return restore();
+  if(!confirm(`Rename the voice “${old}” to “${to}”?\n\nEvery profile and card that `+
+      `names it follows, and the audio already rendered with it is carried across — `+
+      `so nothing needs re-baking.`))return restore();
+  const r=await api('/api/voice/rename',{voice:old,to});
+  if(r.error){ restore();
+    return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`); }
+  await refresh();
+  // keep whatever is unsaved in the draft, just under the name it now has
+  if(DRAFT&&DRAFT.voices)DRAFT.voices=DRAFT.voices.map(v=>v===old?r.voice:v);
+  renderProfiles(); if(DOC)await syncCards();
+  $('status').innerHTML=`<span class="ok">voice renamed to “${esc(r.voice)}”</span> — `+
+    `${r.profiles} profile${r.profiles===1?'':'s'}, ${r.cards} card${r.cards===1?'':'s'}, `+
+    `${r.audio} render${r.audio===1?'':'s'} carried across`;
+}
+function playVoiceAt(i){
+  const v=((DRAFT||{}).voices||[])[i]; if(!v)return;
+  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
+  AUDIO=new Audio('/api/voice?f='+encodeURIComponent(v)); AUDIO.play();
+}
+
+function profDirty(){
+  if(!EDITING||!DRAFT)return {sound:false,any:false};
+  const saved=(STATE.profiles||{})[EDITING]||{};
+  const sound=!sameSound(DRAFT,saved);
+  return {sound, any: sound||((DRAFT.note||'')!==(saved.note||''))};
+}
+function paintProfDirty(){
+  const d=profDirty();
+  const s=$('psave'); if(s)s.disabled=!d.any;
+  const x=$('pdisc'); if(x)x.disabled=!d.any;
+}
+// Counting means hashing every card in the library against both the old and the
+// new settings, so it waits for a pause rather than running per pixel.
+function scheduleImpact(){
+  clearTimeout(IMPACTT);
+  if(!profDirty().sound){ IMPACT=null; return paintImpact(); }
+  const el=$('pimpact'); if(el)el.innerHTML='<span class="mut">counting…</span>';
+  IMPACTT=setTimeout(async()=>{
+    if(!EDITING||!DRAFT)return;
+    const r=await api('/api/profile/impact',{profile:EDITING,data:draftData()});
+    if(!r||r.error)return;
+    IMPACT=r; paintImpact();
+  },450);
+}
+function paintImpact(){
+  const el=$('pimpact'); if(!el)return;
+  if(!profDirty().sound||!IMPACT)return void(el.innerHTML='');
+  const lost=IMPACT.lost||0, gained=IMPACT.gained||0, np=IMPACT.projects.length;
+  const bits=[];
+  if(lost) bits.push(`<span class="warn">${lost} rendered card${lost===1?'':'s'} `+
+    `would need re-baking</span>`);
+  else bits.push(`<span class="ok">nothing would need re-baking</span>`);
+  if(gained) bits.push(`${gained} would come back from renders you made earlier`);
+  el.innerHTML=bits.join(' · ')+
+    `<div class="mut" style="margin-top:3px">${IMPACT.cards} card${IMPACT.cards===1?'':'s'} `+
+    `use this profile, across ${np} project${np===1?'':'s'}. `+
+    `Nothing is deleted — changing it back brings them straight back.</div>`;
+}
+
+async function saveProf(){
+  if(!EDITING||!DRAFT)return;
+  const d=profDirty(); if(!d.any)return;
+  if(d.sound){
+    const im=IMPACT||await api('/api/profile/impact',{profile:EDITING,data:draftData()});
+    const lost=(im&&im.lost)||0;
+    if(lost&&!confirm(
+      `“${EDITING}” supplies ${im.cards} card${im.cards===1?'':'s'} across `+
+      `${im.projects.length} project${im.projects.length===1?'':'s'}.\n\n`+
+      `${lost} of them are rendered now and would need re-baking at these settings`+
+      ((im.gained)?`, and ${im.gained} would come back from renders you made earlier`:'')+
+      `.\n\nNothing is deleted — the old audio stays on disk, so changing this back `+
+      `restores them exactly.\n\n`+
+      `OK to save · Cancel to leave it alone (or use “save as new…” to keep both).`))
+      return;
+  }
+  await api('/api/profile',{profile:EDITING,data:draftData()});
+  DRAFT=null; IMPACT=null;
+  await refresh(); DRAFT=draftOf(EDITING); renderProfiles();
+  if(DOC)open_(DOC.name,true);
+  $('status').innerHTML=`<span class="ok">saved “${esc(EDITING)}”</span>`;
+}
+function discardProf(){
+  if(!EDITING)return;
+  DRAFT=draftOf(EDITING); IMPACT=null; renderProfiles();
+  $('status').textContent='changes discarded';
+}
+function saveProfAs(){
+  if(!EDITING||!DRAFT)return;
+  const host=document.querySelector('#profedit .pedit');
+  if(host)askName(host,EDITING+' 2','new profile name',nm=>reallySaveProfAs(nm));
+}
+async function reallySaveProfAs(nm){
+  if(!EDITING||!DRAFT)return;
+  if((STATE.profiles||{})[nm]&&!confirm(`“${nm}” already exists. Overwrite it?`))return;
+  await api('/api/profile',{profile:nm,data:draftData()});
+  EDITING=nm; DRAFT=null; IMPACT=null;
+  await refresh(); DRAFT=draftOf(nm); renderProfiles();
+  $('status').innerHTML=`<span class="ok">created “${esc(nm)}”</span> — the cards still `+
+    `use the old profile; <b>move cards</b> below brings them across`;
+}
+async function revertProf(){
+  if(!EDITING)return;
+  if(!confirm('Put the previous settings back?\n\nCards rendered under them become '+
+    'ready again immediately — the audio was never deleted.'))return;
+  const r=await api('/api/profile/revert',{profile:EDITING});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  DRAFT=null; IMPACT=null;
+  await refresh(); DRAFT=draftOf(EDITING); renderProfiles();
+  if(DOC)open_(DOC.name,true);
+  $('status').innerHTML=`<span class="ok">restored the settings from ${esc(r.at||'earlier')}</span>`;
+}
+async function moveCards(){
+  if(!DOC||!EDITING)return;
+  const from=$('mvfrom').value;
+  const what=from?`cards using “${from}”`:'every card';
+  if(!confirm(`Move ${what} in “${DOC.title}” to “${EDITING}”?\n\n`+
+    `This changes which voice those cards speak in, so any that are rendered `+
+    `will need re-baking. Nothing is deleted, and undo puts it back.`))return;
+  const r=await api('/api/reprofile',{name:DOC.name,from:from||null,to:EDITING});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await refresh(); renderProfiles(); open_(DOC.name,true);
+  $('status').innerHTML=r.moved
+    ?`<span class="ok">moved ${r.moved} card${r.moved===1?'':'s'} to “${esc(EDITING)}”</span> · ⌘Z undoes it`
+    :'nothing to move — those cards already use it';
+}
 async function addProfile(){
   const n=$('newprof').value.trim(); if(!n)return;
+  if(!confirmDiscard())return;
   $('newprof').value='';
   await api('/api/profile',{profile:n,data:{}});
-  EDITING=n; await refresh(); renderProfiles(); bindVoiceDrop(); }
-async function setProf(n,k,v){
-  const num=['cfg','exag','temp','rep','active'].includes(k);
-  await api('/api/profile',{profile:n,data:{[k]:num?parseFloat(v):v}});
-  await refresh(); renderProfiles(); bindVoiceDrop(); if(DOC)open_(DOC.name,true); }
-async function addVoice(n,v){
-  if(!v)return; const pr=STATE.profiles[n], vs=[...(pr.voices||[])];
-  if(!vs.includes(v))vs.push(v);
-  await api('/api/profile',{profile:n,data:{voices:vs}});
-  await refresh(); renderProfiles(); bindVoiceDrop(); }
-async function dropVoice(n,i){
-  const vs=[...(STATE.profiles[n].voices||[])]; vs.splice(i,1);
-  await api('/api/profile',{profile:n,data:{voices:vs.length?vs:['caitlyn2'],active:0}});
-  await refresh(); renderProfiles(); bindVoiceDrop(); }
+  EDITING=n; await refresh(); DRAFT=draftOf(n); renderProfiles(); }
 async function delProfile(n){
-  if(!confirm(`Delete profile "${n}"? Cards using it fall back to Default.`))return;
+  n=n||EDITING; if(!n||n==='Default')return;
+  const cnt=(STATE.profile_counts||{})[n]||0;
+  if(!confirm(`Delete profile “${n}”?`+
+    (cnt?`\n\n${cnt} card${cnt===1?' uses':'s use'} it, and will fall back to Default — `+
+         `which almost certainly sounds different, so they will need re-baking.`:'')))return;
   await api('/api/profile/delete',{profile:n});
-  EDITING=null; await refresh(); renderProfiles(); if(DOC)open_(DOC.name,true); }
+  if(EDITING===n){ EDITING=null; DRAFT=null; IMPACT=null; }   // deleting another
+  await refresh(); renderProfiles(); if(DOC)open_(DOC.name,true);
+  $('status').innerHTML=`<span class="ok">deleted “${esc(n)}”</span>`+
+    (cnt?` — ${cnt} card${cnt===1?'':'s'} fell back to Default and will need re-baking`:''); }
 function bindVoiceDrop(){
   const z=$('vdrop'); if(!z)return;
-  ['dragenter','dragover'].forEach(k=>z.addEventListener(k,e=>{e.preventDefault();z.style.borderColor='var(--green)'}));
-  ['dragleave','drop'].forEach(k=>z.addEventListener(k,e=>{e.preventDefault();z.style.borderColor='var(--line)'}));
+  ['dragenter','dragover'].forEach(k=>z.addEventListener(k,e=>{e.preventDefault();z.classList.add('over')}));
+  ['dragleave','drop'].forEach(k=>z.addEventListener(k,e=>{e.preventDefault();z.classList.remove('over')}));
+  // The file goes up as a raw body, as clips and takes do. It used to be
+  // base64 built with String.fromCharCode(...bytes) — one argument per byte,
+  // which is a stack overflow for any clip worth cloning a voice from.
   z.addEventListener('drop',async e=>{
     for(const f of e.dataTransfer.files){
-      const buf=await f.arrayBuffer();
-      const b64=btoa(String.fromCharCode(...new Uint8Array(buf)));
-      const r=await api('/api/voice/upload',{filename:f.name,data:b64});
-      if(r.ok)await addVoice(EDITING,r.voice);
+      $('status').textContent=`importing ${f.name}…`;
+      let j;
+      try{
+        const r=await fetch('/api/voice/upload?fn='+encodeURIComponent(f.name),
+          {method:'POST',body:f,headers:{'Content-Type':'application/octet-stream'}});
+        j=await r.json();
+      }catch(ex){ j={error:String(ex)}; }
+      if(j.error){ $('status').innerHTML=`<span class="warn">${esc(j.error)}</span>`; continue; }
+      await refresh();
+      // the upload is global and immediate; adding it to *this* profile is the
+      // draft edit, and still needs saving like any other
+      addDraftVoice(j.voice);
+      $('status').innerHTML=`voice <b>${esc(j.voice)}</b> imported · ${fmtSecs(j.secs)}`+
+        (j.renamed?` — <span class="warn">“${esc(j.asked)}” was taken by a different clip,`+
+                   ` so this one came in under a new name</span>`:'')+
+        (j.long?` · <span class="warn">only the first 10s will be used</span>`:'')+
+        ' — press <b>save changes</b> to keep it on this profile';
     }});
 }
 
+// The server has been updated underneath us. Reloading the page will not pick
+// it up — this page came from the running process, and that process is still
+// the Python it started with. Worth a permanent bar rather than a status line
+// note: the symptom otherwise is a feature that silently does not work, and
+// nothing on screen connecting it to the cause.
+function paintStale(){
+  const el=$('stalebar');
+  if(!STATE.stale_build){ if(el)el.remove(); return; }
+  if(el)return;
+  const d=document.createElement('div');
+  d.id='stalebar';
+  d.innerHTML='Saga Studio has been updated on disk. <b>Quit the app and open it '+
+    'again</b> to run the new version — reloading only refreshes the interface, '+
+    'and a new interface on an old server fails in confusing ways.';
+  document.body.appendChild(d);
+}
+
+// ── right-click menus ─────────────────────────────────────
+// One element, built where the pointer is and thrown away after. Items carry
+// their own closures, so nothing has to be encoded into an HTML attribute and
+// a profile called "Gertie's" cannot break the markup that offers to rename it.
+let CTX=null;
+function closeCtx(){ if(CTX){ CTX.remove(); CTX=null; } }
+document.addEventListener('click',closeCtx);
+document.addEventListener('scroll',closeCtx,true);
+window.addEventListener('blur',closeCtx);
+document.addEventListener('keydown',e=>{ if(e.key==='Escape')closeCtx(); });
+function openCtx(e,items){
+  e.preventDefault(); e.stopPropagation();
+  closeCtx();
+  const m=document.createElement('div');
+  m.className='ctx';
+  m.innerHTML=items.map((it,i)=>it==='-'?'<hr>'
+    :`<button data-i="${i}" ${it.disabled?'disabled':''} ${it.danger?'class="danger"':''}
+       >${esc(it.label)}</button>`).join('');
+  document.body.appendChild(m);
+  // keep it on screen when you right-click near an edge
+  m.style.left=Math.max(6,Math.min(e.clientX,innerWidth-m.offsetWidth-8))+'px';
+  m.style.top=Math.max(6,Math.min(e.clientY,innerHeight-m.offsetHeight-8))+'px';
+  m.addEventListener('click',ev=>{
+    ev.stopPropagation();                        // a click inside must not close it
+    const b=ev.target.closest('button[data-i]'); if(!b||b.disabled)return;
+    const it=items[+b.dataset.i];
+    closeCtx();
+    if(it&&it.run)it.run();
+  });
+  CTX=m;
+}
+// Renaming happens in the menu rather than a dialog: Electron has no prompt,
+// and the field belongs where the thing being named is.
+function ctxAsk(suggested,placeholder,label,onOk){
+  if(!CTX)return;
+  CTX.innerHTML=`<div class="ctxask">
+    <input value="${esc(suggested)}" placeholder="${esc(placeholder)}">
+    <button class="pri">${esc(label)}</button></div>`;
+  const inp=CTX.querySelector('input'), btn=CTX.querySelector('button');
+  const go=()=>{ const v=inp.value.trim(); if(!v)return inp.focus(); closeCtx(); onOk(v); };
+  btn.onclick=go;
+  inp.onkeydown=ev=>{ ev.stopPropagation();
+    if(ev.key==='Enter'){ ev.preventDefault(); go(); }
+    if(ev.key==='Escape'){ ev.preventDefault(); closeCtx(); } };
+  inp.focus(); inp.select();
+}
+
+function projMenu(e,name){
+  const p=(STATE.projects||[]).find(x=>x.name===name); if(!p)return;
+  openCtx(e,[
+    {label:'open', run:()=>openProject(name)},
+    {label:'rename…', run:()=>{ openCtx(e,[]); ctxAsk(p.title,'episode title','rename',
+        t=>renameProject(name,t)); }},
+    {label:'duplicate', run:()=>duplicateProject(name)},
+    '-',
+    {label:'show in Finder', run:()=>reveal(name)},
+    {label:'export…', run:()=>exportOne(name)},
+    '-',
+    {label:'delete…', danger:true, run:()=>deleteProject(name,p.title)},
+  ]);
+}
+async function renameProject(name,title){
+  const r=await api('/api/rename',{name,title});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await refresh();
+  if(DOC&&DOC.name===name){ DOC.title=r.title;
+    $('hdr').textContent=DOC.title+' · '+DOC.chunks.length+' chunks'; }
+  $('status').innerHTML=`<span class="ok">renamed to “${esc(r.title)}”</span>`;
+}
+async function duplicateProject(name){
+  const r=await api('/api/project/duplicate',{name});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await refresh();
+  $('status').innerHTML=`<span class="ok">copied as “${esc(r.title)}”</span> — its audio is `+
+    `shared with the original, so it is already rendered`;
+}
+async function deleteProject(name,title){
+  if(!confirm(`Delete “${title}”?\n\nIts cards and its imported markdown go. Rendered `+
+              `audio is shared with every other episode and stays where it is.`))return;
+  await api('/api/delete',{name});
+  if(DOC&&DOC.name===name){
+    DOC=null; CUR=null;
+    $('main').innerHTML='<p class="mut">Drop a markdown file on the left to begin.</p>';
+    $('hdr').textContent='no project';
+  }
+  await refresh();
+  $('status').innerHTML=`<span class="ok">deleted “${esc(title)}”</span>`;
+}
+
+function profMenu(e,i){
+  const n=profNames()[i]; if(!n)return;
+  const isDef=n==='Default';
+  openCtx(e,[
+    {label:'edit', run:()=>editProfile(n)},
+    {label:'rename…', disabled:isDef, run:()=>{ openCtx(e,[]);
+       ctxAsk(n,'profile name','rename',t=>renameProfile(n,t)); }},
+    {label:'duplicate', run:()=>duplicateProfile(n)},
+    '-',
+    {label:isDef?'Default cannot be deleted':'delete…',
+     danger:!isDef, disabled:isDef, run:()=>delProfile(n)},
+  ]);
+}
+async function renameProfile(old,to){
+  const r=await api('/api/profile/rename',{profile:old,to});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  if(EDITING===old){ EDITING=to; DRAFT=null; }
+  await refresh();
+  if(EDITING)DRAFT=draftOf(EDITING);
+  renderProfiles(); if(DOC)await syncCards();
+  $('status').innerHTML=`<span class="ok">renamed to “${esc(to)}”</span> — `+
+    `${r.cards} card${r.cards===1?'':'s'} followed it, none of them stale `+
+    `(a profile's name is not part of the hash)`;
+}
+async function duplicateProfile(n){
+  const r=await api('/api/profile/duplicate',{profile:n});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  EDITING=r.name; DRAFT=null;
+  await refresh(); DRAFT=draftOf(r.name);
+  showPanel('inspect'); renderProfiles();
+  $('status').innerHTML=`<span class="ok">copied as “${esc(r.name)}”</span> — no cards use `+
+    `it yet; “move cards” in the inspector brings some across`;
+}
+
 // ── chunks ────────────────────────────────────────────────
-// Three kinds of card share the stack: speech (the original), an audio clip,
-// and a timed silence. Insert strips sit between every pair of cards — and at
-// both ends — so a new card can be born exactly where it belongs.
+// Four kinds of card share the stack: speech (the original), a voiced card
+// driven by a recording of you, an audio clip, and a timed silence. Insert
+// strips sit between every pair of cards — and at both ends — so a new card can
+// be born exactly where it belongs.
 function renderDoc(){
   $('main').innerHTML=insBar(0)+DOC.chunks.map(c=>cardHTML(c)+insBar(c.id+1)).join('');
   DOC.chunks.forEach(c=>{ if(c.type==='audio')fadeUi(c.id); });
   bindDrag(); paintClip();          // the strips are new, so their paste buttons are too
 }
 function cardHTML(c){
-  return c.type==='audio'?audioCard(c):c.type==='silence'?silenceCard(c):speechCard(c);
+  return c.type==='audio'?audioCard(c)
+    :c.type==='silence'?silenceCard(c)
+    :c.type==='voiced'?voicedCard(c):speechCard(c);
 }
 const insBar=at=>`<div class="ins">
     <button class="pb" onclick="pasteCard(${at})">+ paste</button>
     <button onclick="insertCard(${at},'speech')" title="insert an empty text card here">+ text</button>
+    <button onclick="insertCard(${at},'voiced')" title="insert a card spoken by you, in a character's voice">+ ◎ voiced</button>
     <button onclick="insertCard(${at},'audio')" title="insert a music / sound-effect card here">+ ♪ audio</button>
     <button onclick="insertCard(${at},'silence')" title="insert a timed pause here">+ silence</button>
   </div>`;
@@ -551,20 +1198,24 @@ function speechCard(c){return `
         ${Object.keys(STATE.profiles||{}).map(p=>
           `<option ${ (c.profile||'Default')===p?'selected':''}>${p}</option>`).join('')}
       </select>
+      <span class="engpill">${enginePill(c)}</span>
       ${c.mute?'<span class="pill warn">muted</span>':''}
       <span style="flex:1"></span>
+      ${runonBtn(c)}
       ${copyBtn(c.id)}
       <label class="mut dchk" style="font-size:11px"><input type="checkbox" ${SEL.has(c.id)?'checked':''}
         onchange="pick(${c.id},this.checked)"> discuss</label>
     </div>
     <textarea id="t${c.id}" oninput="touched(${c.id})" onblur="flush(${c.id})"
       onfocus="setCur(${c.id})"${(HEIGHT[c.id]||c.height)?` style="height:${HEIGHT[c.id]||c.height}px"`:''}>${esc(c.text)}</textarea>
+    ${DELIV.has(c.id)?delivRow(c):''}
     <div class="act">
       <button id="pf${c.id}" onclick="playFull(${c.id})" ${c.ready&&!c.mute?'':'disabled'}>▶ full</button>
-      <button id="pp${c.id}" onclick="playPrev(${c.id})" ${PREV[c.id]&&!c.mute?'':'disabled'}>▶ preview</button>
       <button id="pv${c.id}" onclick="prev(${c.id})" disabled>preview selected</button>
       <button id="rb${c.id}" class="pri" onclick="one(${c.id})" ${c.mute?'disabled':''}>render</button>
       ${takeUi(c)}
+      <button onclick="toggleDeliv(${c.id})"
+        title="change the engine or the delivery for this one card only">delivery</button>
       <button onclick="splitAt(${c.id})">split</button>
       <button onclick="merge(${c.id})">merge next</button>
       <button onclick="dup(${c.id})">duplicate</button>
@@ -590,6 +1241,7 @@ function audioCard(c){
       <span class="mut">${c.clip?esc(c.clip)+(len?' · '+fmtSecs(len):''):'no clip chosen'}</span>
       ${c.mute?'<span class="pill warn">muted</span>':''}
       <span style="flex:1"></span>
+      ${runonBtn(c)}
       ${copyBtn(c.id)}
     </div>
     <div class="arow">
@@ -636,6 +1288,59 @@ function audioCard(c){
    </div>`;
 }
 
+// You perform the line; the character speaks it. Chatterbox keeps the timing,
+// the rhythm and the feeling of your recording and changes only the voice — so
+// this is the card for a reading no parameter will get you to, and for anything
+// where the delivery matters more than the words.
+//
+// It has no sliders because voice conversion has none: the model takes your
+// recording and a voice, and that is all. The profile picker is here for the
+// voice it names, and its pace/feeling settings do nothing to a voiced card.
+function voicedCard(c){
+  const len=c.perflen||0;
+  const perf = !c.perf ? '<span class="mut">nothing recorded yet</span>'
+    : !c.haveperf ? '<span class="warn">that recording is missing from takes/</span>'
+    : esc(c.perfname||'performance')+(len?' <span class="mut">· '+fmtSecs(len)+'</span>':'');
+  return `
+   <div class="chunk ${CUR===c.id?'cur':''}" id="c${c.id}"
+     onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
+    <div class="top">
+      ${grip(c.id)}
+      <span class="dot ${c.mute?'':(c.ready?'ready':'stale')}"></span>
+      <span>#${c.id}</span>
+      <span class="pill">◎ voiced</span>
+      <select onchange="setProfile(${c.id},this.value)" style="font-size:11px;padding:1px 4px"
+        title="the character this performance is spoken as — only the voice is used">
+        ${Object.keys(STATE.profiles||{}).map(p=>
+          `<option ${(c.profile||'Default')===p?'selected':''}>${p}</option>`).join('')}
+      </select>
+      ${c.mute?'<span class="pill warn">muted</span>':''}
+      <span style="flex:1"></span>
+      ${runonBtn(c)}
+      ${copyBtn(c.id)}
+    </div>
+    <div class="arow">
+      <span class="lbl">you said</span>
+      <span id="pn${c.id}">${perf}</span>
+      <span style="flex:1"></span>
+      <button onclick="pickPerf(${c.id})">${c.perf?'replace…':'import a recording…'}</button>
+      <button id="pk${c.id}" onclick="playPerf(${c.id})" ${c.haveperf?'':'disabled'}
+        title="hear your own recording, before conversion">▶ yours</button>
+    </div>
+    <div class="act">
+      <button id="pf${c.id}" onclick="playFull(${c.id})" ${c.ready&&!c.mute?'':'disabled'}
+        title="hear it in the character's voice">▶ in voice</button>
+      <button id="rb${c.id}" class="pri" onclick="one(${c.id})"
+        ${c.mute||!c.haveperf?'disabled':''}>render</button>
+      ${takeUi(c)}
+      <button onclick="dup(${c.id})">duplicate</button>
+      <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
+      <button onclick="del(${c.id})" style="color:var(--red)">remove</button>
+      <span class="mut" id="s${c.id}" style="font-size:11px"></span>
+    </div>
+   </div>`;
+}
+
 function silenceCard(c){return `
    <div class="chunk ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
@@ -649,6 +1354,7 @@ function silenceCard(c){return `
       <span class="mut" style="font-size:11px">seconds of rest</span>
       ${c.mute?'<span class="pill warn">muted</span>':''}
       <span style="flex:1"></span>
+      ${runonBtn(c)}
       ${copyBtn(c.id)}
       <button class="tiny" onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
       <button class="tiny" onclick="del(${c.id})" style="color:var(--red)" title="remove">×</button>
@@ -844,8 +1550,14 @@ async function syncCards(){
     }
     const n=card.querySelector('.chars'); if(n)n.textContent=c.text.length+' ch';
     const pf=$('pf'+c.id); if(pf)pf.disabled=!(c.ready&&!c.mute);
-    const pp=$('pp'+c.id); if(pp)pp.disabled=!(PREV[c.id]&&!c.mute);
     const pc=$('pc'+c.id); if(pc)pc.disabled=!(c.ready&&!c.mute);
+    const pk=$('pk'+c.id); if(pk)pk.disabled=!c.haveperf;
+    // a voiced card with no recording has nothing to render — but never fight
+    // the button while its own job is in flight
+    const rb=$('rb'+c.id);
+    if(rb&&c.type==='voiced'&&!rb.classList.contains('busy'))
+      rb.disabled=!!c.mute||!c.haveperf;
+    paintCardHead(c.id);          // engine and “custom” follow a profile change
     const tk=$('tk'+c.id); if(tk)tk.textContent=takeName(c.seed||0);
     const tkb=$('tkb'+c.id); if(tkb)tkb.disabled=!(c.seed||0);
     syncPrevBtn(c.id);
@@ -867,8 +1579,13 @@ async function syncCards(){
 const takeName=n=>n?'take '+n:'original';
 function takeUi(c){
   const n=c.seed||0;
+  // Both engines store each take under its own name, so stepping back always
+  // plays the reading you already heard. Only chatterbox can *reproduce* one:
+  // it pins the sampler to a seed, and OmniVoice has none to pin.
+  const ov=((c.effective||{}).engine||'chatterbox')==='omnivoice';
   return `<span class="take"
-      title="re-roll this card — same words, a different reading, without touching the text">
+      title="re-roll this card — same words, a different reading, without touching the text${
+        ov?'.\nOmniVoice: each take is kept, but re-rendering one will not reproduce it — there is no seed.':''}">
     <button id="tkb${c.id}" onclick="takeStep(${c.id},-1)" ${n?'':'disabled'}
       title="back to the previous take — instant if you have heard it before">◂</button>
     <span class="n" id="tk${c.id}">${takeName(n)}</span>
@@ -885,6 +1602,172 @@ async function takeStep(id,d){
   const now=DOC.chunks.find(x=>x.id===id);
   if(now&&now.ready){ $('s'+id).textContent=takeName(n)+' — already rendered'; playFull(id); }
   else one(id);
+}
+
+// "runs on" — no rest before this card. Splitting a sentence so a phrase can
+// have its own delivery is the reason it exists: without it the second half
+// arrives after a beat of silence that was never in the writing. Split sets it
+// for you when the break is mid-sentence; this is how you change your mind.
+const RUNON_ON='runs straight on from the card above — click for the usual rest';
+const RUNON_OFF='no rest before this card — click to run it on from the one above';
+const runonBtn=c=>`<button class="tiny runon ${c.runon?'on':''}"
+  onclick="setRunon(${c.id},${!c.runon})"
+  title="${c.runon?RUNON_ON:RUNON_OFF}">⤶</button>`;
+async function setRunon(id,on){
+  await api('/api/chunk',{name:DOC.name,id,runon:on});
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(c)c.runon=on;
+  const b=document.querySelector('#c'+id+' .runon');
+  if(b){ b.classList.toggle('on',on); b.title=on?RUNON_ON:RUNON_OFF; }
+  $('status').textContent=on
+    ? `card #${id} runs straight on — no rest before it`
+    : `card #${id} has its usual rest back`;
+}
+
+// ── per-card delivery ─────────────────────────────────────
+// A profile says how a character sounds; now and then one line wants to be
+// different — quieter, faster, or spoken by the other engine altogether. The
+// socket for that has been in the document format since the beginning:
+// params_for merges a card's own params last, and chunk_hash reads the merged
+// result, so an override renames that one card's wav and touches nothing else.
+// This is the control that finally writes to it.
+//
+// Which knobs appear depends on the engine, because the two share none. The
+// four chatterbox dials do nothing to OmniVoice, and OmniVoice's speed and
+// length do nothing to chatterbox, so showing all six would be six ways to be
+// disappointed. Same reason the engine is on the card header at all: with two
+// engines in one document, "which one spoke this?" stopped being obvious.
+let DELIV=new Set();
+const ENGLABEL={chatterbox:'Chatterbox', omnivoice:'OmniVoice'};
+function enginePill(c){
+  const e=(c.effective||{}).engine||'chatterbox', own=c.params||{};
+  const custom=Object.keys(own).filter(k=>k!=='engine').length;
+  return `<span class="pill" title="${own.engine?'set on this card':'from the profile'}"
+    >${esc(ENGLABEL[e]||e)}${own.engine?'*':''}</span>`+
+    (custom?'<span class="pill warn" title="this card overrides its profile\'s delivery">custom</span>':'');
+}
+function paintCardHead(id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const host=document.querySelector('#c'+id+' .engpill');
+  if(host)host.innerHTML=enginePill(c);
+}
+// Inserted and removed as its own element rather than by rebuilding the card:
+// a rebuild would replace the node the drag listeners are bound to, and
+// re-binding them would double up on every other card in the document.
+function toggleDeliv(id){
+  const row=$('dl'+id);
+  if(row){ row.remove(); DELIV.delete(id); return; }
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  DELIV.add(id);
+  const act=document.querySelector('#c'+id+' .act');
+  if(act)act.insertAdjacentHTML('beforebegin', delivRow(c));
+}
+function repaintDeliv(id){
+  const row=$('dl'+id); if(!row)return;
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  row.outerHTML=delivRow(c);
+}
+function delivRow(c){
+  const e=c.effective||{}, p=c.params||{};
+  const eng=p.engine||e.engine||'chatterbox';
+  const k=(key,label,lo,hi,help)=>{
+    const set=p[key]!=null, v=set?p[key]:(e[key]!=null?e[key]:lo);
+    return `<span class="dv ${set?'on':''}" title="${help}">
+      <label>${label}</label>
+      <input type="range" min="${lo}" max="${hi}" step="0.05" value="${v}"
+        oninput="$('dq${key}${c.id}').textContent=(+this.value).toFixed(2)"
+        onchange="setParam(${c.id},'${key}',parseFloat(this.value))">
+      <b id="dq${key}${c.id}">${(+v).toFixed(2)}</b></span>`;
+  };
+  const knobs = eng==='omnivoice'
+    ? k('speed','speed',0,2,'0 leaves the pace to the model')+
+      k('duration','length',0,30,'aim for this many seconds — 0 for no target')
+    : k('cfg','pace',0,1,'lower is slower and more deliberate')+
+      k('exag','feeling',0,1.5,'how much colour goes into the reading')+
+      k('temp','steadiness',0.05,1.5,'higher wanders more; lower stays flat')+
+      k('rep','anti-stutter',1,2,'raise it if words repeat');
+  return `<div class="deliv" id="dl${c.id}">
+    <span class="lbl">engine</span>
+    <select onchange="setParam(${c.id},'engine',this.value)"
+      ${STATE.omnivoice?'':'disabled'}>
+      <option value="" ${!p.engine?'selected':''}>as profile — ${esc(ENGLABEL[e.engine]||'Chatterbox')}</option>
+      <option value="chatterbox" ${p.engine==='chatterbox'?'selected':''}>Chatterbox</option>
+      <option value="omnivoice" ${p.engine==='omnivoice'?'selected':''}>OmniVoice</option>
+    </select>
+    ${knobs}
+    <span style="flex:1"></span>
+    <button onclick="profileFromCard(${c.id})"
+      title="keep this sound — save it as a profile other cards can use">make profile…</button>
+    <button onclick="clearParams(${c.id})"
+      ${Object.keys(p).length?'':'disabled'} title="back to whatever the profile says">reset</button>
+  </div>`;
+}
+async function setParam(id,key,v){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const p={...(c.params||{})};
+  if(v===''||v==null||(typeof v==='number'&&isNaN(v)))delete p[key]; else p[key]=v;
+  await api('/api/chunk',{name:DOC.name,id,params:p});
+  await syncCards();
+  repaintDeliv(id); paintCardHead(id);      // the engine decides which knobs belong
+}
+async function clearParams(id){
+  await api('/api/chunk',{name:DOC.name,id,params:{}});
+  await syncCards();
+  repaintDeliv(id); paintCardHead(id);
+}
+// Tuning a card until it sounds right is how a character gets found; this is
+// how it stops being stranded on one card. The new profile is built from the
+// card's *effective* settings — its profile as amended by its own overrides —
+// and the card is then pointed at it with those overrides dropped.
+//
+// Nothing needs re-baking. The hash is made of the resolved numbers, not the
+// profile's name, so a profile that resolves to what the card was already using
+// hashes to the same wav: the card is still rendered the moment it switches.
+// `duration` is the one exception kept on the card, because a profile has no
+// field for it — it is a target length for one line, not a property of a voice.
+// Electron does not implement window.prompt: it returns straight away, so a
+// button that opened one looked broken rather than cancelled. Names are asked
+// for inline instead — which belongs next to the thing being named anyway.
+function askName(host, suggested, placeholder, onOk){
+  const old=host.querySelector('.askname'); if(old)old.remove();
+  const w=document.createElement('div');
+  w.className='askname';
+  w.innerHTML=`<input placeholder="${esc(placeholder)}" value="${esc(suggested)}">
+    <button class="pri">save</button><button>cancel</button>`;
+  host.appendChild(w);
+  const inp=w.querySelector('input'), btns=w.querySelectorAll('button');
+  const ok=()=>{ const v=inp.value.trim(); if(!v)return inp.focus(); w.remove(); onOk(v); };
+  btns[0].onclick=ok;
+  btns[1].onclick=()=>w.remove();
+  inp.onkeydown=e=>{ if(e.key==='Enter'){e.preventDefault();ok();}
+                     if(e.key==='Escape'){e.preventDefault();w.remove();} };
+  inp.focus(); inp.select();
+}
+function profileFromCard(id){
+  const row=$('dl'+id), c=DOC&&DOC.chunks.find(x=>x.id===id);
+  if(!row||!c)return;
+  askName(row,(c.profile||'Default')+' 2','gertie-manic',nm=>makeProfileFromCard(id,nm));
+}
+async function makeProfileFromCard(id,nm){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const e=c.effective||{};
+  if((STATE.profiles||{})[nm]&&
+     !confirm(`“${nm}” already exists.\n\nOverwrite it? Every card using it would `+
+              `change to these settings, and any of them already rendered would `+
+              `need re-baking.`))return;
+  const r=await api('/api/profile',{profile:nm,data:{
+    voices:[e.voice], active:0,
+    exag:e.exag, cfg:e.cfg, temp:e.temp, rep:e.rep,
+    engine:e.engine||'chatterbox', lang:e.lang||'en', speed:e.speed||0,
+    note:`from card #${id} of ${DOC.title}`}});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  const keep={};
+  if((c.params||{}).duration!=null)keep.duration=c.params.duration;
+  await api('/api/chunk',{name:DOC.name,id,profile:nm,params:keep});
+  await refresh();
+  await open_(DOC.name,true,id);          // the delivery row reopens with it
+  $('status').innerHTML=`<span class="ok">made “${esc(nm)}”</span> — card #${id} uses it now`+
+    (keep.duration!=null?', and kept its own length':'')+
+    `, still rendered. Any card can pick it from its profile menu.`;
 }
 
 async function one(id){
@@ -958,7 +1841,6 @@ function playHash(h){
 }
 function playFull(id){
   const c=DOC.chunks.find(x=>x.id===id); if(!c||!c.ready)return; playHash(c.hash); }
-function playPrev(id){ if(PREV[id]) playHash(PREV[id]); }
 async function splitAt(id){
   const t=$('t'+id), at=t.selectionStart;
   if(!at||at>=t.value.length)return alert('Put the cursor where it should split.');
@@ -976,6 +1858,7 @@ async function del(id){
   const c=DOC.chunks.find(x=>x.id===id);
   const what=c.type==='audio'?`♪ audio card — ${c.clip||'no clip chosen'}`
     :c.type==='silence'?`${c.secs==null?1:c.secs}s of silence`
+    :c.type==='voiced'?`◎ voiced — ${c.perfname||'no recording yet'}`
     :c.text.slice(0,90)+'…';
   if(!confirm(`Remove card #${id}?\n\n${what}`))return;
   await flushAll();
@@ -983,7 +1866,29 @@ async function del(id){
   await api('/api/remove',{name:DOC.name,id}); open_(DOC.name,true,id); }
 async function mute(id,on){ await flushAll();
   await api('/api/chunk',{name:DOC.name,id,mute:on}); open_(DOC.name,true,id); }
-async function setProfile(id,p){ await api('/api/chunk',{name:DOC.name,id,profile:p}); await syncCards(); }
+// Everything a profile can also say. A card override on one of these keeps
+// winning after you pick a new profile — so you choose Gertie and get
+// Gertie-except-the-bits-you-once-nudged, with nothing on screen to say so.
+// `duration` is deliberately not here: a profile has no length field, so a
+// card's length is not competing with anything and survives the switch.
+const PROFILE_KEYS=['engine','exag','cfg','temp','rep','speed'];
+async function setProfile(id,p){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id);
+  const own={...((c&&c.params)||{})};
+  const clash=Object.keys(own).filter(k=>PROFILE_KEYS.includes(k));
+  const patch={name:DOC.name,id,profile:p};
+  if(clash.length){
+    if(confirm(`This card sets its own ${clash.join(', ')}, and those would keep `+
+               `overriding “${p}”.\n\nOK to drop them and use “${p}” as it is · `+
+               `Cancel to keep them on top of it.`)){
+      clash.forEach(k=>delete own[k]);
+      patch.params=own;                  // any length override stays
+    }
+  }
+  await api('/api/chunk',patch);
+  await syncCards();
+  repaintDeliv(id); paintCardHead(id);   // the row shows the new profile's values
+}
 
 // ── audio & silence cards ─────────────────────────────────
 const fmtSecs=s=>s>=60?`${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`
@@ -1024,6 +1929,39 @@ $('clipfile').onchange=async e=>{
   await api('/api/chunk',{name:DOC.name,id,clip:j.clip});
   await refresh(); open_(DOC.name,true,id);
 };
+// ── voiced cards ──────────────────────────────────────────
+// The recording is stored under its own checksum, so importing the same file
+// twice costs nothing and importing a second take can never displace the first
+// — a card that has already rendered still points at the performance it was
+// rendered from. What you called the file rides along as a label only.
+let PERFTARGET=null;
+function pickPerf(id){ PERFTARGET=id; $('perffile').click(); }
+$('perffile').onchange=async e=>{
+  const f=e.target.files[0]; e.target.value='';
+  if(!f||PERFTARGET==null)return;
+  const id=PERFTARGET; PERFTARGET=null;
+  $('status').textContent=`importing ${f.name}…`;
+  let j;
+  try{
+    const r=await fetch('/api/take/upload?fn='+encodeURIComponent(f.name),
+      {method:'POST',body:f,headers:{'Content-Type':'application/octet-stream'}});
+    j=await r.json();
+  }catch(ex){ j={error:String(ex)}; }
+  if(j.error) return void($('status').innerHTML=`<span class="warn">${esc(j.error)}</span>`);
+  await api('/api/chunk',{name:DOC.name,id,perf:j.perf,perfname:j.perfname});
+  $('status').innerHTML=`imported “${esc(j.perfname)}” · ${fmtSecs(j.secs)} — `+
+    `press <b>render</b> to hear it in the character's voice`;
+  open_(DOC.name,true,id);
+};
+// Your own recording, not the conversion — the point of having it here is
+// checking the performance you gave before spending a render on it.
+function playPerf(id){
+  const c=DOC.chunks.find(x=>x.id===id); if(!c||!c.perf)return;
+  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
+  AUDIO=new Audio('/api/take?f='+encodeURIComponent(c.perf));
+  AUDIO.play();
+}
+
 function playClip(id){
   const c=DOC.chunks.find(x=>x.id===id); if(!c||!c.clip)return;
   if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
@@ -1039,7 +1977,7 @@ function playClip(id){
 async function insertCard(at,kind){
   await flushAll();
   await api('/api/insert',{name:DOC.name,at,kind});
-  HEIGHT={}; PREV={}; CUR=null;
+  HEIGHT={}; CUR=null;
   // Hold the card *above* the gap: it keeps its id through the renumber, so
   // everything already on screen stays where it is and the new card simply
   // appears in the space you pointed at. Inserting at the very top has no card
@@ -1063,6 +2001,7 @@ try{ CLIP=JSON.parse(localStorage.getItem('saga.card')||'null'); }catch(e){}
 const clipLabel=c=>!c?'':
    c.type==='audio'?`♪ ${c.clip||'no clip'}`
   :c.type==='silence'?`${c.secs==null?1:c.secs}s of silence`
+  :c.type==='voiced'?`◎ ${c.perfname||'no recording'}`
   :'“'+(c.text||'').replace(/\s+/g,' ').trim().slice(0,44)+((c.text||'').length>44?'…':'')+'”';
 // The paste buttons live in strips that were built before the copy happened,
 // so this paints them where they stand rather than rebuilding the stack: a
@@ -1078,10 +2017,12 @@ async function copyCard(id){
   // debounce means an edit half a second old is still only in the textarea.
   if((was.type||'speech')==='speech')await flush(id);
   const c=(DOC.chunks.find(x=>x.id===id))||was;
-  CLIP={type:c.type||'speech', mute:!!c.mute, from:`${DOC.title} #${id}`};
+  CLIP={type:c.type||'speech', mute:!!c.mute, runon:!!c.runon, from:`${DOC.title} #${id}`};
   if(CLIP.type==='audio')Object.assign(CLIP,
     {clip:c.clip||'', mode:c.mode||'full', after:c.after, fade:c.fade, gain:c.gain});
   else if(CLIP.type==='silence')CLIP.secs=c.secs;
+  else if(CLIP.type==='voiced')Object.assign(CLIP,
+    {perf:c.perf||'', perfname:c.perfname||'', profile:c.profile, seed:c.seed});
   else Object.assign(CLIP,
     {text:c.text, profile:c.profile, seed:c.seed, height:HEIGHT[id]||c.height, params:c.params});
   try{ localStorage.setItem('saga.card',JSON.stringify(CLIP)); }catch(e){}
@@ -1097,7 +2038,7 @@ async function pasteCard(at){
   await flushAll();
   const r=await api('/api/paste',{name:DOC.name,at,card:CLIP});
   if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
-  HEIGHT={}; PREV={}; CUR=null;               // as insertCard: every card is renumbered
+  HEIGHT={}; CUR=null;               // as insertCard: every card is renumbered
   await open_(DOC.name,true, at>0?at-1:{from:0,to:1});
   refresh();                                  // the episode has a card more than it did
   // "Do I have to bake this again?" is the first question a pasted card
@@ -1106,8 +2047,9 @@ async function pasteCard(at){
   // The one thing worth a warning is an audio card landing next to a clip
   // library that has no clip by that name — a card that will assemble silently.
   const c=DOC.chunks.find(x=>x.id===at), kind=c?(c.type||'speech'):'';
-  const note = kind==='speech'&&c.ready ? ' — already rendered'
+  const note = (kind==='speech'||kind==='voiced')&&c.ready ? ' — already rendered'
     : kind==='audio'&&!c.ready ? ' — <span class="warn">but no clip of that name is in this library</span>'
+    : kind==='voiced'&&!c.haveperf ? ' — <span class="warn">but that recording is not in this library</span>'
     : '';
   $('status').innerHTML=`pasted ${esc(clipLabel(CLIP))} as card #${at}${note}`;
 }
@@ -1152,7 +2094,7 @@ async function moveCard(id,to){
   if(to===id||to===id+1)return;      // dropped back where it already was
   await flushAll();
   await api('/api/move',{name:DOC.name,id,to});
-  HEIGHT={}; PREV={}; CUR=null;
+  HEIGHT={}; CUR=null;
   // Follow the card you dragged to wherever it landed — closing the gap it
   // left and scrolling off to find it are two separate annoyances. Moving it
   // down shifts every card it passed up one slot, so it lands at to-1.
@@ -1296,7 +2238,8 @@ async function assemble(){
   await flushAll(); await syncCards();
   const miss=unrendered();
   if(miss.length){
-    const list=miss.slice(0,12).map(c=>'#'+c.id+(c.type==='audio'?' (no clip)':'')).join(', ')
+    const list=miss.slice(0,12).map(c=>'#'+c.id+(c.type==='audio'?' (no clip)'
+      :c.type==='voiced'?(c.haveperf?' (voiced, not rendered)':' (no recording)'):'')).join(', ')
       +(miss.length>12?`, and ${miss.length-12} more`:'');
     if(!confirm(
       `${miss.length} live card${miss.length>1?'s have':' has'} not been rendered:\n\n${list}\n\n`+
@@ -1362,7 +2305,7 @@ async function pollJobs(){
       const s=$('s'+j.chunk);
       if(j.status==='error'){ fail(j.chunk,j.error); }
       else{
-        if(j.kind==='preview'){ PREV[j.chunk]=j.hash;
+        if(j.kind==='preview'){
           if(s)s.textContent=`previewed ${j.chars} of ${j.of} chars · ${j.seconds}s`;
           if(mine.play)playHash(j.hash); }
         else if(s)s.textContent=`rendered in ${j.seconds}s`;
@@ -1383,7 +2326,9 @@ async function pollJobs(){
   if(st.busy) POLL=setTimeout(pollJobs,1500);
 }
 pollJobs();
-refresh();
+// the profile panel used to stay empty until a document was opened, which made
+// the voices look like they belonged to the document rather than the library
+refresh().then(renderProfiles);
 paintFR();          // the header buttons before any document is open
 paintClip();        // a card copied last session is still on the clipboard
 </script>
