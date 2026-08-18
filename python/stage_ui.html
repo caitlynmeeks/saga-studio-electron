@@ -90,7 +90,8 @@ if(BC)BC.onmessage=e=>{
   const m=e.data||{};
   $('dot').classList.add('on');
   if(m.type==='hello')return;
-  if(m.type==='open'&&m.name&&m.name!==NAME){ NAME=m.name; stop(); load(); }
+  // same name included: "open" means "look again", not only "look elsewhere"
+  if(m.type==='open'&&m.name){ if(m.name!==NAME)stop(); NAME=m.name; load(); }
   if(m.type==='play')story(m.from==null?null:m.from);
   if(m.type==='pause'&&!AUDIO.paused)pause();
 };
@@ -103,9 +104,12 @@ async function load(){
     '<span class="warn">could not open “'+esc(NAME)+'”</span>'; return; }
   $('title').textContent=DOC.title;
   // show the episode's first visual as the curtain, so the room is never a
-  // black wall with a play button in front of it
-  const first=DOC.chunks.find(c=>c.type==='visual'&&c.ready);
-  show(first||null);
+  // black wall with a play button in front of it — but never stomp the wall
+  // mid-ride: a refresh while playing is about the words, not the picture
+  if(AUDIO.paused){
+    const first=DOC.chunks.find(c=>c.type==='visual'&&c.ready);
+    show(first||null);
+  }
 }
 const card=id=>DOC&&DOC.chunks.find(c=>c.id===id);
 
@@ -149,7 +153,11 @@ let TOKEN=0, VARS={}, ASKOFF=null, RUNOFF=null;
 async function story(fromId){
   const tok=++TOKEN;
   hideChooser();
-  if(!DOC)await load();
+  // Fetch the document fresh for every ride. The audio is mixed per press by
+  // the server and is always current — but captions, choices and visuals are
+  // read from THIS copy, and playing from a snapshot taken when the window
+  // opened meant an edited subtitle never reached the stage until a reload.
+  await load();
   if(!DOC||tok!==TOKEN)return;
   VARS={};
   let start=0;
