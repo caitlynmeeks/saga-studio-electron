@@ -2051,7 +2051,10 @@ function audioCard(c){
         onchange="setCard(${c.id},{gain:parseFloat(this.value)})">
       <span class="mut" id="glab${c.id}" style="font-size:11px;min-width:36px">${g}%</span>
     </div>
+    ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
     <div class="act">
+      <button id="sub${c.id}" class="${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
+        title="a caption for the sound — “(Foghorn blowing)”, “(Music)” — for viewers with the sound off">subtitle</button>
       <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
       <button onclick="del(${c.id})" style="color:var(--red)">remove</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
@@ -2569,16 +2572,22 @@ let DELIV=new Set();
 // hash: captioning a finished book re-renders nothing.
 let SUBS=new Set();
 function subRow(c){
+  // an audio card's caption is a SOUND line — "(Foghorn blowing)" — shown on
+  // its own layer and pushed aside by the next dialog caption, so chaining
+  // does not apply to it and the tick stays out of the way
+  const fx=c.type==='audio'||c.type==='silence';
   return `<div class="arow subrow" id="sb${c.id}">
     <span class="lbl">shown</span>
-    <input value="${esc(c.sub||'')}" placeholder="${c.type==='voiced'
+    <input value="${esc(c.sub||'')}" placeholder="${fx
+      ?'(Foghorn blowing) — a caption for the sound, for viewers with the sound off'
+      :c.type==='voiced'
       ?'what the stage shows while this performance plays'
       :'what the stage shows — the card’s text is what is spoken'}"
       onchange="setCard(${c.id},{sub:this.value});paintSubBtn(${c.id})">
-    <label class="mut" style="font-size:11px;white-space:nowrap"
+    ${fx?'':`<label class="mut" style="font-size:11px;white-space:nowrap"
       title="don’t clear this caption when the card ends — the next caption appends to it, one growing block across cards split for delivery. Silences and sound clips in between leave it standing.">
       <input type="checkbox" ${c.chain?'checked':''}
-        onchange="setCard(${c.id},{chain:this.checked});paintSubBtn(${c.id})"> ⇢ chain</label>
+        onchange="setCard(${c.id},{chain:this.checked});paintSubBtn(${c.id})"> ⇢ chain</label>`}
   </div>`;
 }
 function toggleSub(id){

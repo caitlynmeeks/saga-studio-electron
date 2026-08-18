@@ -31,6 +31,13 @@ padding:0 8vw;font-size:clamp(14px,2.2vw,21px);line-height:1.6;
 color:var(--bright);text-shadow:0 1px 3px #000,0 0 14px #000;
 opacity:0;transition:opacity .35s}
 #caption.on{opacity:1}
+/* the sound's own line — "(Foghorn blowing)" — a supertitle at the top so it
+   can sit over a standing dialog block without touching it */
+#fxcap{position:absolute;left:0;right:0;top:22px;text-align:center;
+padding:0 8vw;font-size:clamp(12px,1.7vw,17px);font-style:italic;
+color:#cfd6d3;text-shadow:0 1px 3px #000,0 0 12px #000;
+opacity:0;transition:opacity .3s}
+#fxcap.on{opacity:.85}
 #chooser{display:none;gap:10px;justify-content:center;flex-wrap:wrap;
 padding:14px 16px;background:var(--chrome);border-top:1px solid var(--line)}
 #chooser.on{display:flex}
@@ -50,6 +57,7 @@ border-radius:5px;padding:3px 11px;font:12px var(--mono);cursor:pointer}
 </head>
 <body>
 <div id="room">
+  <div id="fxcap"></div>
   <div id="caption"></div>
 </div>
 <div id="chooser"></div>
@@ -143,6 +151,11 @@ function caption(text,secs,from){
   if($('twk').checked&&secs>0)TYPER=SagaPlay.typeCaption(el,text,secs,from||0);
   else el.textContent=text;
 }
+function fxcap(t){
+  const el=$('fxcap');
+  if(!t)return void el.classList.remove('on');
+  el.textContent=t; el.classList.add('on');
+}
 
 // ── the story ─────────────────────────────────────────────
 // SagaPlay.walk drives everything; this page only supplies the hooks. TOKEN
@@ -208,7 +221,7 @@ function hideChooser(){ const ch=$('chooser');
 
 function ended(reason){
   $('playb').textContent='▶ play';
-  caption('');
+  caption(''); fxcap('');
   say({type:'stopped',card:MARKS[MARKI]?MARKS[MARKI].id:null});
   const ch=$('chooser');
   ch.innerHTML=(reason&&reason.startsWith('dangling:')
@@ -260,8 +273,15 @@ function tick(){
     // standing chain, or (a wordless card inside a chain) leave it alone —
     // so a silence or a music bed between chained cards holds the block.
     const dur=(i+1<MARKS.length?MARKS[i+1].at:(AUDIO.duration||t))-MARKS[i].at;
-    const r=SagaPlay.chainStep(CAPST,c,c.sub||((c.type||'speech')==='speech'?c.text:''));
-    if(!r.hold)caption(r.full,dur,r.from);
+    const kind=c.type||'speech';
+    if((kind==='audio'||kind==='silence')&&c.sub){
+      // the sound's own line: it never touches the dialog caption or a
+      // standing chain, and the next real words push it aside
+      fxcap(c.sub);
+    }else{
+      const r=SagaPlay.chainStep(CAPST,c,c.sub||(kind==='speech'?c.text:''));
+      if(!r.hold){ caption(r.full,dur,r.from); if(r.full)fxcap(''); }
+    }
   }
   say({type:'playing',card:MARKS[i].id});
 }
