@@ -2426,16 +2426,34 @@ function choiceCard(c){
    </div>`;
 }
 function optRow(c,o,i){
-  const tags=[...TAGN.keys()].sort();
+  // destinations by meaning, not memory: scenes first — every group, and
+  // picking an untagged one tags its bar in the same gesture — then the
+  // tagged cards, each with a glimpse of what it lands on
+  const groups=DOC.chunks.filter(x=>x.type==='group');
+  const gfirst=new Map(groups.map(g=>[g,(g.tags||[])[0]||null]));
+  const taken=new Set([...gfirst.values()].filter(Boolean));
+  const rest=[...TAGN.keys()].sort().filter(t=>!taken.has(t));
   const dangling=o.goto&&!TAGN.has(o.goto);
+  const hint=t=>{
+    const cc=DOC.chunks.find(x=>x.type!=='group'&&(x.tags||[]).includes(t));
+    if(!cc)return '';
+    const s=(cc.label||clipLabel(cc)).replace(/\s+/g,' ');
+    return ' · '+(s.length>26?s.slice(0,26)+'…':s);
+  };
   return `<div class="opt">
     <input class="olabel" value="${esc(o.label)}" placeholder="what the listener sees…"
       onchange="setOption(${c.id},${i},'label',this.value)">
     <span class="mut">→</span>
     <select onchange="setOption(${c.id},${i},'goto',this.value)"
-      title="the tagged card this option jumps to — empty ends the story">
+      title="where this option jumps — a scene, or any tagged card; empty ends the story">
       <option value="">(the end)</option>
-      ${tags.map(t=>`<option value="${esc(t)}" ${t===o.goto?'selected':''}>${esc(t)}</option>`).join('')}
+      ${groups.length?`<optgroup label="scenes">${groups.map(g=>{
+        const t=gfirst.get(g);
+        return `<option value="${t?esc(t):'g:'+g.id}" ${t&&t===o.goto?'selected':''
+          }>⊞ ${esc(g.gname||'group')}${t?'':' — tags itself'}</option>`;
+      }).join('')}</optgroup>`:''}
+      ${rest.length?`<optgroup label="tagged cards">${rest.map(t=>
+        `<option value="${esc(t)}" ${t===o.goto?'selected':''}>${esc(t)}${esc(hint(t))}</option>`).join('')}</optgroup>`:''}
       ${dangling?`<option value="${esc(o.goto)}" selected>${esc(o.goto)} (missing)</option>`:''}
     </select>
     ${dangling?'<span class="warn" title="no card carries this tag — the story would have nowhere to go">⚠</span>':''}
@@ -2461,8 +2479,22 @@ async function saveOptions(id,opts){
   await syncCards();
   redrawOpts(id);
 }
+// picking an untagged scene tags its bar right then — a slug of its name,
+// numbered if that slug is taken — so "jump to the cave" is one gesture
+async function tagGroup(g){
+  let t=(g.gname||'scene').toLowerCase().replace(/\s+/g,'-')
+    .replace(/[^a-z0-9_-]/g,'').slice(0,24)||'scene';
+  if(TAGN.has(t)){ let k=2; while(TAGN.has(`${t.slice(0,21)}-${k}`))k++; t=`${t.slice(0,21)}-${k}`; }
+  await saveTags(g.id,tags=>[...tags,t]);
+  return t;
+}
 async function setOption(id,i,key,v){
   const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  if(key==='goto'&&/^g:\d+$/.test(String(v))){
+    const g=DOC.chunks.find(x=>x.id===+String(v).slice(2));
+    if(!g)return;
+    v=await tagGroup(g);
+  }
   const opts=JSON.parse(JSON.stringify(c.options||[]));
   if(!opts[i])return;
   if(key==='set')opts[i].set=String(v).split(/[,\s]+/).filter(Boolean);
