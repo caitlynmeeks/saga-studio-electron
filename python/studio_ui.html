@@ -283,10 +283,15 @@ font-size:11px;color:var(--dim)}
 .vdrop.over{border-color:var(--green);color:var(--green)}
 /* A bare number box asks you to know the useful span of a parameter you have
    never seen the ends of. A slider shows you where you are inside it. */
-.prow{margin-bottom:7px}
-.plab{display:flex;font-size:11px;color:var(--dim);margin-bottom:1px}
-.plab .pv{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--fg)}
-.prow input[type=range]{width:100%}
+/* Unity-style rows: label on the left, control beside it, value at the end —
+   one line per parameter instead of a stack of three */
+.prow{display:flex;align-items:center;gap:7px;margin-bottom:5px}
+.plab{flex:0 0 38%;min-width:0;display:flex;align-items:center;font-size:11px;
+color:var(--dim);overflow:hidden;white-space:nowrap}
+.prow input[type=range]{flex:1;width:auto;min-width:0}
+.prow select,.prow input[list]{flex:1;min-width:0;width:auto}
+.pv{flex:0 0 auto;min-width:48px;text-align:right;font-variant-numeric:tabular-nums;
+color:var(--fg);font-size:11px}
 .phelp{font-size:10.5px;color:var(--faint);margin-top:1px}
 /* The cost of the edit, counted while you drag — before the save, not after */
 .pimpact{font-size:11px;margin-top:9px;min-height:15px;line-height:1.45}
@@ -826,9 +831,10 @@ function profEditor(n){
   const pfx=pr.fx||{}, fxp=pfx.plugin||'';
   const sl=(k,label,lo,hi,help)=>`
     <div class="prow">
-      <div class="plab">${label}${qm(help)}<span class="pv" id="pv_${k}">${(+pr[k]).toFixed(2)}</span></div>
+      <div class="plab">${label}${qm(help)}</div>
       <input type="range" min="${lo}" max="${hi}" step="0.05" value="${pr[k]}"
         oninput="draftLive('${k}',this.value)" onchange="draftCommit()">
+      <span class="pv" id="pv_${k}">${fmtPV(k,pr[k])}</span>
     </div>`;
   return `<div class="pedit">
     <div class="phead">
@@ -871,8 +877,8 @@ function profEditor(n){
     ${ko?`
     <div class="psec">delivery${qm('Kokoro speaks fixed presets, not cloned clips. The first letter of a preset is its language — a American · b British · e Spanish · f French · h Hindi · i Italian · j Japanese · p Portuguese · z Chinese — and the f/m after it is her/him. ef_dora for the Spanish editions.')}</div>
     <div class="prow">
-      <div class="plab">preset<span class="pv">${esc(pr.kvoice||'af_heart')}</span></div>
-      <select style="width:100%" onchange="draftSet('kvoice',this.value)">
+      <div class="plab">preset</div>
+      <select onchange="draftSet('kvoice',this.value)">
         ${(STATE.kvoices||[]).map(v=>`<option ${v===(pr.kvoice||'af_heart')?'selected':''}>${esc(v)}</option>`).join('')}
       </select>
     </div>
@@ -880,11 +886,12 @@ function profEditor(n){
     `:ov?`
     <div class="psec">delivery${qm('OmniVoice has no pace or feeling controls — language and speed are the whole surface. es for the Spanish editions.')}</div>
     <div class="prow">
-      <div class="plab">language<span class="pv">${esc(pr.lang||'en')}</span></div>
-      <input list="langlist" id="langbox" style="width:100%"
+      <div class="plab">language</div>
+      <input list="langlist" id="langbox"
         value="${esc(langName(pr.lang||'en'))}"
         placeholder="type to search — english, german, spanish…"
         onchange="setLang(this.value)">
+      <span class="pv">${esc(pr.lang||'en')}</span>
     </div>
     ${sl('speed','speed',0,2,'0 leaves it to the model; 1 is its normal pace')}
     `:`
@@ -895,11 +902,11 @@ function profEditor(n){
     ${sl('rep','anti-stutter',1,2,'raise it if words repeat')}
     `}
 
-    <div class="psec">level${qm('evens out a character who reads louder than the rest — mixed in, not rendered in, so changing it re-bakes nothing. Applies to every engine and to ◎ voiced cards.')}</div>
     <div class="prow">
-      <div class="plab">loudness<span class="pv" id="pv_gain">${Math.round(lvl)}%</span></div>
+      <div class="plab">loudness${qm('evens out a character who reads louder than the rest — mixed in, not rendered in, so changing it re-bakes nothing. Applies to every engine and to ◎ voiced cards.')}</div>
       <input type="range" min="0" max="200" step="1" value="${lvl}"
         oninput="draftLive('gain',this.value,1)" onchange="draftCommit()">
+      <span class="pv" id="pv_gain">${Math.round(lvl)}%</span>
     </div>
     <div style="display:flex;gap:5px;margin:2px 0 6px">
       <button id="fxhear" onclick="fxAudition()"
@@ -913,10 +920,10 @@ function profEditor(n){
       ${PLUGINS.map(pl=>`<option value="${esc(pl.path)}" ${pl.path===fxp?'selected':''}
         >${esc(pl.name)}</option>`).join('')}
     </select>
-    ${fxp?`<label class="mut" style="font-size:11px;display:flex;gap:5px;
-        align-items:center;margin-top:6px">
+    ${fxp?`<div style="display:flex;gap:5px;align-items:center;margin:6px 0">
+        <label class="mut" style="font-size:11px;display:flex;gap:5px;align-items:center">
         <input type="checkbox" ${pfx.enabled?'checked':''} onchange="setFxOn(this.checked)">
-        on — a shifter is never quite transparent, so off means off</label>
+        on</label>${qm('a shifter is never quite transparent, so off means off')}</div>
       ${PLUGPARAMS[fxp]
         ? PLUGPARAMS[fxp].map(d=>fxKnob(d,pfx)).join('')
         : '<div class="mut" style="font-size:11px;padding:6px 0">reading its controls…</div>'}`:''}
@@ -982,11 +989,14 @@ function confirmDiscard(){
 // A range fires oninput for every pixel of the drag. Writing the value into the
 // draft and the readout is cheap; re-rendering the panel would destroy the
 // slider under the mouse, so the rest waits for the release.
+// speed 0 means "leave it to the model", and the readout says so instead of
+// pretending 0.00 is a pace anyone chose
+const fmtPV=(k,v)=>k==='speed'&&!+v?'default':(+v).toFixed(2);
 function draftLive(k,v,pct){
   if(!DRAFT)return;
   DRAFT[k]=parseFloat(v);
   const el=$('pv_'+k);
-  if(el)el.textContent=pct?Math.round(v)+'%':(+v).toFixed(2);
+  if(el)el.textContent=pct?Math.round(v)+'%':fmtPV(k,v);
 }
 function draftCommit(){ paintProfDirty(); scheduleImpact(); }
 function draftSet(k,v,quiet){
@@ -1268,16 +1278,19 @@ function fxKnob(d,fx){
   const v=fxVal(d,fx);
   if(d.kind==='choice')
     return `<div class="prow"><div class="plab">${esc(d.label)}</div>
-      <select style="width:100%" onchange="setFxParam('${esc(d.name)}',this.value)">
+      <select onchange="setFxParam('${esc(d.name)}',this.value)">
         ${(d.values||[]).map(x=>`<option ${String(x)===String(v)?'selected':''}>${esc(x)}</option>`).join('')}
       </select></div>`;
   const step=d.step&&d.step>0?d.step:((d.max-d.min)>20?1:0.1);
+  // a unit longer than one character (semitones, …) just repeats the label;
+  // only something as terse as % earns a place beside the number
+  const u=(d.units&&d.units.length<=1)?d.units:'';
   return `<div class="prow">
-    <div class="plab">${esc(d.label)}<span class="pv" id="fxv_${esc(d.name)}"
-      >${(+v).toFixed(2).replace(/\.00$/,'')}${esc(d.units||'')}</span></div>
+    <div class="plab">${esc(d.label)}</div>
     <input type="range" min="${d.min}" max="${d.max}" step="${step}" value="${v}"
-      oninput="$('fxv_${esc(d.name)}').textContent=(+this.value).toFixed(2).replace(/\.00$/,'')+'${esc(d.units||'')}'"
-      onchange="setFxParam('${esc(d.name)}',parseFloat(this.value))"></div>`;
+      oninput="$('fxv_${esc(d.name)}').textContent=(+this.value).toFixed(2).replace(/\.00$/,'')+'${esc(u)}'"
+      onchange="setFxParam('${esc(d.name)}',parseFloat(this.value))">
+    <span class="pv" id="fxv_${esc(d.name)}">${(+v).toFixed(2).replace(/\.00$/,'')}${esc(u)}</span></div>`;
 }
 function draftFx(patch){
   if(!DRAFT)return;
