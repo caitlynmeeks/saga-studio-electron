@@ -168,6 +168,7 @@ function begin(){ $('gate').style.display='none'; story(); }
 async function story(){
   const tok=++TOKEN;
   hideChooser();
+  caption(''); fxcap('');   // the last ride's words do not open this one
   CAPST={txt:'',chain:false}; CAPQ=[]; CAPI=-1;   // a fresh ride, a fresh block
   await SagaPlay.walk(CH,{
     playRun:(from,upto)=>playChain(tok,from,upto),

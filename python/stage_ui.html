@@ -182,6 +182,7 @@ async function story(fromId){
   const tok=++TOKEN;
   PEND=fromId==null?null:fromId;
   hideChooser();
+  caption(''); fxcap('');   // the last ride's words do not open this one
   // Fetch the document fresh for every ride. The audio is mixed per press by
   // the server and is always current — but captions, choices and visuals are
   // read from THIS copy, and playing from a snapshot taken when the window
@@ -275,6 +276,7 @@ function toggle(){
 }
 function stop(){
   TOKEN++;
+  caption(''); fxcap('');
   if(RUNOFF){ const f=RUNOFF; RUNOFF=null; f(); }
   if(ASKOFF){ const f=ASKOFF; ASKOFF=null; f(); }
   AUDIO.pause(); hideChooser();
