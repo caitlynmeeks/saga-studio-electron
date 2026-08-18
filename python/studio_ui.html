@@ -820,8 +820,6 @@ function profEditor(n){
   const cnt=(STATE.profile_counts||{})[n]||0;
   const ov=(pr.engine||'chatterbox')==='omnivoice';
   const ko=(pr.engine||'chatterbox')==='kokoro';
-  const hist=(saved._history||[]);
-  const last=hist.length?hist[hist.length-1]:null;
   // range, not a bare number box: the useful span of each of these is narrow
   // and unguessable, and seeing where you are inside it is most of the answer
   const lvl=pr.gain==null?100:pr.gain;
@@ -941,12 +939,6 @@ function profEditor(n){
         <button onclick="moveCards()">move</button>
       </div>`:''}
 
-    ${last?`<div class="psec">was${qm('the previous saved settings — one step back')}</div>
-      <div class="prev">
-        <span class="mut">${esc(fmtProf(last))} · ${esc(last.at||'')}</span>
-        <button class="tiny" onclick="revertProf()">put it back</button>
-      </div>`:''}
-
     <div id="pimpact" class="pimpact"></div>
 
     <div class="pact main">
@@ -959,9 +951,6 @@ function profEditor(n){
         title="cards using it fall back to Default">delete</button>`}
     </div></div>`;
 }
-const fmtProf=p=>`pace ${(+p.cfg).toFixed(2)} · feel ${(+p.exag).toFixed(2)}`+
-  ` · steady ${(+p.temp).toFixed(2)} · anti ${(+p.rep).toFixed(2)}`+
-  ((p.voices||[])[p.active||0]?` · ${(p.voices||[])[p.active||0]}`:'');
 
 function editProfileAt(i){ editProfile(profNames()[i]); }
 function inspectProfile(n){
@@ -1144,14 +1133,16 @@ async function reallySaveProfAs(nm){
   $('status').innerHTML=`<span class="ok">created “${esc(nm)}”</span> — the cards still `+
     `use the old profile; <b>move cards</b> below brings them across`;
 }
-async function revertProf(){
-  if(!EDITING)return;
-  if(!confirm('Put the previous settings back?\n\nCards rendered under them become '+
+async function revertProf(n){
+  n=n||EDITING; if(!n)return;
+  if(!confirm(`Put “${n}” back to its previous settings?\n\nCards rendered under them become `+
     'ready again immediately — the audio was never deleted.'))return;
-  const r=await api('/api/profile/revert',{profile:EDITING});
+  const r=await api('/api/profile/revert',{profile:n});
   if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
-  DRAFT=null; IMPACT=null;
-  await refresh(); DRAFT=draftOf(EDITING); renderProfiles();
+  if(EDITING===n){ DRAFT=null; IMPACT=null; }
+  await refresh();
+  if(EDITING===n)DRAFT=draftOf(n);
+  renderProfiles();
   if(DOC)open_(DOC.name,true);
   $('status').innerHTML=`<span class="ok">restored the settings from ${esc(r.at||'earlier')}</span>`;
 }
@@ -1751,6 +1742,9 @@ function profMenu(e,i){
     {label:'rename…', disabled:isDef, run:()=>{ openCtx(e,[]);
        ctxAsk(n,'profile name','rename',t=>renameProfile(n,t)); }},
     {label:'duplicate', run:()=>duplicateProfile(n)},
+    {label:'put back the previous settings',
+     disabled:!(((STATE.profiles||{})[n]||{})._history||[]).length,
+     run:()=>revertProf(n)},
     '-',
     {label:isDef?'Default cannot be deleted':'delete…',
      danger:!isDef, disabled:isDef, run:()=>delProfile(n)},
