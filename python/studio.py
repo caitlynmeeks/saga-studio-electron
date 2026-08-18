@@ -3041,6 +3041,12 @@ class H(BaseHTTPRequestHandler):
                     mv["group"] = prevg
                 elif mv.get("group") not in (prevg, nextg):
                     mv.pop("group", None)
+                # dropped on a group's BAR rather than between members: joining
+                # was the whole point, so the neighbour rule is overruled —
+                # but only into a group that actually exists here
+                into = d.get("into")
+                if into and any(x.get("group") == into for x in ch if x is not mv):
+                    mv["group"] = into
                 for i, c in enumerate(ch):
                     c["id"] = i
                 save(doc)
@@ -3086,6 +3092,26 @@ class H(BaseHTTPRequestHandler):
                         n += 1
                 save(doc)
                 return self._send(200, {"ok": True, "cards": n})
+
+            if u.path == "/api/group_rename":
+                doc = load(d["name"])
+                old = d.get("gname")
+                new = re.sub(r"[\"'`\\<>&]", "", str(d.get("to") or "")).strip()[:60]
+                if not new:
+                    return self._send(400, {"error": "a name is needed"})
+                if not any(c.get("group") == old for c in doc["chunks"]):
+                    return self._send(404, {"error": f"no group “{old}”"})
+                if new != old and any(c.get("group") == new for c in doc["chunks"]):
+                    return self._send(400, {"error": f"“{new}” is already a group here "
+                                            f"— pick another name"})
+                snapshot(doc, f"rename group “{old}”")
+                n = 0
+                for c in doc["chunks"]:
+                    if c.get("group") == old:
+                        c["group"] = new
+                        n += 1
+                save(doc)
+                return self._send(200, {"ok": True, "gname": new, "cards": n})
 
             if u.path == "/api/move_group":
                 doc = load(d["name"])

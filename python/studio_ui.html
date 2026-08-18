@@ -153,6 +153,9 @@ color:var(--dim);white-space:nowrap}
 border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:6px;
 background:#14120d;cursor:grab;font-size:12px}
 .gbar b{color:var(--amber);font-weight:600}
+/* a group's members sit a step in, behind the group's amber rule */
+.gmem{margin-left:16px;padding-left:11px;border-left:2px solid #4a3d22}
+.gbar.hot{border-color:var(--green);border-left-color:var(--green)}
 /* .ins.gfold too: the strip's own display:flex sits later in this sheet and
    would win the specificity tie, leaving a folded group trailing a stack of
    empty twenty-pixel strips — the mystery gap under the bar */
@@ -1750,12 +1753,21 @@ function renderDoc(){
   // stay in the DOM at display:none — bindDrag counts strips by index, and a
   // missing strip would shift every drop slot after it.
   let prevG=null;
-  $('main').innerHTML=insBar(0)+DOC.chunks.map(c=>{
+  $('main').innerHTML=insBar(0)+DOC.chunks.map((c,ix)=>{
     let h='';
     const g=c.group||null;
     if(g&&g!==prevG)h+=gbar(g);
     prevG=g;
+    const nxt=DOC.chunks[ix+1], lastOf=g&&(!nxt||nxt.group!==g);
     if(g&&isGmin(g))h+=`<div class="gfold">${cardHTML(c)}</div><div class="ins gfold"></div>`;
+    else if(g){
+      // members sit behind the group's rule; the strips between them are
+      // inside the indent because dropping there joins, while the strip
+      // after the last member stays outside — that slot means "after the
+      // group", and its geometry should say so
+      h+=`<div class="gmem">${cardHTML(c)}${lastOf?'':insBar(c.id+1)}</div>`;
+      if(lastOf)h+=insBar(c.id+1);
+    }
     else h+=cardHTML(c)+insBar(c.id+1);
     return h;
   }).join('');
@@ -1771,6 +1783,23 @@ let GMIN={};
 try{ GMIN=JSON.parse(localStorage.getItem('saga.gmin')||'{}'); }catch(e){}
 const gkey=g=>(DOC?DOC.name:'')+'/'+g;
 const isGmin=g=>!!GMIN[gkey(g)];
+function groupMenu(e,g){
+  openCtx(e,[
+    {label:isGmin(g)?'unfold':'fold away', run:()=>toggleGmin(g)},
+    {label:'rename\u2026', run:()=>{ openCtx(e,[]);
+       ctxAsk(g,'group name','rename',t=>renameGroup(g,t)); }},
+    '-',
+    {label:'ungroup \u2014 the cards stay', run:()=>ungroup(g)},
+  ]);
+}
+async function renameGroup(g,to){
+  const r=await api('/api/group_rename',{name:DOC.name,gname:g,to});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  if(GMIN[gkey(g)]){ delete GMIN[gkey(g)]; GMIN[gkey(r.gname)]=1;
+    try{ localStorage.setItem('saga.gmin',JSON.stringify(GMIN)); }catch(e){} }
+  await open_(DOC.name,true);
+  $('status').innerHTML=`<span class="ok">the group is now \u201c${esc(r.gname)}\u201d</span>`;
+}
 async function toggleGmin(g){
   if(GMIN[gkey(g)])delete GMIN[gkey(g)]; else GMIN[gkey(g)]=1;
   try{ localStorage.setItem('saga.gmin',JSON.stringify(GMIN)); }catch(e){}
@@ -1788,7 +1817,9 @@ function gbar(g){
   // the name was stripped of quote/angle characters on the way in, so it can
   // sit inside these handlers without breaking out of them
   const n=DOC.chunks.filter(x=>x.group===g).length, min=isGmin(g);
-  return `<div class="gbar" data-g="${esc(g)}" draggable="true" title="drag to move the whole group"
+  return `<div class="gbar" data-g="${esc(g)}" draggable="true"
+    title="drag to move the whole group · drop a card on me and it joins · right-click for more"
+    oncontextmenu="groupMenu(event,'${esc(g)}')"
     ondragstart="groupDragStart(event,'${esc(g)}')" ondragend="groupDragEnd()">
     <button class="tiny" onclick="toggleGmin('${esc(g)}')" title="${min?'unfold':'fold away'} these cards">${min?'▸':'▾'}</button>
     <b ondblclick="toggleGmin('${esc(g)}')">${esc(g)}</b>
@@ -1820,6 +1851,17 @@ function groupDragStart(e,g){
   try{ e.dataTransfer.setData('text/plain',g); }catch(_){}
 }
 function groupDragEnd(){ DRAGGROUP=null; document.body.dataset.dropclip=''; clearMarks(); }
+async function dropIntoGroup(id,g){
+  DRAGID=null; clearMarks();
+  const first=DOC.chunks.findIndex(x=>x.group===g);
+  if(first<0||!DOC)return;
+  await flushAll();
+  const r=await api('/api/move',{name:DOC.name,id,to:first,into:g});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  HEIGHT={}; CUR=null; SEL.clear();
+  await open_(DOC.name,true);
+  $('status').innerHTML=`<span class="ok">card #${id} joined \u201c${esc(g)}\u201d</span>`;
+}
 async function dropGroupAt(at){
   SEL.clear();
   const g=DRAGGROUP; DRAGGROUP=null; clearMarks();
@@ -3140,7 +3182,7 @@ function dragStart(e,id){
   const card=$('c'+id); if(card)e.dataTransfer.setDragImage(card,30,14);
 }
 function dragEnd(){ DRAGID=null; clearMarks(); }
-function clearMarks(){ document.querySelectorAll('.dropa,.dropb,.ins.hot')
+function clearMarks(){ document.querySelectorAll('.dropa,.dropb,.ins.hot,.gbar.hot')
   .forEach(el=>el.classList.remove('dropa','dropb','hot')); }
 // Two things can be dropped on the stack: a card being moved within it, and a
 // clip arriving from the sidebar. Same targets, same marks — only the landing
@@ -3162,6 +3204,19 @@ function bindDrag(){
       if(DRAGMEDIA)return dropMediaAt(at);
       if(DRAGGROUP)return dropGroupAt(at);
       moveCard(DRAGID,at);
+    });
+  });
+  // a card dropped on a group's BAR joins the group as its first member —
+  // the bar is the group's face, and landing on it should mean "in here"
+  document.querySelectorAll('#main .gbar').forEach(el=>{
+    el.addEventListener('dragover',e=>{
+      if(DRAGID==null)return;
+      e.preventDefault(); e.dataTransfer.dropEffect='move';
+      clearMarks(); el.classList.add('hot');
+    });
+    el.addEventListener('drop',e=>{
+      if(DRAGID==null)return; e.preventDefault();
+      dropIntoGroup(DRAGID,el.dataset.g);
     });
   });
   // the gap between two cards is exactly where a drop aims, so the insert
