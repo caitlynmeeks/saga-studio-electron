@@ -801,6 +801,10 @@ function profEditor(n){
       <div class="phelp">evens out a character who reads louder than the rest —
         it is mixed in, not rendered in, so changing it re-bakes nothing</div>
     </div>
+    <div style="display:flex;gap:5px;margin:2px 0 6px">
+      <button id="fxhear" onclick="fxAudition()"
+        title="the reference clip at this loudness — through the plugin too, if it is on. Unsaved changes included.">▶ hear it</button>
+    </div>
 
     ${(PLUGINS&&PLUGINS.length)?`
     <div class="psec">effects
@@ -814,10 +818,6 @@ function profEditor(n){
         align-items:center;margin-top:6px">
         <input type="checkbox" ${pfx.enabled?'checked':''} onchange="setFxOn(this.checked)">
         on — a shifter is never quite transparent, so off means off</label>
-      <div style="display:flex;gap:5px;margin:6px 0">
-        <button id="fxhear" onclick="fxAudition()"
-          title="the reference clip through these sliders — unsaved changes included">▶ hear it</button>
-      </div>
       ${PLUGPARAMS[fxp]
         ? PLUGPARAMS[fxp].map(d=>fxKnob(d,pfx)).join('')
         : '<div class="mut" style="font-size:11px;padding:6px 0">reading its controls…</div>'}
@@ -1187,15 +1187,15 @@ async function setFxPlugin(path){
 function setFxOn(on){ draftFx({enabled:on}); }
 async function fxAudition(){
   if(!DRAFT)return;
-  const fx=DRAFT.fx||{};
-  if(!fx.plugin)return void($('status').textContent='pick a plugin first');
+  const f=DRAFT.fx||{};
+  const fx=(f.enabled&&f.plugin)?f:{};
   const v=(DRAFT.voices||[])[DRAFT.active||0];
   if(!v)return void($('status').textContent='this profile has no voice clip to play');
   const b=$('fxhear'); if(b){ b.disabled=true; b.textContent='processing…'; }
   try{
     const r=await fetch('/api/fx_preview',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({voice:v,plugin:fx.plugin,params:fx.params||{},
+      body:JSON.stringify({voice:v,plugin:fx.plugin||'',params:fx.params||{},
         gain:DRAFT.gain==null?100:DRAFT.gain})});
     if(!r.ok){
       let j={}; try{ j=await r.json(); }catch(e){}
@@ -1204,7 +1204,7 @@ async function fxAudition(){
     const url=URL.createObjectURL(await r.blob());
     if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
     AUDIO=new Audio(url); AUDIO.play();
-    $('status').textContent=`“${v}” through the sliders as they stand — save to keep them`;
+    $('status').textContent=`“${v}” as this profile sounds right now — save to keep it`;
   }finally{ if(b){ b.disabled=false; b.textContent='▶ hear it'; } }
 }
 function setFxParam(name,v){
