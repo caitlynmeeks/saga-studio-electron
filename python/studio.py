@@ -67,6 +67,8 @@ CLIPS = ROOT / "clips"
 # a second take can never overwrite the first one the way a name-based stem
 # would. Global like clips, and never deleted for the same reason.
 TAKES = ROOT / "takes"
+# plugin output, cached: see the plugins section for what goes in the name
+FX = ROOT / "fx"
 VOICES = Path(os.environ.get("SAGA_VOICES") or (HERE / "voices")).expanduser()
 PORT = int(os.environ.get("PORT", "5010"))
 # Two engines speak text here. Chatterbox is the original and the default, and
@@ -95,6 +97,7 @@ ROOT.mkdir(parents=True, exist_ok=True)
 AUDIO.mkdir(parents=True, exist_ok=True)
 CLIPS.mkdir(parents=True, exist_ok=True)
 TAKES.mkdir(parents=True, exist_ok=True)
+FX.mkdir(parents=True, exist_ok=True)
 
 # What this process actually loaded. studio_ui.html is re-read from disk on
 # every page request, so a plain reload picks up front-end changes and looks
@@ -202,7 +205,7 @@ PROFILES = ROOT / "profiles.json"
 # its name and stays valid. `lang` and `speed` mean nothing to chatterbox and are
 # only read when the engine is omnivoice.
 BASE_PROFILE = {"voices": ["caitlyn2"], "active": 0, "exag": 0.4, "cfg": 0.35,
-                "temp": 0.7, "rep": 1.2, "note": "", "gain": 100,
+                "temp": 0.7, "rep": 1.2, "note": "", "gain": 100, "fx": {},
                 "engine": "chatterbox", "lang": "en", "speed": 0}
 
 
@@ -241,7 +244,8 @@ def profile_params(name, profs=None):
             # character who reads louder than the rest costs nothing and
             # re-bakes nothing. Same place, and the same percentage, as an
             # audio card's volume.
-            "gain": prof.get("gain", 100)}
+            "gain": prof.get("gain", 100),
+            "fx": prof.get("fx") or {}}
 
 
 # How many previous settings a profile remembers. A profile is five numbers, so
@@ -821,7 +825,7 @@ def _same_profile(a, b):
     single character sounds, so it is not grounds for forking a second copy."""
     return all(a.get(k, BASE_PROFILE.get(k)) == b.get(k, BASE_PROFILE.get(k))
                for k in ("voices", "active", "exag", "cfg", "temp", "rep",
-                         "engine", "lang", "speed", "gain"))
+                         "engine", "lang", "speed", "gain", "fx"))
 
 
 def import_archive(path, mode="skip"):
@@ -1017,6 +1021,115 @@ def voice_file(name):
         if p.exists():
             return p
     raise FileNotFoundError(f"no voice '{name}'")
+
+
+# ── plugins ─────────────────────────────────────────────────────────────
+# A profile can put an audio plugin after the model — pitch, formant, a little
+# drive — which is the one lever neither engine offers, and the one that makes
+# a second character out of a single reference clip.
+#
+# Like level it runs when the timeline is mixed, never when a card is rendered,
+# so it is in no hash and changing it re-bakes nothing. Unlike level it is not a
+# multiply, so the result is cached under a name made of the wav that went in
+# and the settings that were on it — the same bargain audio/ makes, one layer
+# further down. Measured at ~125x realtime, so the first mix after a change is
+# seconds and every one after it is a file read.
+PLUGIN_DIRS = [Path("/Library/Audio/Plug-Ins/VST3"),
+               Path("/Library/Audio/Plug-Ins/Components"),
+               Path.home() / "Library/Audio/Plug-Ins/VST3",
+               Path.home() / "Library/Audio/Plug-Ins/Components"]
+_plugins = {}
+_fxlock = threading.Lock()      # one plugin instance, and it is stateful
+
+
+def plugin_ok(path):
+    """A plugin is a native binary this program is about to load and run, so the
+    path had better be one of the folders the system keeps them in rather than
+    anything a request felt like naming."""
+    try:
+        p = Path(path).resolve()
+    except (OSError, ValueError):
+        return False
+    return any(str(p).startswith(str(d.resolve()) + os.sep)
+               for d in PLUGIN_DIRS if d.is_dir())
+
+
+def plugins():
+    """Every VST3 and Audio Unit installed. A plugin usually ships as both, so
+    the second copy of a name is dropped — they are the same processor."""
+    out, seen = [], set()
+    for d in PLUGIN_DIRS:
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*.vst3")) + sorted(d.rglob("*.component")):
+            if p.stem in seen:
+                continue
+            seen.add(p.stem)
+            out.append({"name": p.stem, "path": str(p), "kind": p.suffix.lstrip(".")})
+    return sorted(out, key=lambda x: x["name"].lower())
+
+
+def get_plugin(path):
+    if path not in _plugins:
+        from pedalboard import load_plugin
+        _plugins[path] = load_plugin(path)
+    return _plugins[path]
+
+
+def plugin_params(path):
+    """What the inspector draws its sliders from — the plugin's own parameter
+    list, so no plugin needs any code of its own in here."""
+    fx = get_plugin(path)
+    out = []
+    for k, meta in fx.parameters.items():
+        d = {"name": k, "label": k.replace("_", " ")}
+        try:
+            d.update(kind="range", min=float(meta.min_value), max=float(meta.max_value),
+                     step=float(getattr(meta, "step_size", 0) or 0),
+                     units=(meta.units or "").strip(), value=float(getattr(fx, k)))
+        except (TypeError, ValueError, AttributeError):
+            # a mode switch rather than a dial: it has choices, not a range
+            vals = [str(v) for v in (getattr(meta, "valid_values", None) or [])]
+            d.update(kind="choice", values=vals, value=str(getattr(fx, k, "")))
+        out.append(d)
+    return out
+
+
+def fx_of(p):
+    """The plugin settings a card's profile asks for, or None."""
+    f = p.get("fx") or {}
+    if not f.get("enabled") or not f.get("plugin"):
+        return None
+    return f if plugin_ok(f["plugin"]) and Path(f["plugin"]).exists() else None
+
+
+def fx_render(src, f):
+    """Run one rendered card through its profile's plugin, cached."""
+    import numpy as np
+    import soundfile as sf
+    key = hashlib.sha256(json.dumps([src.stem, f.get("plugin"),
+                                     f.get("params") or {}],
+                                    sort_keys=True).encode()).hexdigest()[:20]
+    dest = FX / f"{key}.wav"
+    if dest.exists():
+        return dest
+    audio, sr = sf.read(str(src), dtype="float32")
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    with _fxlock:
+        fx = get_plugin(f["plugin"])
+        fx.reset()
+        for k, v in (f.get("params") or {}).items():
+            try:
+                setattr(fx, k, v)
+            except Exception:
+                pass            # a parameter this build of the plugin has not got
+        out = np.asarray(fx(audio, sr)).reshape(-1)
+    FX.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.stem + ".tmp.wav")
+    sf.write(str(tmp), out, sr)
+    tmp.rename(dest)
+    return dest
 
 
 def rename_voice(old, new):
@@ -1642,6 +1755,15 @@ def mixdown(doc, gap=0.35, frm=None, chime=False):
         if not f.exists():
             unready(c)
             continue
+        eff = fx_of(params_for(c, doc, profs))
+        if eff:
+            try:
+                f = fx_render(f, eff)
+            except Exception as ex:
+                # a plugin that will not load must not take the whole mix with
+                # it; the card is still there, just dry
+                print(f"plugin failed on card {c['id']}: "
+                      f"{type(ex).__name__}: {ex}", flush=True)
         w, wsr = ta.load(str(f))
         note(c)
         events.append((cursor, kind, w, wsr, c))
@@ -1829,6 +1951,21 @@ class H(BaseHTTPRequestHandler):
                 "engines": list(ENGINES), "omnivoice": ov_available(),
                 "stale_build": build_stale(),
                 "model": "warm" if _model else "cold"})
+        if u.path == "/api/plugins":
+            try:
+                import pedalboard          # noqa: F401
+            except ImportError:
+                return self._send(200, {"plugins": [], "host": False})
+            return self._send(200, {"plugins": plugins(), "host": True})
+        if u.path == "/api/plugin":
+            # loading one takes about a second the first time, then it is held
+            path = q.get("path", [""])[0]
+            if not plugin_ok(path):
+                return self._send(400, {"error": "not a plugin folder this program reads"})
+            try:
+                return self._send(200, {"params": plugin_params(path)})
+            except Exception as ex:
+                return self._send(400, {"error": f"{type(ex).__name__}: {ex}"})
         if u.path == "/api/languages":
             # fetched once and cached in the page: 646 entries is too much to
             # send with every /api/state, and it never changes while we run
@@ -2306,6 +2443,19 @@ class H(BaseHTTPRequestHandler):
                 new["lang"] = re.sub(r"[^a-zA-Z_-]", "", str(new.get("lang") or "en"))[:12] or "en"
                 new["speed"] = _num(new.get("speed"), 0.0, 0.0, 3.0)
                 new["gain"] = _num(new.get("gain"), 100.0, 0.0, 200.0)
+                f = new.get("fx")
+                if not isinstance(f, dict) or not f.get("plugin"):
+                    new["fx"] = {}
+                else:
+                    # the plugin path is checked against the folders the system
+                    # keeps plugins in: this is a binary the mixer will load
+                    pl = str(f.get("plugin") or "")
+                    new["fx"] = {"plugin": pl if plugin_ok(pl) else "",
+                                 "enabled": bool(f.get("enabled")),
+                                 "params": {str(k)[:60]: (float(v)
+                                            if isinstance(v, (int, float))
+                                            else str(v)[:60])
+                                            for k, v in (f.get("params") or {}).items()}}
                 # Remember what it was. Only when something that changes how it
                 # sounds actually moved — editing the note, or saving the same
                 # numbers again, should not push the real settings off the end

@@ -544,6 +544,7 @@ async function refresh(){
   // once per session, and only if the second engine is here to need it
   if(STATE.omnivoice&&!LANGS)
     loadLangs().then(()=>{ if(EDITING)renderProfiles(); });
+  if(!PLUGINS)loadPlugins().then(()=>{ if(EDITING)renderProfiles(); });
   $('projsort').innerHTML=sortBar('projects','recent');
   // by name, not by title: the episodes are numbered, so the slug order is the
   // reading order — which is the answer "alphabetical" is really being asked for
@@ -641,7 +642,7 @@ async function open_(name,quiet,anchor){
 // changing a setting back restores exactly what changing it took away. That is
 // worth saying out loud in the dialog: the mistake feels fatal and is not.
 let EDITING=null, DRAFT=null, IMPACT=null, IMPACTT=null;
-const SOUNDKEYS=['voices','active','cfg','exag','temp','rep','engine','lang','speed','gain'];
+const SOUNDKEYS=['voices','active','cfg','exag','temp','rep','engine','lang','speed','gain','fx'];
 const sameSound=(a,b)=>SOUNDKEYS.every(k=>JSON.stringify(a[k])===JSON.stringify(b[k]));
 // 646 languages is too many for a menu and too many to remember the codes of,
 // so the box is a plain input backed by a datalist: the browser does the
@@ -705,6 +706,8 @@ function renderProfiles(){
   const ns=$('nosel'); if(ns)ns.hidden=!!EDITING;
   if(EDITING){
     bindVoiceDrop(); paintProfDirty(); paintImpact();
+    const fp=((DRAFT||{}).fx||{}).plugin;
+    if(fp&&!PLUGPARAMS[fp])loadPlugParams(fp).then(()=>{ if(EDITING)renderProfiles(); });
     const p=$('inspect'); if(p)p.scrollTop=0;   // a new profile starts at its top
   }
 }
@@ -719,6 +722,7 @@ function profEditor(n){
   // range, not a bare number box: the useful span of each of these is narrow
   // and unguessable, and seeing where you are inside it is most of the answer
   const lvl=pr.gain==null?100:pr.gain;
+  const pfx=pr.fx||{}, fxp=pfx.plugin||'';
   const sl=(k,label,lo,hi,help)=>`
     <div class="prow">
       <div class="plab">${label}<span class="pv" id="pv_${k}">${(+pr[k]).toFixed(2)}</span></div>
@@ -794,6 +798,25 @@ function profEditor(n){
       <div class="phelp">evens out a character who reads louder than the rest —
         it is mixed in, not rendered in, so changing it re-bakes nothing</div>
     </div>
+
+    ${(PLUGINS&&PLUGINS.length)?`
+    <div class="psec">effects
+      <span class="mut" style="font-weight:400"> — after the model, on the mix</span></div>
+    <select style="width:100%" onchange="setFxPlugin(this.value)">
+      <option value="">no plugin</option>
+      ${PLUGINS.map(pl=>`<option value="${esc(pl.path)}" ${pl.path===fxp?'selected':''}
+        >${esc(pl.name)}</option>`).join('')}
+    </select>
+    ${fxp?`<label class="mut" style="font-size:11px;display:flex;gap:5px;
+        align-items:center;margin-top:6px">
+        <input type="checkbox" ${pfx.enabled?'checked':''} onchange="setFxOn(this.checked)">
+        on — a shifter is never quite transparent, so off means off</label>
+      ${PLUGPARAMS[fxp]
+        ? PLUGPARAMS[fxp].map(d=>fxKnob(d,pfx)).join('')
+        : '<div class="mut" style="font-size:11px;padding:6px 0">reading its controls…</div>'}
+      <div class="phelp">mixed in, not rendered in — costs no re-bake, and applies
+        to both engines and to ◎ voiced cards</div>`:''}
+    `:''}
 
     <input placeholder="note — when to use this" value="${esc(pr.note||'')}"
       oninput="draftSet('note',this.value,true)" style="width:100%;margin-top:7px">
@@ -1103,6 +1126,63 @@ function setSide(t){
   try{ localStorage.setItem('saga.side',t); }catch(e){}
 }
 try{ setSide(localStorage.getItem('saga.side')||'stories'); }catch(e){ setSide('stories'); }
+
+// ── plugins ───────────────────────────────────────────────
+// A profile can put an audio plugin after the model. The sliders are built from
+// whatever the plugin says its parameters are, so nothing here knows anything
+// about any particular one — and because it runs at mix time, on the rendered
+// wav, it applies to both engines and to voiced cards alike. The plugin never
+// learns which model made the audio.
+let PLUGINS=null, PLUGPARAMS={};
+async function loadPlugins(){
+  if(PLUGINS)return PLUGINS;
+  const r=await api('/api/plugins');
+  PLUGINS=(r&&r.plugins)||[];
+  return PLUGINS;
+}
+async function loadPlugParams(path){
+  if(!path)return [];
+  if(PLUGPARAMS[path])return PLUGPARAMS[path];
+  const r=await api('/api/plugin?path='+encodeURIComponent(path));
+  PLUGPARAMS[path]=(r&&r.params)||[];
+  return PLUGPARAMS[path];
+}
+const fxVal=(d,fx)=>{
+  const v=((fx||{}).params||{})[d.name];
+  return v==null?d.value:v;
+};
+function fxKnob(d,fx){
+  const v=fxVal(d,fx);
+  if(d.kind==='choice')
+    return `<div class="prow"><div class="plab">${esc(d.label)}</div>
+      <select style="width:100%" onchange="setFxParam('${esc(d.name)}',this.value)">
+        ${(d.values||[]).map(x=>`<option ${String(x)===String(v)?'selected':''}>${esc(x)}</option>`).join('')}
+      </select></div>`;
+  const step=d.step&&d.step>0?d.step:((d.max-d.min)>20?1:0.1);
+  return `<div class="prow">
+    <div class="plab">${esc(d.label)}<span class="pv" id="fxv_${esc(d.name)}"
+      >${(+v).toFixed(2).replace(/\.00$/,'')}${esc(d.units||'')}</span></div>
+    <input type="range" min="${d.min}" max="${d.max}" step="${step}" value="${v}"
+      oninput="$('fxv_${esc(d.name)}').textContent=(+this.value).toFixed(2).replace(/\.00$/,'')+'${esc(d.units||'')}'"
+      onchange="setFxParam('${esc(d.name)}',parseFloat(this.value))"></div>`;
+}
+function draftFx(patch){
+  if(!DRAFT)return;
+  DRAFT.fx={...(DRAFT.fx||{}),...patch};
+  paintProfDirty(); scheduleImpact();
+}
+async function setFxPlugin(path){
+  if(!DRAFT)return;
+  DRAFT.fx=path?{plugin:path,enabled:true,params:{}}:{};
+  if(path)await loadPlugParams(path);
+  paintProfDirty(); scheduleImpact(); renderProfiles();
+}
+function setFxOn(on){ draftFx({enabled:on}); }
+function setFxParam(name,v){
+  const params={...(((DRAFT||{}).fx||{}).params||{})};
+  params[name]=v;
+  draftFx({params});
+}
 
 // ── list sorting ──────────────────────────────────────────
 // Two orders, because they answer different questions. By name is how you find
