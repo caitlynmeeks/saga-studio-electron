@@ -25,6 +25,8 @@
       "python/studio.py",
       "python/studio_ui.html",
       "python/stage_ui.html",
+      "python/player.js",
+      "python/export_player.html",
       "python/omnivoice_server.py",
       "python/requirements.txt"
     ],

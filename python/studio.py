@@ -414,6 +414,41 @@ def _num(v, dflt, lo, hi):
         return dflt
 
 
+# The choice grammar, validated here and NEVER evaluated here. One evaluator
+# exists — in player.js, shared by the stage and the HTML export — and Python
+# only keeps garbage from reaching it. State is a flat {name: number} map;
+# flags are 0/1. A set op is `flag`, `!flag`, `coins+2`, `coins-1` or
+# `coins=5`; a condition is `flag`, `!flag` or `coins>=3` (any of == != >= <=
+# > <). Whitespace is stripped on the way in so the evaluator parses one
+# spelling. What fails the shape is dropped, never a 500 — the same posture
+# an edit's params get.
+SET_RE = re.compile(r"^(!?[a-z][a-z0-9_]{0,23}|[a-z][a-z0-9_]{0,23}[+\-=]\d{1,4})$")
+WHEN_RE = re.compile(r"^!?[a-z][a-z0-9_]{0,23}((==|!=|>=|<=|>|<)-?\d{1,4})?$")
+
+
+def clean_when(v):
+    w = re.sub(r"\s+", "", str(v or ""))
+    return w if WHEN_RE.match(w) else ""
+
+
+def clean_options(v):
+    """A choice card's options, made safe. `goto` is a tag, and gets exactly a
+    tag's sanitising; empty goto means the story ends there."""
+    out = []
+    for o in list(v or [])[:6]:
+        if not isinstance(o, dict):
+            continue
+        out.append({
+            "label": str(o.get("label") or "")[:120],
+            "goto": re.sub(r"[^a-z0-9_-]", "", str(o.get("goto") or "").lower())[:24],
+            "set": [s for s in (re.sub(r"\s+", "", str(x))
+                                for x in list(o.get("set") or [])[:8])
+                    if SET_RE.match(s)],
+            "when": clean_when(o.get("when")),
+        })
+    return out
+
+
 def clean_tags(v):
     """A card's tags, made safe. A tag is two things at once: a label you can
     read down the deck, and — for choice cards — the anchor a jump lands on.
@@ -462,6 +497,9 @@ def paste_card(src):
         c = {"id": 0, "type": "visual",
              "media": re.sub(r"[^a-z0-9_-]", "", str(src.get("media") or "")),
              "note": ""}
+    elif kind == "choice":
+        c = {"id": 0, "type": "choice", "auto": bool(src.get("auto")),
+             "options": clean_options(src.get("options")), "note": ""}
     elif kind == "voiced":
         # `perf` is a checksum this program wrote, so it is hex and nothing
         # else; `perfname` is only what to call it on screen.
@@ -499,6 +537,10 @@ def paste_card(src):
     tags = clean_tags(src.get("tags"))
     if tags:
         c["tags"] = tags
+    # so does a card's condition: "plays only when" is part of what was copied
+    w = clean_when(src.get("when"))
+    if w:
+        c["when"] = w
     return c
 
 
@@ -1783,7 +1825,7 @@ def chime_wave(sr):
     return (tone * env * 0.13).unsqueeze(0)
 
 
-def mixdown(doc, gap=0.35, frm=None, chime=False):
+def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
     """Mix every card onto one timeline; (audio, sample_rate, missing, marks) back.
 
     `marks` is where each card starts, in seconds — [{"id", "at"}, …]. The
@@ -1822,6 +1864,15 @@ def mixdown(doc, gap=0.35, frm=None, chime=False):
         i = next((k for k, c in enumerate(cards) if c["id"] == frm), None)
         if i is not None:
             cards = cards[i:]
+    # `upto` is exclusive — the timeline runs to the card before it, which is
+    # how interactive playback speaks exactly one stretch between two stops.
+    # A bed opened inside the stretch still plays out its tail (the total
+    # honours every piece), so music carries under the chooser rather than
+    # being cut off mid-bar.
+    if upto is not None:
+        j = next((k for k, c in enumerate(cards) if c["id"] == upto), None)
+        if j is not None:
+            cards = cards[:j]
     events, cursor, missing, marks = [], 0.0, 0, []
     # The rest between cards is added *after* the card that earns it, so a card
     # that runs on has to reach back and take it off again. Hence remembering
@@ -1961,16 +2012,17 @@ def assemble(name, gap=0.35):
     return wav, missing
 
 
-def preview_book(name, frm=None):
+def preview_book(name, frm=None, upto=None):
     """The same mixdown assemble() ships, parked in a dotfile the browser can
     stream — hearing the whole book should not overwrite the mp3 in out/.
     16-bit is plenty for ears and halves what goes over the wire; the Finder
     never shows the file, and export never packs out/.
 
     `frm` starts the mix at a card instead of at the top, so an edit in chapter
-    nine costs nine seconds to hear rather than the eight minutes before it."""
+    nine costs nine seconds to hear rather than the eight minutes before it.
+    `upto` stops it before a card — the stage plays choice-to-choice with it."""
     import torchaudio as ta
-    full, sr, missing, marks = mixdown(load(name), frm=frm, chime=True)
+    full, sr, missing, marks = mixdown(load(name), frm=frm, upto=upto, chime=True)
     if full is None:
         return None, 0, missing, []
     out = pdir(name) / "out"
@@ -1978,6 +2030,252 @@ def preview_book(name, frm=None):
     f = out / ".preview.wav"
     ta.save(str(f), full, sr, encoding="PCM_S", bits_per_sample=16)
     return f, round(full.shape[-1] / sr, 1), missing, marks
+
+
+# ── publishing ──────────────────────────────────────────────────────────
+# Three doors out of the studio. Assemble has always been the first: the
+# audiobook, cards top to bottom, choices ignored. The second is an animatic —
+# the same audio under the visual cards' stills, timed by the marks mixdown
+# already returns. The third is a folder of HTML that plays the story with its
+# choices, offline, from file:// — the voiced visual novel.
+
+def segment_spans(chunks):
+    """Every stretch the exported player could need, as (start, end) index
+    pairs — cut where the walk stops (choice cards, conditional cards) AND at
+    every card a goto names, because the export's audio is premixed and a jump
+    cannot land mid-file. This mirrors player.js segments() structurally; it
+    derives cut points and never evaluates a condition, so the one-evaluator
+    rule holds. Over-cutting is harmless — the runtime chains files — but an
+    uncut jump target would be a landing with no floor, so the two err the
+    same way: more cuts, never fewer."""
+    targets = set()
+    for c in chunks:
+        if c.get("type") == "choice":
+            for o in c.get("options") or []:
+                if o.get("goto"):
+                    targets.add(o["goto"])
+    brk = {0}
+    for i, c in enumerate(chunks):
+        if c.get("type") == "choice" or c.get("when"):
+            brk.update((i, i + 1))
+        elif any(t in targets for t in c.get("tags") or []):
+            brk.add(i)
+    cuts = sorted(i for i in brk if i < len(chunks))
+    out = []
+    for k, a in enumerate(cuts):
+        b = cuts[k + 1] if k + 1 < len(cuts) else len(chunks)
+        if a < b and chunks[a].get("type") != "choice":
+            out.append((a, b))
+    return out
+
+
+def story_problems(chunks):
+    """What would make the exported story lie or die, said before any work.
+
+    A goto naming a tag no card carries is a landing with no floor; a tag on
+    two cards makes every jump to it ambiguous; a runon card at a jump seam
+    would ship an audible pause inside a sentence, because premixed files
+    cannot reach back and close the gap the way one timeline can."""
+    problems = []
+    counts = {}
+    for c in chunks:
+        for t in c.get("tags") or []:
+            counts[t] = counts.get(t, 0) + 1
+    for t, n in sorted(counts.items()):
+        if n > 1:
+            problems.append(f"the tag “{t}” is on {n} cards — a jump to it is ambiguous")
+    for c in chunks:
+        if c.get("type") != "choice":
+            continue
+        for o in c.get("options") or []:
+            g = o.get("goto")
+            if g and not counts.get(g):
+                problems.append(f"card #{c['id']} jumps to “{g}” and no card carries that tag")
+    for a, _ in segment_spans(chunks):
+        if a > 0 and chunks[a].get("runon"):
+            problems.append(f"card #{chunks[a]['id']} runs on, but a jump can land there — "
+                            f"the seam would put a pause inside the sentence")
+    return problems
+
+
+STILLS = ROOT / "stills"
+
+
+def still_of(src, height):
+    """One visual as a video-ready frame: scaled and padded onto a 16:9 canvas,
+    cached content-addressed like fx/ — the first export pays, the rest read.
+    Film contributes its first frame; the animatic is a storyboard, not a cut.
+    Every frame identical in geometry, because the concat demuxer breaks on
+    mid-stream dimension changes."""
+    w, h = height * 16 // 9, height
+    key = hashlib.sha256(f"{sha256_file(src)}|{h}".encode()).hexdigest()[:20]
+    dest = STILLS / f"{key}.png"
+    if dest.exists():
+        return dest
+    STILLS.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.stem + ".tmp.png")
+    r = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+         "-frames:v", "1",
+         "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1",
+         str(tmp)], capture_output=True, text=True)
+    if r.returncode:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg could not read {src.name}: "
+                           + (r.stderr or "").strip()[-200:])
+    tmp.rename(dest)
+    return dest
+
+
+def black_frame(height):
+    """The wall before the first visual."""
+    w, h = height * 16 // 9, height
+    dest = STILLS / f"black-{h}.png"
+    if dest.exists():
+        return dest
+    STILLS.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.stem + ".tmp.png")
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", f"color=black:s={w}x{h}",
+                    "-frames:v", "1", str(tmp)], check=True)
+    tmp.rename(dest)
+    return dest
+
+
+def publish_video(name, height=1080):
+    """The animatic: every still held from its mark to the next, under the
+    exact audio assemble ships. Total length comes from the audio, never
+    -shortest — that flag would eat the final reverb tail."""
+    import torchaudio as ta
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg is needed to export video")
+    doc = load(name)
+    full, sr, missing, marks = mixdown(doc)
+    if full is None:
+        raise RuntimeError("nothing to export — render some cards first")
+    total = full.shape[-1] / sr
+    out = pdir(name) / "out"
+    out.mkdir(exist_ok=True)
+    wav = out / ".animatic.wav"
+    ta.save(str(wav), full, sr)
+    byid = {c["id"]: c for c in doc["chunks"]}
+    frames = []
+    for m in marks:
+        c = byid.get(m["id"])
+        if not c or c.get("type") != "visual" or not c.get("media"):
+            continue
+        try:
+            frames.append((m["at"], still_of(media_file(c["media"]), height)))
+        except FileNotFoundError:
+            continue                       # a visual with no file shows nothing
+    if not frames or frames[0][0] > 0:
+        frames.insert(0, (0.0, black_frame(height)))
+    lines = ["ffconcat version 1.0"]
+    for k, (at, p) in enumerate(frames):
+        end = frames[k + 1][0] if k + 1 < len(frames) else total
+        lines.append(f"file '{p}'")
+        lines.append(f"duration {max(0.04, end - at):.3f}")
+    # the demuxer ignores the last duration unless the final file repeats
+    lines.append(f"file '{frames[-1][1]}'")
+    concat = out / ".animatic.txt"
+    concat.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    mp4 = out / f"{name}.mp4"
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+             "-f", "concat", "-safe", "0", "-i", str(concat), "-i", str(wav),
+             "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+             str(mp4)], capture_output=True, text=True)
+        if r.returncode:
+            raise RuntimeError("ffmpeg failed: " + (r.stderr or "").strip()[-300:])
+    finally:
+        wav.unlink(missing_ok=True)
+        concat.unlink(missing_ok=True)
+    return mp4, missing, len(frames)
+
+
+# What the exported page needs to know about a card — never the whole card:
+# params, notes and profile names are studio business, not story business.
+def _export_chunk(c):
+    out = {"id": c["id"], "type": c.get("type", "speech")}
+    if is_speech(c):
+        out["text"] = c["text"]
+    for k in ("tags", "when", "auto", "mute", "media", "mediakind"):
+        if c.get(k):
+            out[k] = c[k]
+    if c.get("type") == "choice":
+        out["options"] = c.get("options") or []
+    return out
+
+
+def publish_html(name):
+    """The voiced visual novel: a folder that plays offline from file://.
+
+    index.html carries the runtime and the whole story graph inline — fetch is
+    blocked from file:// so nothing may be loaded, only referenced: media and
+    per-stretch mp3s sit beside it as plain relative files. The stretches are
+    segment_spans premixed through the same mixdown assemble uses, so what the
+    export says is what the studio said. Hard-fails on story_problems: a
+    broken jump is worth a message now, not a dead end in someone's browser."""
+    import torchaudio as ta
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg is needed to export the web player")
+    doc = load(name)
+    chunks = doc["chunks"]
+    problems = story_problems(chunks)
+    if problems:
+        raise RuntimeError("fix the story first: " + "; ".join(problems))
+    dest = pdir(name) / "out" / "html"
+    shutil.rmtree(dest, ignore_errors=True)
+    (dest / "audio").mkdir(parents=True)
+    (dest / "media").mkdir()
+    segs, missing_total = [], 0
+    for a, b in segment_spans(chunks):
+        frm = chunks[a]["id"]
+        upto = chunks[b]["id"] if b < len(chunks) else None
+        full, sr, missing, marks = mixdown(doc, frm=frm, upto=upto)
+        missing_total += missing
+        seg = {"from": frm, "upto": upto, "marks": marks}
+        if full is not None:
+            import tempfile as _tf
+            fn = f"s{frm:04d}.mp3"
+            with _tf.TemporaryDirectory(dir=ROOT) as td:
+                wav = Path(td) / "seg.wav"
+                ta.save(str(wav), full, sr)
+                r = subprocess.run(
+                    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                     "-i", str(wav), "-codec:a", "libmp3lame", "-b:a", "64k",
+                     "-ac", "1", str(dest / "audio" / fn)],
+                    capture_output=True, text=True)
+                if r.returncode:
+                    raise RuntimeError("ffmpeg failed: " + (r.stderr or "").strip()[-300:])
+            seg["file"] = "audio/" + fn
+            seg["secs"] = round(full.shape[-1] / sr, 2)
+        segs.append(seg)
+    media_urls = {}
+    for mn in sorted(media_of(doc)):
+        try:
+            f = media_file(mn)
+        except FileNotFoundError:
+            continue
+        shutil.copy2(f, dest / "media" / f.name)
+        media_urls[mn] = "media/" + f.name
+    graph = {"title": doc.get("title", name),
+             "chunks": [_export_chunk(c) for c in chunks],
+             "segments": segs, "media": media_urls}
+    page = (HERE / "export_player.html").read_text(encoding="utf-8")
+    page = page.replace("/*SAGA_PLAYER*/", (HERE / "player.js").read_text(encoding="utf-8"))
+    # "</" would close the script tag from inside a string — a card whose
+    # prose mentions "</script>" must not be able to end the player early
+    page = page.replace("\"/*SAGA_GRAPH*/\"",
+                        json.dumps(graph, ensure_ascii=False).replace("</", "<\\/"))
+    (dest / "index.html").write_text(page, encoding="utf-8")
+    zip_path = pdir(name) / "out" / f"{name}-web"
+    Path(str(zip_path) + ".zip").unlink(missing_ok=True)
+    made = shutil.make_archive(str(zip_path), "zip", root_dir=dest.parent, base_dir="html")
+    return Path(made), len(segs), missing_total
 
 
 # ── the discuss window ──────────────────────────────────────────────────
@@ -2061,6 +2359,11 @@ class H(BaseHTTPRequestHandler):
             # choice cards — the chooser. Read from disk per request like the
             # editor page, so a reload picks up front-end changes.
             return self._send(200, (HERE / "stage_ui.html").read_bytes(), "text/html; charset=utf-8")
+        if u.path == "/player.js":
+            # the choice grammar's one evaluator, shared by the stage and the
+            # HTML export — see the file's own preamble for why it is alone
+            return self._send(200, (HERE / "player.js").read_bytes(),
+                              "text/javascript; charset=utf-8")
         if u.path == "/api/state":
             pcounts, ccounts, mcounts = library_counts()
             return self._send(200, {
@@ -2143,6 +2446,10 @@ class H(BaseHTTPRequestHandler):
                         f = None
                     c["ready"] = f is not None
                     c["mediakind"] = media_kind(f) if f else ""
+                elif c["type"] == "choice":
+                    c["ready"] = True          # nothing to render, ever
+                    c.setdefault("options", [])
+                    c.setdefault("auto", False)
                 else:                          # silence has nothing to render
                     c["ready"] = True
             return self._send(200, doc)
@@ -2240,6 +2547,18 @@ class H(BaseHTTPRequestHandler):
             if not f.exists():
                 return self._send(404, b"", "text/plain")
             return self._send(200, f.read_bytes(), "audio/mpeg")
+        if u.path == "/api/download_video":
+            nm = q.get("name", [""])[0]
+            f = pdir(nm) / "out" / f"{pdir(nm).name}.mp4"
+            if not f.exists():
+                return self._send(404, b"", "text/plain")
+            return self._send_file(f, "video/mp4", f.name)
+        if u.path == "/api/download_web":
+            nm = q.get("name", [""])[0]
+            f = pdir(nm) / "out" / f"{pdir(nm).name}-web.zip"
+            if not f.exists():
+                return self._send(404, b"", "text/plain")
+            return self._send_file(f, "application/zip", f.name)
 
         if u.path in ("/api/export", "/api/export_plan"):
             names = ([p["name"] for p in projects() if not p.get("broken")]
@@ -2516,7 +2835,10 @@ class H(BaseHTTPRequestHandler):
         # impact scans every project in the library to count cards, so it is
         # slow and read-only — exactly the shape that must not hold the lock
         lock = None if u.path in ("/api/chat", "/api/assemble", "/api/book_preview",
-                                  "/api/reveal", "/api/profile/impact") else _docmut
+                                  "/api/reveal", "/api/profile/impact",
+                                  # slow and read-only, the same shape as
+                                  # assemble — they must not block typing
+                                  "/api/publish_video", "/api/publish_html") else _docmut
         if lock:
             lock.acquire()
         try:
@@ -2535,6 +2857,14 @@ class H(BaseHTTPRequestHandler):
                             c["note"] = d["note"]
                         if "tags" in d:
                             c["tags"] = clean_tags(d["tags"])
+                        if "when" in d:        # plays only when this holds
+                            c["when"] = clean_when(d["when"])
+                        # choice-card fields, validated against the grammar —
+                        # the shape discipline params get, for the same reason
+                        if "options" in d:
+                            c["options"] = clean_options(d["options"])
+                        if "auto" in d:
+                            c["auto"] = bool(d["auto"])
                         if "profile" in d:
                             c["profile"] = d["profile"]
                         if "mute" in d:
@@ -2600,6 +2930,13 @@ class H(BaseHTTPRequestHandler):
                     c = {"id": 0, "type": "silence", "secs": 1.0, "note": ""}
                 elif kind == "visual":
                     c = {"id": 0, "type": "visual", "media": "", "note": ""}
+                elif kind == "choice":
+                    # two blank options, because a choice is usually a fork —
+                    # and a chooser with one button is a button
+                    c = {"id": 0, "type": "choice", "auto": False,
+                         "options": [{"label": "", "goto": "", "set": [], "when": ""},
+                                     {"label": "", "goto": "", "set": [], "when": ""}],
+                         "note": ""}
                 elif kind == "voiced":
                     c = {"id": 0, "type": "voiced", "perf": "", "perfname": "",
                          "note": ""}
@@ -2953,10 +3290,28 @@ class H(BaseHTTPRequestHandler):
                 f, missing = assemble(d["name"])
                 return self._send(200, {"ok": bool(f), "file": str(f) if f else None,
                                         "missing": missing})
+            if u.path == "/api/publish_video":
+                try:
+                    f, missing, frames = publish_video(
+                        d["name"], int(_num(d.get("height"), 1080, 240, 2160)))
+                except RuntimeError as ex:
+                    return self._send(400, {"error": str(ex)})
+                return self._send(200, {"ok": True, "file": str(f),
+                                        "bytes": f.stat().st_size,
+                                        "missing": missing, "frames": frames})
+            if u.path == "/api/publish_html":
+                try:
+                    f, nsegs, missing = publish_html(d["name"])
+                except RuntimeError as ex:
+                    return self._send(400, {"error": str(ex)})
+                return self._send(200, {"ok": True, "file": str(f),
+                                        "bytes": f.stat().st_size,
+                                        "segments": nsegs, "missing": missing})
             if u.path == "/api/book_preview":
-                frm = d.get("from")
+                frm, upto = d.get("from"), d.get("upto")
                 f, secs, missing, marks = preview_book(
-                    d["name"], None if frm is None else int(frm))
+                    d["name"], None if frm is None else int(frm),
+                    None if upto is None else int(upto))
                 return self._send(200, {"ok": bool(f), "secs": secs,
                                         "missing": missing, "from": frm,
                                         "marks": marks})

@@ -35,7 +35,8 @@ background:none;color:var(--dim);padding:3px 9px 5px;font-size:11.5px}
 aside .pane{overflow-y:auto;padding:12px;min-height:0;display:none}
 body[data-side=stories] #sideStories,
 body[data-side=voices] #sideVoices,
-body[data-side=clips] #sideClips{display:block}
+body[data-side=clips] #sideClips,
+body[data-side=publish] #sidePublish{display:block}
 /* The right column is an inspector: what it shows belongs to whatever is
    selected, and it is wider than the sidebar, which the profile editor had
    outgrown. Discuss shares it as a second tab rather than a second column —
@@ -136,6 +137,13 @@ color:var(--dim);white-space:nowrap}
 .tag i:hover{color:var(--red)}
 .tag.dup{color:var(--amber);border-color:var(--amber)}
 .tagin{width:92px;font-size:11px;padding:0 6px;border-radius:99px}
+.tag.whenc{color:var(--amber);border-color:#4a3d22;cursor:pointer}
+/* a choice card's option rows: what the listener sees, where it goes, what it
+   sets, and when it is offered at all */
+.opt{display:flex;gap:6px;align-items:center;padding:5px 9px;border-bottom:1px solid var(--line)}
+.opt .olabel{flex:2;min-width:90px}
+.opt .oscript{flex:1;min-width:70px;font-size:11px;color:var(--dim)}
+.opt select{max-width:150px;font-size:11px}
 button.tiny{padding:0 5px;font-size:12px;line-height:17px;border-color:transparent;color:var(--faint)}
 .proj:hover button.tiny{border-color:var(--line)}
 /* same bargain in a card header: invisible until the card is under the mouse,
@@ -293,6 +301,7 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
    <button id="sbStories" onclick="setSide('stories')">stories</button>
    <button id="sbVoices" onclick="setSide('voices')">voices</button>
    <button id="sbClips" onclick="setSide('clips')">media</button>
+   <button id="sbPublish" onclick="setSide('publish')">publish</button>
  </div>
  <div class="pane" id="sideStories">
   <h2>documents</h2>
@@ -351,6 +360,11 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
   </div>
   <input type="file" id="mediafile" hidden
     accept="image/*,video/*,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov">
+ </div>
+
+ <div class="pane" id="sidePublish">
+  <h2>publish</h2>
+  <div id="pubwrap"></div>
  </div>
 </aside>
 
@@ -567,6 +581,7 @@ async function refresh(){
   $('model').textContent='model: '+STATE.model;
   renderProfileList();       // counts move as cards do; the editor is left alone
   if(document.body.dataset.side==='clips'){ renderClips(); renderMedia(); }
+  if(document.body.dataset.side==='publish')renderPublish();
   paintStale();
   // once per session, and only if the second engine is here to need it
   if(STATE.omnivoice&&!LANGS)
@@ -654,6 +669,7 @@ async function open_(name,quiet,anchor){
   keepPlace(an,was);          // after fitAll: the heights must be final first
   syncBookBtn();
   if(!quiet)refresh();
+  if(document.body.dataset.side==='publish')renderPublish();
   const rd=DOC.chunks.filter(c=>c.ready).length;
   $('dl').hidden=rd<DOC.chunks.length; $('dl').href='/api/download?name='+encodeURIComponent(name);
 }
@@ -1153,7 +1169,7 @@ function paintStale(){
 }
 
 // ── the sidebar's three tabs ──────────────────────────────
-const SIDES=['stories','voices','clips'];
+const SIDES=['stories','voices','clips','publish'];
 function setSide(t){
   if(!SIDES.includes(t))t='stories';
   document.body.dataset.side=t;
@@ -1164,6 +1180,7 @@ function setSide(t){
   // Guarded on STATE: this runs once at parse time to restore the last tab,
   // and renderClips leans on helpers declared further down the file.
   if(t==='clips'&&STATE.clips){ renderClips(); renderMedia(); }
+  if(t==='publish'&&STATE.projects)renderPublish();
   try{ localStorage.setItem('saga.side',t); }catch(e){}
 }
 try{ setSide(localStorage.getItem('saga.side')||'stories'); }catch(e){ setSide('stories'); }
@@ -1471,6 +1488,69 @@ $('mediafile').onchange=async e=>{
   if(id!=null&&DOC)open_(DOC.name,true,id);
 };
 
+// ── publish ───────────────────────────────────────────────
+// Three doors out of the studio, all working on the open episode. The
+// audiobook is assemble as it has always been; the animatic is the same audio
+// under the visual cards' stills; the web story is a folder of HTML that
+// plays offline, choices and all.
+function renderPublish(){
+  const host=$('pubwrap'); if(!host)return;
+  if(!DOC){ host.innerHTML='<span class="mut" style="font-size:12px">open an '+
+    'episode first — publishing works on the one that is open</span>'; return; }
+  const nch=DOC.chunks.filter(c=>c.type==='choice').length;
+  const nvis=DOC.chunks.filter(c=>c.type==='visual').length;
+  const miss=unrendered().length;
+  host.innerHTML=`
+    <div class="mut" style="font-size:12px;margin-bottom:10px">“${esc(DOC.title)}”${
+      miss?` — <span class="warn">${miss} card${miss===1?'':'s'} not rendered</span>`
+          :' — all rendered'}</div>
+    <h2>audiobook</h2>
+    <div class="mut" style="font-size:11px">Cards top to bottom, choices walked
+      straight past. The mp3 lands in out/.</div>
+    <button onclick="assemble()" style="margin-top:6px">assemble mp3</button>
+    <h2 style="margin-top:16px">animatic video</h2>
+    <div class="mut" style="font-size:11px">${nvis
+      ?nvis+' visual'+(nvis===1?'':'s')+' as stills under the audiobook’s audio; film contributes its first frame.'
+      :'No visual cards yet — the film would be a black screen with a soundtrack.'}</div>
+    <div style="display:flex;gap:5px;margin-top:6px;align-items:center">
+      <select id="pubheight"><option value="720">720p</option>
+        <option value="1080" selected>1080p</option></select>
+      <button id="pubvid" onclick="publishVideo()">export video</button>
+    </div>
+    <h2 style="margin-top:16px">web story</h2>
+    <div class="mut" style="font-size:11px">A folder of HTML that plays offline —
+      visuals, captions${nch?', and its '+nch+' choice'+(nch===1?'':'s'):''}.
+      Unzip anywhere, open index.html.</div>
+    <button id="pubweb" onclick="publishWeb()" style="margin-top:6px">export web story</button>
+    <div id="pubmsg" class="mut" style="font-size:11px;margin-top:8px"></div>`;
+}
+async function publishVideo(){
+  if(!DOC)return;
+  const b=$('pubvid'); b.classList.add('busy'); b.disabled=true;
+  $('pubmsg').textContent='mixing and encoding — a long episode takes a minute…';
+  const r=await api('/api/publish_video',{name:DOC.name,height:+$('pubheight').value});
+  b.classList.remove('busy'); b.disabled=false;
+  if(r.error)return void($('pubmsg').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  $('pubmsg').innerHTML=`<span class="ok">done</span> — ${r.frames} still${
+    r.frames===1?'':'s'}, ${size(r.bytes)}${r.missing
+      ?`, <span class="warn">${r.missing} unrendered card${r.missing===1?'':'s'} skipped</span>`:''}
+    · <a href="/api/download_video?name=${encodeURIComponent(DOC.name)}">download</a>
+    · <a href="#" onclick="revealOut();return false">show in Finder</a>`;
+}
+async function publishWeb(){
+  if(!DOC)return;
+  const b=$('pubweb'); b.classList.add('busy'); b.disabled=true;
+  $('pubmsg').textContent='mixing every stretch and packing the folder…';
+  const r=await api('/api/publish_html',{name:DOC.name});
+  b.classList.remove('busy'); b.disabled=false;
+  if(r.error)return void($('pubmsg').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  $('pubmsg').innerHTML=`<span class="ok">done</span> — ${r.segments} stretch${
+    r.segments===1?'':'es'} of audio, ${size(r.bytes)} zipped${r.missing
+      ?`, <span class="warn">${r.missing} unrendered card${r.missing===1?'':'s'} skipped</span>`:''}
+    · <a href="/api/download_web?name=${encodeURIComponent(DOC.name)}">download</a>
+    · <a href="#" onclick="revealOut();return false">show in Finder</a>`;
+}
+
 // ── right-click menus ─────────────────────────────────────
 // One element, built where the pointer is and thrown away after. Items carry
 // their own closures, so nothing has to be encoded into an HTML attribute and
@@ -1625,6 +1705,7 @@ const insBar=at=>`<div class="ins">
     <button onclick="insertCard(${at},'voiced')" title="insert a card spoken by you, in a character's voice">+ ◎ voiced</button>
     <button onclick="insertCard(${at},'audio')" title="insert a music / sound-effect card here">+ ♪ audio</button>
     <button onclick="insertCard(${at},'visual')" title="insert a picture or film — the stage shows it from here until the next visual">+ ⛶ visual</button>
+    <button onclick="insertCard(${at},'choice')" title="insert a choice — the stage stops here and asks; the audiobook walks straight past">+ ⑂ choice</button>
     <button onclick="insertCard(${at},'silence')" title="insert a timed pause here">+ silence</button>
   </div>`;
 const grip=id=>`<span class="grip" draggable="true" ondragstart="dragStart(event,${id})"
@@ -1647,8 +1728,13 @@ const tagsUi=c=>`<span class="tags" id="tg${c.id}">${(c.tags||[]).map(t=>
     `<span class="tag${(TAGN.get(t)||0)>1?' dup':''}"${(TAGN.get(t)||0)>1
       ?' title="this tag is on more than one card — a jump lands on the first"':''
     }>${esc(t)}<i onclick="rmTag(${c.id},'${esc(t)}')" title="remove this tag">×</i></span>`).join('')
+  }${c.when?`<span class="tag whenc" onclick="editWhen(event,${c.id})"
+    title="plays only when ${esc(c.when)} holds — click to edit">?${esc(c.when)
+    }<i onclick="event.stopPropagation();saveWhen(${c.id},'')" title="always play it">×</i></span>`:''
   }<button class="tiny" onclick="addTag(event,${c.id})"
-    title="tag this card — a label, and somewhere a choice can jump to">+tag</button></span>`;
+    title="tag this card — a label, and somewhere a choice can jump to">+tag</button>${
+  c.when?'':`<button class="tiny" onclick="editWhen(event,${c.id})"
+    title="play this card only when a condition holds — brave, !met_gertie, coins>=3">+when</button>`}</span>`;
 function addTag(ev,id){
   const host=ev.target.parentElement;
   if(host.querySelector('.tagin'))return;
@@ -1674,6 +1760,34 @@ async function saveTags(id,fn){
 function paintTags(){
   tagCounts();      // a removal elsewhere can clear another chip's dup warning
   (DOC?DOC.chunks:[]).forEach(c=>{ const el=$('tg'+c.id); if(el)el.outerHTML=tagsUi(c); });
+}
+// ── a card's condition ────────────────────────────────────
+// "plays only when" — the other half of what a choice's set ops are for. The
+// grammar's evaluator lives in player.js alone; this only edits the string,
+// and the server drops what fails the shape.
+function editWhen(ev,id){
+  const host=ev.target.closest('.tags');
+  if(!host||host.querySelector('.tagin'))return;
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const inp=document.createElement('input');
+  inp.className='tagin'; inp.placeholder='coins>=3'; inp.value=c.when||'';
+  inp.style.width='110px';
+  host.appendChild(inp);
+  let done=false;
+  const fin=(v,keep)=>{ if(done)return; done=true; inp.remove(); if(keep)saveWhen(id,v); };
+  inp.onkeydown=e=>{ if(e.key==='Enter'){e.preventDefault();fin(inp.value,true)}
+                     if(e.key==='Escape'){e.preventDefault();fin('',false)} };
+  inp.onblur=()=>fin(inp.value,true);
+  inp.focus(); inp.select();
+}
+async function saveWhen(id,v){
+  await api('/api/chunk',{name:DOC.name,id,when:v});
+  await syncCards();
+  const now=(DOC.chunks.find(x=>x.id===id)||{}).when||'';
+  if(v.replace(/\s+/g,'')&&!now)
+    $('status').innerHTML='<span class="warn">that condition failed the grammar</span>'+
+      ' — try <b>brave</b>, <b>!met_gertie</b> or <b>coins&gt;=3</b>';
+  paintTags();
 }
 
 function speechCard(c){return `
@@ -1902,6 +2016,108 @@ function visualCard(c){
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
+}
+
+// Where interactive playback stops and asks. Each option is four things: what
+// the listener sees, the tag it jumps to (empty = the end), the flags it sets,
+// and the condition under which it is offered at all. `auto` skips the chooser
+// and takes the first option whose condition passes — if/else and goto in one
+// card. The audiobook walks straight past all of it.
+function choiceCard(c){
+  const opts=c.options||[];
+  return `
+   <div class="chunk ${CUR===c.id?'cur':''}" id="c${c.id}"
+     onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
+    <div class="top">
+      ${grip(c.id)}
+      <span class="dot ready"></span>
+      <span>#${c.id}</span>
+      <span class="pill">⑂ choice</span>
+      <label class="mut" style="font-size:11px"
+        title="no chooser: the first option whose condition passes is taken silently — if/else in one card">
+        <input type="checkbox" ${c.auto?'checked':''} onchange="setAuto(${c.id},this.checked)"> auto</label>
+      ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${tagsUi(c)}
+      <span style="flex:1"></span>
+      ${copyBtn(c.id)}
+    </div>
+    <div id="op${c.id}">${opts.map((o,i)=>optRow(c,o,i)).join('')}</div>
+    <div class="act">
+      <button onclick="addOption(${c.id})">+ option</button>
+      <span class="mut" id="ah${c.id}" style="font-size:11px">${
+        c.auto?'first passing option is taken silently':'the stage stops here and asks'}</span>
+      <span style="flex:1"></span>
+      <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
+      <button onclick="del(${c.id})" style="color:var(--red)">remove</button>
+      <span class="mut" id="s${c.id}" style="font-size:11px"></span>
+    </div>
+   </div>`;
+}
+function optRow(c,o,i){
+  const tags=[...TAGN.keys()].sort();
+  const dangling=o.goto&&!TAGN.has(o.goto);
+  return `<div class="opt">
+    <input class="olabel" value="${esc(o.label)}" placeholder="what the listener sees…"
+      onchange="setOption(${c.id},${i},'label',this.value)">
+    <span class="mut">→</span>
+    <select onchange="setOption(${c.id},${i},'goto',this.value)"
+      title="the tagged card this option jumps to — empty ends the story">
+      <option value="">(the end)</option>
+      ${tags.map(t=>`<option value="${esc(t)}" ${t===o.goto?'selected':''}>${esc(t)}</option>`).join('')}
+      ${dangling?`<option value="${esc(o.goto)}" selected>${esc(o.goto)} (missing)</option>`:''}
+    </select>
+    ${dangling?'<span class="warn" title="no card carries this tag — the story would have nowhere to go">⚠</span>':''}
+    <input class="oscript" value="${esc((o.set||[]).join(' '))}" placeholder="set: coins+1"
+      title="flags to set when this is chosen — brave, !met_gertie, coins+1, coins=5"
+      onchange="setOption(${c.id},${i},'set',this.value)">
+    <input class="oscript" value="${esc(o.when||'')}" placeholder="when: coins>=3"
+      title="offer this option only when the condition holds — brave, !met_gertie, coins>=3"
+      onchange="setOption(${c.id},${i},'when',this.value)">
+    <button class="tiny" onclick="rmOption(${c.id},${i})" title="remove this option">×</button>
+  </div>`;
+}
+// Option edits patch the rows in place rather than rebuilding the card — the
+// wrapper div carries no listeners, so no drag binding is disturbed. After a
+// save the row is repainted from what the server kept, which is how an op
+// that failed the grammar visibly disappears instead of silently not working.
+function redrawOpts(id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id), el=$('op'+id);
+  if(c&&el)el.innerHTML=(c.options||[]).map((o,i)=>optRow(c,o,i)).join('');
+}
+async function saveOptions(id,opts){
+  await api('/api/chunk',{name:DOC.name,id,options:opts});
+  await syncCards();
+  redrawOpts(id);
+}
+async function setOption(id,i,key,v){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const opts=JSON.parse(JSON.stringify(c.options||[]));
+  if(!opts[i])return;
+  if(key==='set')opts[i].set=String(v).split(/[,\s]+/).filter(Boolean);
+  else opts[i][key]=v;
+  await saveOptions(id,opts);
+  const kept=((DOC.chunks.find(x=>x.id===id)||{}).options||[])[i]||{};
+  if((key==='set'&&(kept.set||[]).join(' ')!==opts[i].set.join(' '))||
+     (key==='when'&&(kept.when||'')!==String(v).replace(/\s+/g,'')))
+    $('status').innerHTML='<span class="warn">part of that failed the grammar and was dropped</span>'+
+      ' — ops are <b>brave</b>, <b>!met_gertie</b>, <b>coins+1</b>, <b>coins=5</b>;'+
+      ' conditions add <b>coins&gt;=3</b>';
+}
+async function addOption(id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  await saveOptions(id,[...(c.options||[]),{label:'',goto:'',set:[],when:''}]);
+}
+async function rmOption(id,i){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const opts=JSON.parse(JSON.stringify(c.options||[])); opts.splice(i,1);
+  await saveOptions(id,opts);
+}
+async function setAuto(id,on){
+  await api('/api/chunk',{name:DOC.name,id,auto:on});
+  await syncCards();
+  const ah=$('ah'+id);
+  if(ah)ah.textContent=on?'first passing option is taken silently'
+                         :'the stage stops here and asks';
 }
 
 // Cards fit their text by default — no card should hide a line you are trying

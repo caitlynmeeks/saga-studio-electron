@@ -62,6 +62,7 @@ border-radius:5px;padding:3px 11px;font:12px var(--mono);cursor:pointer}
   <button onclick="playFrom(null)" title="back to the top">⟲ from start</button>
   <span id="dot" title="editor connection"></span>
 </div>
+<script src="/player.js"></script>
 <script>
 const $=i=>document.getElementById(i);
 const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -71,26 +72,24 @@ async function api(p,b){const r=await fetch(p,b?{method:'POST',body:JSON.stringi
 const qs=new URLSearchParams(location.search);
 let NAME=qs.get('name')||'';
 let DOC=null;              // the open episode, as /api/doc tells it
-let MARKS=[], MARKI=-1;    // card start times of the playing mix
+let MARKS=[], MARKI=-1;    // card start times of the playing stretch
 let SHOWN=null;            // the visual currently on the room's wall
 
 // One audio element for the life of the page. The first .play() lands inside
 // a click, which unlocks it; after that, swapping src keeps working — the
 // pattern that survives autoplay policy everywhere, including iOS.
 const AUDIO=new Audio();
-AUDIO.addEventListener('ended',()=>stopped());
-AUDIO.addEventListener('pause',()=>{ if(!AUDIO.ended)stopped(); });
 AUDIO.addEventListener('timeupdate',tick);
 
 const BC='BroadcastChannel' in window?new BroadcastChannel('saga-stage'):null;
 const say=m=>{ if(BC)BC.postMessage({...m,name:NAME}); };
 if(BC)BC.onmessage=e=>{
   const m=e.data||{};
-  if(m.type==='hello'){ $('dot').classList.add('on'); return; }
   $('dot').classList.add('on');
-  if(m.type==='open'&&m.name&&m.name!==NAME){ NAME=m.name; load(); }
-  if(m.type==='play')playFrom(m.from==null?null:m.from);
-  if(m.type==='pause'&&!AUDIO.paused)AUDIO.pause();
+  if(m.type==='hello')return;
+  if(m.type==='open'&&m.name&&m.name!==NAME){ NAME=m.name; stop(); load(); }
+  if(m.type==='play')story(m.from==null?null:m.from);
+  if(m.type==='pause'&&!AUDIO.paused)pause();
 };
 say({type:'hello'});
 
@@ -120,7 +119,7 @@ function show(c){
     el.src=url; el.muted=true; el.playsInline=true;
     el.play().catch(()=>{});      // muted film is exempt from autoplay policy
     // no loop: it plays once and holds its last frame — the soundtrack is
-    // the cards, and a loop would turn a establishing shot into a gif
+    // the cards, and a loop would turn an establishing shot into a gif
   }else{
     el=document.createElement('img');
     el.src=url;
@@ -134,33 +133,95 @@ function caption(text){
   else el.classList.remove('on');
 }
 
-// ── playback ──────────────────────────────────────────────
-async function playFrom(from){
-  if(!NAME)return;
+// ── the story ─────────────────────────────────────────────
+// SagaPlay.walk drives everything; this page only supplies the hooks. TOKEN
+// abandons a walk the moment a newer one starts — the old walk's pending
+// promises see a stale token and resolve false, and the engine lets go.
+let TOKEN=0, VARS={}, ASKOFF=null, RUNOFF=null;
+
+async function story(fromId){
+  const tok=++TOKEN;
+  hideChooser();
   if(!DOC)await load();
-  if(!DOC)return;
-  $('playb').textContent='…';
-  const r=await api('/api/book_preview',{name:NAME,from});
-  if(!r.ok){ $('playb').textContent='▶ play';
-    $('title').innerHTML='<span class="warn">nothing to play yet — render some cards first</span>';
-    return; }
-  MARKS=r.marks||[]; MARKI=-1;
-  AUDIO.src='/api/book_audio?name='+encodeURIComponent(NAME)+'&t='+Date.now();
-  AUDIO.play();
-  $('playb').textContent='⏸ pause';
+  if(!DOC||tok!==TOKEN)return;
+  VARS={};
+  let start=0;
+  if(fromId!=null){ const k=DOC.chunks.findIndex(c=>c.id===fromId); if(k>=0)start=k; }
+  await SagaPlay.walk(DOC.chunks,{
+    playRun:(from,upto)=>playRun(tok,from,upto),
+    ask:opts=>ask(tok,opts),
+    onEnd:reason=>{ if(tok===TOKEN)ended(reason); },
+  },VARS,start);
+}
+
+function playRun(tok,from,upto){
+  return new Promise(res=>{
+    (async()=>{
+      if(tok!==TOKEN)return res(false);
+      const r=await api('/api/book_preview',{name:NAME,from,upto});
+      if(tok!==TOKEN)return res(false);
+      // an empty stretch — nothing renderable between two stops — is not a
+      // reason to halt the story; the walk simply continues past it
+      if(!r.ok)return res(true);
+      MARKS=r.marks||[]; MARKI=-1;
+      RUNOFF=()=>res(false);
+      AUDIO.onended=()=>{ RUNOFF=null; res(tok===TOKEN); };
+      AUDIO.src='/api/book_audio?name='+encodeURIComponent(NAME)+'&t='+Date.now();
+      AUDIO.play().catch(()=>{ RUNOFF=null; res(false); });
+      $('playb').textContent='⏸ pause';
+    })();
+  });
+}
+
+function ask(tok,opts){
+  return new Promise(res=>{
+    if(tok!==TOKEN)return res(null);
+    $('playb').textContent='▶ play';
+    const ch=$('chooser');
+    ch.innerHTML=opts.map((o,i)=>`<button data-i="${i}">${esc(o.label)||'…'}</button>`).join('');
+    ch.classList.add('on');
+    ch.onclick=e=>{ const b=e.target.closest('button'); if(!b)return;
+      hideChooser();
+      res(tok===TOKEN?opts[+b.dataset.i]:null); };
+    ASKOFF=()=>res(null);
+  });
+}
+function hideChooser(){ const ch=$('chooser');
+  ch.classList.remove('on'); ch.onclick=null; ASKOFF=null; }
+
+function ended(reason){
+  $('playb').textContent='▶ play';
+  caption('');
+  say({type:'stopped',card:MARKS[MARKI]?MARKS[MARKI].id:null});
+  const ch=$('chooser');
+  ch.innerHTML=(reason&&reason.startsWith('dangling:')
+      ?`<span class="warn" style="align-self:center">no card is tagged “${esc(reason.slice(9))}” — the story had nowhere to go</span>`
+      :'')+`<button onclick="story(null)">⟲ once more</button>`;
+  ch.classList.add('on');
+}
+
+// ── transport ─────────────────────────────────────────────
+function pause(){
+  AUDIO.pause();                       // the run's promise stays pending
+  $('playb').textContent='▶ resume';
+  say({type:'stopped',card:MARKS[MARKI]?MARKS[MARKI].id:null});
 }
 function toggle(){
-  if(!AUDIO.paused)return void AUDIO.pause();
-  if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended){ AUDIO.play();
-    $('playb').textContent='⏸ pause'; return; }
-  playFrom(null);
+  if(!AUDIO.paused)return pause();
+  if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended&&RUNOFF){
+    AUDIO.play(); $('playb').textContent='⏸ pause'; return;   // resume the run
+  }
+  story(null);
 }
-function stopped(){
+function stop(){
+  TOKEN++;
+  if(RUNOFF){ const f=RUNOFF; RUNOFF=null; f(); }
+  if(ASKOFF){ const f=ASKOFF; ASKOFF=null; f(); }
+  AUDIO.pause(); hideChooser();
   $('playb').textContent='▶ play';
-  const m=MARKS[MARKI];
-  say({type:'stopped',card:m?m.id:null});
-  caption('');
 }
+function playFrom(from){ story(from); }
+
 function tick(){
   const t=AUDIO.currentTime;
   $('clock').textContent=fmt(t)+(AUDIO.duration?' / '+fmt(AUDIO.duration):'');
@@ -170,11 +231,12 @@ function tick(){
   MARKI=i;
   const c=card(MARKS[i].id);
   if(c){
-    // the wall shows the last visual at or before this moment
+    // the wall shows the last visual at or before this moment in the stretch;
+    // a stretch with no visual of its own leaves the wall as it stands
     let vis=null;
     for(let k=0;k<=i;k++){ const x=card(MARKS[k].id);
       if(x&&x.type==='visual'&&x.ready)vis=x; }
-    show(vis);
+    if(vis)show(vis);
     caption((c.type||'speech')==='speech'?c.text:'');
   }
   say({type:'playing',card:MARKS[i].id});
