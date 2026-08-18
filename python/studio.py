@@ -2961,6 +2961,18 @@ class H(BaseHTTPRequestHandler):
                 save(doc)
                 return self._send(200, {"ok": True})
 
+            if u.path == "/api/minall":
+                # fold or unfold the whole deck. Presentation, so the lock
+                # does not object — the same rule a single card's collapse
+                # follows — and no snapshot: a view change should not spend
+                # an undo slot the way an edit does.
+                doc = load(d["name"])
+                on = bool(d.get("min"))
+                for c in doc["chunks"]:
+                    c["min"] = on
+                save(doc)
+                return self._send(200, {"ok": True, "min": on})
+
             if u.path == "/api/insert":
                 doc = load(d["name"])
                 snapshot(doc, f"insert {d.get('kind', 'text')} card")

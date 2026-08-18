@@ -301,6 +301,8 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
   <span style="flex:1"></span>
   <span class="pill warn" id="busy"></span>
   <span class="pill" id="model">model: cold</span>
+  <button id="minall" onclick="minAll()" disabled
+    title="collapse every card to its bar">−</button>
   <button id="frb" onclick="toggleFind()" disabled
     title="find and replace across this episode — ⌘F">find</button>
   <button onclick="openStage()"
@@ -419,6 +421,8 @@ Selected chunks are sent as context.</div></div>
     title="mix and play the book right here, without exporting the mp3">▶ preview audiobook</button>
   <button id="pvtop" onclick="previewFromTop()" hidden
     title="forget the selected card and play the whole book from the beginning">⤒ from start</button>
+  <button id="stgb" onclick="stagePlayHere()"
+    title="play on the stage from the selected card — flags from its last ride carry over, so a branch can be tested without riding the whole story">stage ▶ here</button>
   <button onclick="assemble()">assemble audiobook</button>
   <span class="mut" id="status"></span>
   <span style="flex:1"></span>
@@ -680,6 +684,7 @@ async function open_(name,quiet,anchor){
   renderFR(); renderDoc(); fitAll(); watchHeights(); renderProfiles();
   keepPlace(an,was);          // after fitAll: the heights must be final first
   syncBookBtn();
+  paintMinAll();
   if(!quiet)refresh();
   if(document.body.dataset.side==='publish')renderPublish();
   const rd=DOC.chunks.filter(c=>c.ready).length;
@@ -1851,6 +1856,22 @@ function minCard(c){
    </div>`;
 }
 async function setMin(id,on){ await setCard(id,{min:on},true); }
+// The whole deck at once: − folds every card to its bar, and once they are
+// all bars it reads + and opens them back up. One request, not one per card.
+function paintMinAll(){
+  const b=$('minall'); if(!b)return;
+  b.disabled=!DOC;
+  const any=DOC&&DOC.chunks.some(c=>!c.min);
+  b.textContent=any?'−':'+';
+  b.title=any?'collapse every card to its bar':'expand every card';
+}
+async function minAll(){
+  if(!DOC)return;
+  const on=DOC.chunks.some(c=>!c.min);
+  await flushAll();
+  await api('/api/minall',{name:DOC.name,min:on});
+  await open_(DOC.name,true);
+}
 const insBar=at=>`<div class="ins">
     <button class="pb" onclick="pasteCard(${at})">+ paste</button>
     <button onclick="insertCard(${at},'speech')" title="insert an empty text card here">+ text</button>
@@ -2604,7 +2625,15 @@ function toggleSub(id){
   const act=document.querySelector('#c'+id+' .act');
   if(act)act.insertAdjacentHTML('beforebegin', subRow(c));
   const inp=document.querySelector('#sb'+id+' input');
-  if(inp)inp.focus();
+  if(inp){
+    // Start from the spoken words: correcting "tay-dee" back to "Teide"
+    // should be an edit, not a retype. NOT saved until you change it — a
+    // saved copy identical to the text would freeze there and stop
+    // following the card's own edits, while an empty sub keeps captioning
+    // from the live text.
+    if(!inp.value&&(c.type||'speech')==='speech'&&c.text)inp.value=c.text;
+    inp.focus();
+  }
 }
 function paintSubBtn(id){
   // read the row itself, not DOC — the save that follows this repaint has
@@ -3181,12 +3210,31 @@ function clearPlaying(){
 // editor is the window that gets occluded and throttled when the stage is
 // fullscreen on the second monitor, so nothing time-critical may live here.
 const STAGE='BroadcastChannel' in window?new BroadcastChannel('saga-stage'):null;
+let STAGESEEN=false, STAGEPLAY=null;
 function openStage(){
   window.open('/stage'+(DOC?'?name='+encodeURIComponent(DOC.name):''),'saga-stage');
 }
+// Play on the stage from the card being edited. If a stage is open it obeys
+// at once; if none has ever spoken, one is opened and handed the request the
+// moment it says hello — a message into the void is not a feature.
+function stagePlayHere(){
+  if(!DOC||!STAGE)return;
+  const msg={type:'play',from:CUR,name:DOC.name};
+  STAGE.postMessage(msg);
+  if(!STAGESEEN){ STAGEPLAY={...msg,at:Date.now()}; openStage(); }
+  $('status').textContent=CUR==null
+    ?'playing the story on the stage from the top'
+    :'playing on the stage from card #'+CUR+' — its last ride’s flags carry over';
+}
 if(STAGE)STAGE.onmessage=e=>{
   const m=e.data||{};
-  if(m.type==='hello')return void STAGE.postMessage({type:'open',name:DOC?DOC.name:''});
+  STAGESEEN=true;
+  if(m.type==='hello'){
+    STAGE.postMessage({type:'open',name:DOC?DOC.name:''});
+    if(STAGEPLAY&&Date.now()-STAGEPLAY.at<8000)STAGE.postMessage(STAGEPLAY);
+    STAGEPLAY=null;
+    return;
+  }
   if(!DOC||m.name!==DOC.name)return;
   if(m.type==='playing'&&m.card!=null)followCard(m.card);
   if(m.type==='stopped'){ clearPlaying();

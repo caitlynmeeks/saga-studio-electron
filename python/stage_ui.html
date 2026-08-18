@@ -65,6 +65,7 @@ border-radius:5px;padding:3px 11px;font:12px var(--mono);cursor:pointer}
   <b>STAGE</b>
   <span id="title" class="mut">no episode</span>
   <span style="flex:1"></span>
+  <span id="vars" class="mut" style="font-size:11px"></span>
   <label class="mut" style="font-size:11px" title="reveal captions at the pace of the audio">
     <input type="checkbox" id="twk" onchange="try{localStorage.setItem('saga.stage.tw',this.checked?'1':'')}catch(e){}">
     typewriter</label>
@@ -100,7 +101,7 @@ if(BC)BC.onmessage=e=>{
   if(m.type==='hello')return;
   // same name included: "open" means "look again", not only "look elsewhere"
   if(m.type==='open'&&m.name){ if(m.name!==NAME)stop(); NAME=m.name; load(); }
-  if(m.type==='play')story(m.from==null?null:m.from);
+  if(m.type==='play'){ if(m.name)NAME=m.name; story(m.from==null?null:m.from); }
   if(m.type==='pause'&&!AUDIO.paused)pause();
 };
 say({type:'hello'});
@@ -162,9 +163,14 @@ function fxcap(t){
 // abandons a walk the moment a newer one starts — the old walk's pending
 // promises see a stale token and resolve false, and the engine lets go.
 let TOKEN=0, VARS={}, ASKOFF=null, RUNOFF=null;
+// Where a ride wanted to begin. A freshly opened window may not be allowed to
+// make sound until it is clicked — if the first play() is refused, the wish
+// is kept, and the ▶ button's very human gesture grants it from that card.
+let PEND=null;
 
 async function story(fromId){
   const tok=++TOKEN;
+  PEND=fromId==null?null:fromId;
   hideChooser();
   // Fetch the document fresh for every ride. The audio is mixed per press by
   // the server and is always current — but captions, choices and visuals are
@@ -172,8 +178,12 @@ async function story(fromId){
   // opened meant an edited subtitle never reached the stage until a reload.
   await load();
   if(!DOC||tok!==TOKEN)return;
-  VARS={};
+  // From the top, the slate is clean. From a card, the flags of the LAST
+  // ride carry over — which is what testing wants: play through making
+  // choices, fix the thing, replay from right there with the state you had.
+  if(fromId==null)VARS={};
   CAPST={txt:'',chain:false};             // a fresh ride starts a fresh block
+  paintVars();
   let start=0;
   if(fromId!=null){ const k=DOC.chunks.findIndex(c=>c.id===fromId); if(k>=0)start=k; }
   await SagaPlay.walk(DOC.chunks,{
@@ -196,7 +206,8 @@ function playRun(tok,from,upto){
       RUNOFF=()=>res(false);
       AUDIO.onended=()=>{ RUNOFF=null; res(tok===TOKEN); };
       AUDIO.src='/api/book_audio?name='+encodeURIComponent(NAME)+'&t='+Date.now();
-      AUDIO.play().catch(()=>{ RUNOFF=null; res(false); });
+      AUDIO.play().then(()=>{ PEND=null; })            // sound granted: wish spent
+        .catch(()=>{ RUNOFF=null; res(false); });
       $('playb').textContent='⏸ pause';
     })();
   });
@@ -217,7 +228,15 @@ function ask(tok,opts){
   });
 }
 function hideChooser(){ const ch=$('chooser');
-  ch.classList.remove('on'); ch.onclick=null; ASKOFF=null; }
+  ch.classList.remove('on'); ch.onclick=null; ASKOFF=null; paintVars(); }
+// The story's flags right now — the walk mutates VARS as choices apply their
+// sets, and seeing them is half of testing a branch.
+function paintVars(){
+  const t=Object.entries(VARS).filter(([,v])=>v)
+    .map(([k,v])=>v===1?k:k+'='+v).join(' · ');
+  $('vars').textContent=t;
+  $('vars').title=t?'the story’s flags — carried over when you play from a card':'';
+}
 
 function ended(reason){
   $('playb').textContent='▶ play';
@@ -241,7 +260,7 @@ function toggle(){
   if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended&&RUNOFF){
     AUDIO.play(); $('playb').textContent='⏸ pause'; return;   // resume the run
   }
-  story(null);
+  story(PEND);      // an ungranted "play from card N" wish is honoured here
 }
 function stop(){
   TOKEN++;
@@ -283,6 +302,7 @@ function tick(){
       if(!r.hold){ caption(r.full,dur,r.from); if(r.full)fxcap(''); }
     }
   }
+  paintVars();          // sets applied at the last choice are visible by now
   say({type:'playing',card:MARKS[i].id});
 }
 const fmt=s=>{ s=Math.floor(s||0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
