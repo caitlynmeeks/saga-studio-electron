@@ -135,7 +135,7 @@ DEFAULTS = {"voice": "caitlyn2", "exag": 0.4, "cfg": 0.35,
 CARD_PARAMS = {
     "engine": (None, None),          # validated against ENGINES, not clamped
     "exag": (0.0, 2.0), "cfg": (0.0, 1.0), "temp": (0.05, 2.0), "rep": (1.0, 2.0),
-    "speed": (0.0, 3.0), "duration": (0.0, 300.0),
+    "speed": (0.0, 3.0), "duration": (0.0, 300.0), "gain": (0.0, 200.0),
 }
 
 # ❦ deliberately survives normalisation here: it marks a scene break, and
@@ -202,7 +202,7 @@ PROFILES = ROOT / "profiles.json"
 # its name and stays valid. `lang` and `speed` mean nothing to chatterbox and are
 # only read when the engine is omnivoice.
 BASE_PROFILE = {"voices": ["caitlyn2"], "active": 0, "exag": 0.4, "cfg": 0.35,
-                "temp": 0.7, "rep": 1.2, "note": "",
+                "temp": 0.7, "rep": 1.2, "note": "", "gain": 100,
                 "engine": "chatterbox", "lang": "en", "speed": 0}
 
 
@@ -235,7 +235,13 @@ def profile_params(name, profs=None):
             "temp": prof.get("temp", 0.7), "rep": prof.get("rep", 1.2),
             "engine": eng if eng in ENGINES else "chatterbox",
             "lang": prof.get("lang", "en") or "en",
-            "speed": prof.get("speed", 0) or 0}
+            "speed": prof.get("speed", 0) or 0,
+            # Level is applied when the timeline is mixed, never when the card
+            # is rendered — so it is not in any hash, and evening out a
+            # character who reads louder than the rest costs nothing and
+            # re-bakes nothing. Same place, and the same percentage, as an
+            # audio card's volume.
+            "gain": prof.get("gain", 100)}
 
 
 # How many previous settings a profile remembers. A profile is five numbers, so
@@ -298,12 +304,12 @@ def profile_usage(name, proposed=None):
     return out
 
 
-def profile_counts():
-    """How many cards each profile speaks for, library-wide.
+def library_counts():
+    """How many cards each profile speaks for, and each clip appears in.
 
-    No hashing — the sidebar only needs to say how much a profile is carrying,
-    and walking the documents is cheap next to asking what is rendered."""
-    n = {}
+    One pass and no hashing: the sidebar only needs to say how much a thing is
+    carrying, which is cheap next to asking what is rendered."""
+    profs, clips = {}, {}
     for d in sorted(ROOT.iterdir()):
         f = d / "doc.json"
         if not f.exists():
@@ -315,8 +321,10 @@ def profile_counts():
         for c in doc.get("chunks", []):
             if is_renderable(c):
                 k = c.get("profile", "Default")
-                n[k] = n.get(k, 0) + 1
-    return n
+                profs[k] = profs.get(k, 0) + 1
+            elif c.get("type") == "audio" and c.get("clip"):
+                clips[c["clip"]] = clips.get(c["clip"], 0) + 1
+    return profs, clips
 
 
 def params_for(c, doc, profs=None):
@@ -578,6 +586,12 @@ def projects():
                         if (AUDIO / f"{chunk_hash(c, doc, profs)}.wav").exists())
             out.append({"name": doc["name"], "title": doc.get("title", doc["name"]),
                         "chunks": len(rend), "ready": ready,
+                        # `created` is minute-resolution and a batch import
+                        # gives twenty projects the same stamp, so what the
+                        # sidebar sorts on is when the document last changed —
+                        # which is the question "show me recent" is really asking
+                        "created": doc.get("created", ""),
+                        "edited": round(f.stat().st_mtime),
                         "words": sum(len(c["text"].split())
                                      for c in doc["chunks"] if is_speech(c))})
     return out
@@ -807,7 +821,7 @@ def _same_profile(a, b):
     single character sounds, so it is not grounds for forking a second copy."""
     return all(a.get(k, BASE_PROFILE.get(k)) == b.get(k, BASE_PROFILE.get(k))
                for k in ("voices", "active", "exag", "cfg", "temp", "rep",
-                         "engine", "lang", "speed"))
+                         "engine", "lang", "speed", "gain"))
 
 
 def import_archive(path, mode="skip"):
@@ -1570,6 +1584,7 @@ def mixdown(doc, gap=0.35, frm=None, chime=False):
     ten-second model load. Both assemble() and the in-browser preview sit on
     this one function, so what you hear is what ships, by construction."""
     import torch, torchaudio as ta
+    profs = profiles()          # once for the whole mix, not once per card
     cards = doc["chunks"]
     if frm is not None:
         i = next((k for k, c in enumerate(cards) if c["id"] == frm), None)
@@ -1623,7 +1638,7 @@ def mixdown(doc, gap=0.35, frm=None, chime=False):
                        if c.get("mode") == "after" else w.shape[-1] / wsr)
             last_gap = 0.0                    # a clip is not followed by a rest
             continue
-        f = AUDIO / f"{chunk_hash(c, doc)}.wav"
+        f = AUDIO / f"{chunk_hash(c, doc, profs)}.wav"
         if not f.exists():
             unready(c)
             continue
@@ -1660,6 +1675,13 @@ def mixdown(doc, gap=0.35, frm=None, chime=False):
             if fo > 0:
                 w[..., n - fo:] = w[..., n - fo:] * torch.linspace(1.0, 0.0, fo)
             w = w * (float(c.get("gain", 100)) / 100.0)
+        else:
+            # a spoken card's level comes from its profile, so a character who
+            # reads louder than the rest can be evened out without re-rendering
+            # a word of them
+            g = float(params_for(c, doc, profs).get("gain", 100))
+            if g != 100:
+                w = w * (g / 100.0)
         pieces.append((int(start * sr), w))
     # a trailing silence card pads the end, so the total honours the cursor too
     total = max(int(cursor * sr), max(s + w.shape[-1] for s, w in pieces))
@@ -1786,6 +1808,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/":
             return self._send(200, (HERE / "studio_ui.html").read_bytes(), "text/html; charset=utf-8")
         if u.path == "/api/state":
+            pcounts, ccounts = library_counts()
             return self._send(200, {
                 "projects": projects(),
                 # with durations: the editor shows them, and a reference clip
@@ -1794,10 +1817,14 @@ class H(BaseHTTPRequestHandler):
                 "voices": sorted(({"name": p.stem, "secs": clip_secs(p)}
                                   for p in VOICES.glob("*.wav")),
                                  key=lambda v: v["name"]),
-                "clips": sorted(({"name": p.stem, "secs": clip_secs(p)}
+                # `added` is the file's mtime — rename preserves it, so a clip
+                # keeps the date it arrived rather than the date you retitled it
+                "clips": sorted(({"name": p.stem, "secs": clip_secs(p),
+                                  "added": round(p.stat().st_mtime)}
                                  for p in CLIPS.glob("*.wav")),
                                 key=lambda c: c["name"]),
-                "profiles": profiles(), "profile_counts": profile_counts(),
+                "profiles": profiles(), "profile_counts": pcounts,
+                "clip_counts": ccounts,
                 "defaults": DEFAULTS, "bake": _bake,
                 "engines": list(ENGINES), "omnivoice": ov_available(),
                 "stale_build": build_stale(),
@@ -2278,6 +2305,7 @@ class H(BaseHTTPRequestHandler):
                     new["engine"] = "chatterbox"
                 new["lang"] = re.sub(r"[^a-zA-Z_-]", "", str(new.get("lang") or "en"))[:12] or "en"
                 new["speed"] = _num(new.get("speed"), 0.0, 0.0, 3.0)
+                new["gain"] = _num(new.get("gain"), 100.0, 0.0, 200.0)
                 # Remember what it was. Only when something that changes how it
                 # sounds actually moved — editing the note, or saving the same
                 # numbers again, should not push the real settings off the end
@@ -2547,6 +2575,38 @@ class H(BaseHTTPRequestHandler):
                     shutil.copy2(src / "source.md", pdir(new) / "source.md")
                 save(doc)
                 return self._send(200, {"ok": True, "name": new, "title": doc["title"]})
+
+            if u.path == "/api/clip/rename":
+                # Unlike a voice, a clip's name is in no hash — cards point at
+                # it and nothing else does — so this is a rename and a pointer
+                # sweep, with no audio to migrate. Never onto a name that is
+                # taken: a clip is global, and quietly replacing intro.wav would
+                # change every episode that opens with it.
+                old = re.sub(r"[^a-z0-9_-]", "", str(d.get("clip") or ""))
+                new = re.sub(r"[^a-z0-9_-]+", "-",
+                             str(d.get("to") or "").lower()).strip("-")[:40]
+                if not new:
+                    return self._send(400, {"error": "a name is needed"})
+                src = CLIPS / f"{old}.wav"
+                if not old or not src.exists():
+                    return self._send(404, {"error": f"no clip “{old}”"})
+                if new == old:
+                    return self._send(200, {"ok": True, "clip": old, "cards": 0})
+                if (CLIPS / f"{new}.wav").exists():
+                    return self._send(400, {"error": f"a clip called “{new}” is already here"})
+                src.rename(CLIPS / f"{new}.wav")
+                cards = 0
+                for pr in projects():
+                    doc = load(pr["name"])
+                    touched = False
+                    for c in doc["chunks"]:
+                        if c.get("type") == "audio" and c.get("clip") == old:
+                            c["clip"] = new
+                            cards += 1
+                            touched = True
+                    if touched:
+                        save(doc)
+                return self._send(200, {"ok": True, "clip": new, "cards": cards})
 
             if u.path == "/api/voice/rename":
                 try:

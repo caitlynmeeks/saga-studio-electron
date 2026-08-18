@@ -21,12 +21,21 @@ aside,#right{background:var(--panel)}
    putting them in one column. Two panes, one scrollbar each — and the split
    moves, because an open profile editor needs the room more than the document
    list does, and nothing needs it when the editor is closed. */
+/* Three lists that had no business sharing a scrollbar — the documents grow
+   with the series, the clips with the sound design — so they are tabs rather
+   than a split. Whichever one you are working out of gets the whole column. */
 aside{border-right:1px solid var(--line);padding:0;overflow:hidden;min-height:0;
-display:grid;grid-template-rows:1fr auto}
-aside .pane{overflow-y:auto;padding:12px;min-height:0}
-/* the profile list is short and the editor now lives in the inspector, so the
-   bottom pane takes what it needs and the documents keep the rest */
-aside .pane+.pane{border-top:1px solid var(--line);max-height:38vh}
+display:grid;grid-template-rows:auto 1fr}
+#stabs{display:flex;gap:2px;align-items:center;padding:7px 8px 0;
+border-bottom:1px solid var(--line)}
+#stabs button{border:0;border-bottom:2px solid transparent;border-radius:0;
+background:none;color:var(--dim);padding:3px 9px 5px;font-size:11.5px}
+#stabs button:hover{color:var(--fg)}
+#stabs button.on{color:var(--bright);border-bottom-color:var(--amber)}
+aside .pane{overflow-y:auto;padding:12px;min-height:0;display:none}
+body[data-side=stories] #sideStories,
+body[data-side=voices] #sideVoices,
+body[data-side=clips] #sideClips{display:block}
 /* The right column is an inspector: what it shows belongs to whatever is
    selected, and it is wider than the sidebar, which the profile editor had
    outgrown. Discuss shares it as a second tab rather than a second column —
@@ -135,6 +144,9 @@ opacity:0;transition:opacity .15s}
    "+ paste" that does nothing four days out of five is a button you learn to
    read past, and then miss on the day it would have worked. */
 body:not([data-clip="1"]) .ins .pb{display:none}
+/* a clip is being dragged in: every gap it could land in should be visible */
+body[data-dropclip="1"] .ins{opacity:.55}
+body[data-dropclip="1"] .ins.hot{opacity:1}
 /* The grip sits ahead of everything, badges included, and that is load-bearing
    rather than cosmetic. Both status badges are flex-ordered to the far left of
    the header (order:-1), and pressing a card's grip is also what selects it —
@@ -165,6 +177,12 @@ input[type=range]{border:0;background:none;padding:0;accent-color:var(--green)}
 width:13px;height:13px;border-radius:50%;background:var(--green);border:none;margin-top:4px;cursor:ew-resize}
 .dual input[type=range]::-moz-range-thumb{pointer-events:auto;width:13px;height:13px;
 border-radius:50%;background:var(--green);border:none;cursor:ew-resize}
+/* the two orders a list can be in */
+.sortbar{display:flex;gap:3px;justify-content:flex-end;margin-bottom:6px}
+.sortbar button{border:0;background:none;color:var(--faint);font-size:10.5px;
+padding:1px 6px;border-radius:99px}
+.sortbar button:hover{color:var(--fg)}
+.sortbar button.on{background:var(--chrome);color:var(--bright)}
 /* right-click menus */
 .ctx{position:fixed;z-index:200;min-width:168px;background:var(--chrome);
 border:1px solid var(--line);border-radius:7px;padding:4px;
@@ -256,11 +274,17 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
 </header>
 
 <aside>
- <div class="pane">
+ <div id="stabs">
+   <button id="sbStories" onclick="setSide('stories')">stories</button>
+   <button id="sbVoices" onclick="setSide('voices')">voices</button>
+   <button id="sbClips" onclick="setSide('clips')">clips</button>
+ </div>
+ <div class="pane" id="sideStories">
   <h2>documents</h2>
   <div id="drop">drop .md or .sagaproj here<br><span style="font-size:11px">or click to choose</span></div>
   <input type="file" id="file" accept=".md,.markdown,.txt,.sagaproj" multiple hidden>
-  <div id="projects" style="margin-top:12px"></div>
+  <div id="projsort" style="margin-top:12px"></div>
+  <div id="projects"></div>
 
   <h2 style="margin-top:18px">backup</h2>
   <label class="mut" style="font-size:11px;display:block">
@@ -282,12 +306,23 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
   <div id="bkmsg" class="mut" style="font-size:11px;margin-top:6px"></div>
  </div>
 
- <div class="pane">
+ <div class="pane" id="sideVoices">
   <h2>voice profiles</h2>
   <div id="profiles"></div>
   <div style="display:flex;gap:5px;margin-top:7px">
     <input id="newprof" placeholder="new profile name" style="flex:1">
     <button onclick="addProfile()">+</button>
+  </div>
+ </div>
+
+ <div class="pane" id="sideClips">
+  <h2>audio clips</h2>
+  <div class="mut" style="font-size:11px;margin-bottom:8px">Music and sound
+    effects, shared by every episode. Click one to hear it.</div>
+  <div id="clipsort"></div>
+  <div id="clips"></div>
+  <div style="display:flex;gap:5px;margin-top:8px">
+    <button onclick="importClip()">import a clip…</button>
   </div>
  </div>
 </aside>
@@ -504,11 +539,15 @@ async function refresh(){
   STATE=await api('/api/state');
   $('model').textContent='model: '+STATE.model;
   renderProfileList();       // counts move as cards do; the editor is left alone
+  if(document.body.dataset.side==='clips')renderClips();
   paintStale();
   // once per session, and only if the second engine is here to need it
   if(STATE.omnivoice&&!LANGS)
     loadLangs().then(()=>{ if(EDITING)renderProfiles(); });
-  $('projects').innerHTML=STATE.projects.map(p=>`
+  $('projsort').innerHTML=sortBar('projects','recent');
+  // by name, not by title: the episodes are numbered, so the slug order is the
+  // reading order — which is the answer "alphabetical" is really being asked for
+  $('projects').innerHTML=sortedBy(STATE.projects,'projects','edited').map(p=>`
     <div class="proj ${DOC&&DOC.name===p.name?'sel':''}" onclick="openProject('${p.name}')"
       oncontextmenu="projMenu(event,'${p.name}')">
       <div style="display:flex;gap:6px;align-items:center">
@@ -518,7 +557,8 @@ async function refresh(){
         <button class="tiny" title="export this episode"
           onclick="event.stopPropagation();exportOne('${p.name}')">⤓</button>
       </div>
-      <div class="meta">${p.ready}/${p.chunks} rendered · ${p.words.toLocaleString()} words</div>
+      <div class="meta">${p.ready}/${p.chunks} rendered · ${p.words.toLocaleString()} words${
+        fmtWhen(p.edited)?' · '+esc(fmtWhen(p.edited)):''}</div>
       <div class="bar"><i style="width:${p.chunks?100*p.ready/p.chunks:0}%"></i></div>
     </div>`).join('')||'<span class="mut" style="font-size:12px">none yet</span>';
   const b=STATE.bake;
@@ -601,7 +641,7 @@ async function open_(name,quiet,anchor){
 // changing a setting back restores exactly what changing it took away. That is
 // worth saying out loud in the dialog: the mistake feels fatal and is not.
 let EDITING=null, DRAFT=null, IMPACT=null, IMPACTT=null;
-const SOUNDKEYS=['voices','active','cfg','exag','temp','rep','engine','lang','speed'];
+const SOUNDKEYS=['voices','active','cfg','exag','temp','rep','engine','lang','speed','gain'];
 const sameSound=(a,b)=>SOUNDKEYS.every(k=>JSON.stringify(a[k])===JSON.stringify(b[k]));
 // 646 languages is too many for a menu and too many to remember the codes of,
 // so the box is a plain input backed by a datalist: the browser does the
@@ -678,6 +718,7 @@ function profEditor(n){
   const last=hist.length?hist[hist.length-1]:null;
   // range, not a bare number box: the useful span of each of these is narrow
   // and unguessable, and seeing where you are inside it is most of the answer
+  const lvl=pr.gain==null?100:pr.gain;
   const sl=(k,label,lo,hi,help)=>`
     <div class="prow">
       <div class="plab">${label}<span class="pv" id="pv_${k}">${(+pr[k]).toFixed(2)}</span></div>
@@ -744,6 +785,16 @@ function profEditor(n){
     ${sl('rep','anti-stutter',1,2,'raise it if words repeat')}
     `}
 
+    <div class="psec">level
+      <span class="mut" style="font-weight:400"> — both engines; applied to the mix</span></div>
+    <div class="prow">
+      <div class="plab">loudness<span class="pv" id="pv_gain">${Math.round(lvl)}%</span></div>
+      <input type="range" min="0" max="200" step="1" value="${lvl}"
+        oninput="draftLive('gain',this.value,1)" onchange="draftCommit()">
+      <div class="phelp">evens out a character who reads louder than the rest —
+        it is mixed in, not rendered in, so changing it re-bakes nothing</div>
+    </div>
+
     <input placeholder="note — when to use this" value="${esc(pr.note||'')}"
       oninput="draftSet('note',this.value,true)" style="width:100%;margin-top:7px">
 
@@ -803,10 +854,11 @@ function confirmDiscard(){
 // A range fires oninput for every pixel of the drag. Writing the value into the
 // draft and the readout is cheap; re-rendering the panel would destroy the
 // slider under the mouse, so the rest waits for the release.
-function draftLive(k,v){
+function draftLive(k,v,pct){
   if(!DRAFT)return;
   DRAFT[k]=parseFloat(v);
-  const el=$('pv_'+k); if(el)el.textContent=(+v).toFixed(2);
+  const el=$('pv_'+k);
+  if(el)el.textContent=pct?Math.round(v)+'%':(+v).toFixed(2);
 }
 function draftCommit(){ paintProfDirty(); scheduleImpact(); }
 function draftSet(k,v,quiet){
@@ -1034,6 +1086,151 @@ function paintStale(){
     'again</b> to run the new version — reloading only refreshes the interface, '+
     'and a new interface on an old server fails in confusing ways.';
   document.body.appendChild(d);
+}
+
+// ── the sidebar's three tabs ──────────────────────────────
+const SIDES=['stories','voices','clips'];
+function setSide(t){
+  if(!SIDES.includes(t))t='stories';
+  document.body.dataset.side=t;
+  for(const k of SIDES){
+    const b=$('sb'+k[0].toUpperCase()+k.slice(1));
+    if(b)b.classList.toggle('on',k===t);
+  }
+  // Guarded on STATE: this runs once at parse time to restore the last tab,
+  // and renderClips leans on helpers declared further down the file.
+  if(t==='clips'&&STATE.clips)renderClips();
+  try{ localStorage.setItem('saga.side',t); }catch(e){}
+}
+try{ setSide(localStorage.getItem('saga.side')||'stories'); }catch(e){ setSide('stories'); }
+
+// ── list sorting ──────────────────────────────────────────
+// Two orders, because they answer different questions. By name is how you find
+// something you already know the name of; by date is how you find the thing you
+// added on Tuesday and cannot remember what you called.
+const SORTS={};
+try{ Object.assign(SORTS,JSON.parse(localStorage.getItem('saga.sorts')||'{}')); }catch(e){}
+function setSort(list,how){
+  SORTS[list]=how;
+  try{ localStorage.setItem('saga.sorts',JSON.stringify(SORTS)); }catch(e){}
+  if(list==='clips')renderClips(); else refresh();
+}
+// Stories say "recent" and clips say "newest" because they sort on different
+// things, and the labels should not promise the same. A clip's file is written
+// once, so its mtime is the day it arrived. A document's changes every time you
+// touch it — and its recorded creation date is useless for ordering, because a
+// batch import stamps twenty episodes with the same minute.
+const sortBar=(list,late)=>{
+  const how=SORTS[list]||'name';
+  return `<div class="sortbar">
+    <button class="${how==='name'?'on':''}" onclick="setSort('${list}','name')">name</button>
+    <button class="${how==='added'?'on':''}" onclick="setSort('${list}','added')">${late}</button>
+  </div>`;
+};
+// Sorts a copy: the array the server sent stays in its own order, and the view
+// carries its own indexes so a click still lands on the row you pointed at.
+function sortedBy(items,list,key){
+  const how=SORTS[list]||'name';
+  const out=[...items];
+  if(how==='added')out.sort((a,b)=>(b[key]||0)>(a[key]||0)?1:((b[key]||0)<(a[key]||0)?-1:0));
+  else out.sort((a,b)=>String(a.name||a.title||'').localeCompare(String(b.name||b.title||'')));
+  return out;
+}
+const fmtWhen=t=>{
+  if(!t)return '';
+  const d=typeof t==='number'?new Date(t*1000):new Date(String(t).replace(' ','T'));
+  return isNaN(d)?'':d.toLocaleDateString(undefined,{day:'numeric',month:'short'});
+};
+
+// ── audio clips ───────────────────────────────────────────
+// The clip library had no window of its own: you could only meet a clip
+// through an audio card's dropdown, which meant no way to hear one before
+// placing it and no way to find out what a name referred to.
+let CLIPVIEW=[];
+function renderClips(){
+  const n=STATE.clip_counts||{};
+  CLIPVIEW=sortedBy(STATE.clips||[],'clips','added');
+  $('clipsort').innerHTML=sortBar('clips','newest');
+  $('clips').innerHTML = CLIPVIEW.length ? CLIPVIEW.map((c,i)=>{
+    const used=n[c.name]||0, when=fmtWhen(c.added);
+    return `<div class="proj" draggable="true" oncontextmenu="clipMenu(event,${i})"
+      ondragstart="clipDragStart(event,${i})" ondragend="clipDragEnd()"
+      title="drag into the episode to place it · right-click to rename">
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="tiny" title="hear it"
+          onclick="event.stopPropagation();playClipAt(${i})">▶</button>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+          >${esc(c.name)}</span>
+        <span class="mut" style="font-size:11px">${fmtSecs(c.secs)}</span>
+      </div>
+      <div class="meta">${used?used+' card'+(used===1?'':'s'):'not used yet'}${
+        when?' · '+esc(when):''}</div>
+    </div>`;
+  }).join('') : '<span class="mut" style="font-size:12px">none yet — import one below</span>';
+}
+function playClipAt(i){
+  const c=CLIPVIEW[i]; if(!c)return;
+  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
+  AUDIO=new Audio('/api/clip?f='+encodeURIComponent(c.name)); AUDIO.play();
+  $('status').textContent=`playing “${c.name}” · ${fmtSecs(c.secs)}`;
+}
+function importClip(){ CLIPTARGET=null; $('clipfile').click(); }
+
+// A clip dragged out of the sidebar and dropped into the stack becomes an audio
+// card holding it. The card drop targets already exist for reordering, so this
+// is a second payload through the same gates rather than a second set of them —
+// DRAGID means "a card is moving", DRAGCLIP means "a clip is arriving".
+let DRAGCLIP=null;
+function clipDragStart(e,i){
+  const c=CLIPVIEW[i]; if(!c)return;
+  DRAGCLIP=c.name;
+  // show every gap while a clip is in flight: the strips are invisible until
+  // hovered, which is fine when you know they are there and no help at all
+  // when you are looking for somewhere to drop
+  document.body.dataset.dropclip='1';
+  e.dataTransfer.effectAllowed='copy';
+  try{ e.dataTransfer.setData('text/plain',c.name); }catch(_){}
+  $('status').textContent=`drop “${c.name}” between two cards to place it`;
+}
+function clipDragEnd(){ DRAGCLIP=null; document.body.dataset.dropclip=''; clearMarks(); }
+async function dropClipAt(at){
+  // dragend clears these too, but drop runs first and rebuilds the stack — do
+  // not leave every gap lit while that happens
+  const clip=DRAGCLIP; DRAGCLIP=null; clearMarks();
+  document.body.dataset.dropclip='';
+  if(!clip)return;
+  if(!DOC)return void($('status').innerHTML=
+    '<span class="warn">open an episode first</span> — a clip needs somewhere to land');
+  await flushAll();
+  const r=await api('/api/insert',{name:DOC.name,at,kind:'audio'});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await api('/api/chunk',{name:DOC.name,id:r.id,clip});
+  HEIGHT={}; CUR=null;                       // as insertCard: every card renumbers
+  await open_(DOC.name,true, at>0?at-1:{from:0,to:1});
+  $('status').innerHTML=`<span class="ok">“${esc(clip)}” placed as card #${r.id}</span>`+
+    ` — set how it hands over to the next card on the card itself`;
+}
+function clipMenu(e,i){
+  const c=CLIPVIEW[i]; if(!c)return;
+  const used=(STATE.clip_counts||{})[c.name]||0;
+  openCtx(e,[
+    {label:'play', run:()=>playClipAt(i)},
+    {label:'rename…', run:()=>{ openCtx(e,[]);
+       ctxAsk(c.name,'clip name','rename',t=>renameClip(c.name,t)); }},
+    '-',
+    // Deleting is deliberately not offered: clips are global, undo can
+    // resurrect a card that points at one, and an export packs whatever the
+    // cards name. Remove the card, not the file.
+    {label:used?`used by ${used} card${used===1?'':'s'}`:'not used by any card',disabled:true},
+  ]);
+}
+async function renameClip(old,to){
+  const r=await api('/api/clip/rename',{clip:old,to});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await refresh(); renderClips();
+  if(DOC)open_(DOC.name,true);
+  $('status').innerHTML=`<span class="ok">clip renamed to “${esc(r.clip)}”</span> — `+
+    `${r.cards} card${r.cards===1?'':'s'} followed it`;
 }
 
 // ── right-click menus ─────────────────────────────────────
@@ -1678,13 +1875,24 @@ function delivRow(c){
         onchange="setParam(${c.id},'${key}',parseFloat(this.value))">
       <b id="dq${key}${c.id}">${(+v).toFixed(2)}</b></span>`;
   };
-  const knobs = eng==='omnivoice'
+  // level is engine-independent: it happens in the mix, not the model
+  const kp=(key,label,lo,hi,help)=>{
+    const set=p[key]!=null, v=set?p[key]:(e[key]!=null?e[key]:100);
+    return `<span class="dv ${set?'on':''}" title="${help}">
+      <label>${label}</label>
+      <input type="range" min="${lo}" max="${hi}" step="1" value="${v}"
+        oninput="$('dq${key}${c.id}').textContent=Math.round(this.value)+'%'"
+        onchange="setParam(${c.id},'${key}',parseFloat(this.value))">
+      <b id="dq${key}${c.id}">${Math.round(v)}%</b></span>`;
+  };
+  const knobs = (eng==='omnivoice'
     ? k('speed','speed',0,2,'0 leaves the pace to the model')+
       k('duration','length',0,30,'aim for this many seconds — 0 for no target')
     : k('cfg','pace',0,1,'lower is slower and more deliberate')+
       k('exag','feeling',0,1.5,'how much colour goes into the reading')+
       k('temp','steadiness',0.05,1.5,'higher wanders more; lower stays flat')+
-      k('rep','anti-stutter',1,2,'raise it if words repeat');
+      k('rep','anti-stutter',1,2,'raise it if words repeat'))
+    + kp('gain','loudness',0,200,'mixed in rather than rendered in — costs no re-bake');
   return `<div class="deliv" id="dl${c.id}">
     <span class="lbl">engine</span>
     <select onchange="setParam(${c.id},'engine',this.value)"
@@ -1871,7 +2079,7 @@ async function mute(id,on){ await flushAll();
 // Gertie-except-the-bits-you-once-nudged, with nothing on screen to say so.
 // `duration` is deliberately not here: a profile has no length field, so a
 // card's length is not competing with anything and survives the switch.
-const PROFILE_KEYS=['engine','exag','cfg','temp','rep','speed'];
+const PROFILE_KEYS=['engine','exag','cfg','temp','rep','speed','gain'];
 async function setProfile(id,p){
   const c=DOC&&DOC.chunks.find(x=>x.id===id);
   const own={...((c&&c.params)||{})};
@@ -1915,7 +2123,9 @@ let CLIPTARGET=null;
 function pickClip(id){ CLIPTARGET=id; $('clipfile').click(); }
 $('clipfile').onchange=async e=>{
   const f=e.target.files[0]; e.target.value='';
-  if(!f||CLIPTARGET==null)return;
+  if(!f)return;
+  // null target means the clips tab asked for it: import into the library and
+  // put it on no card in particular
   const id=CLIPTARGET; CLIPTARGET=null;
   $('status').textContent=`importing ${f.name}…`;
   let j;
@@ -1926,8 +2136,9 @@ $('clipfile').onchange=async e=>{
   }catch(ex){ j={error:String(ex)}; }
   if(j.error) return void($('status').innerHTML=`<span class="warn">${esc(j.error)}</span>`);
   $('status').textContent=`clip “${j.clip}” imported · ${fmtSecs(j.secs)}`;
-  await api('/api/chunk',{name:DOC.name,id,clip:j.clip});
-  await refresh(); open_(DOC.name,true,id);
+  if(id!=null&&DOC)await api('/api/chunk',{name:DOC.name,id,clip:j.clip});
+  await refresh(); renderClips();
+  if(id!=null&&DOC)open_(DOC.name,true,id);
 };
 // ── voiced cards ──────────────────────────────────────────
 // The recording is stored under its own checksum, so importing the same file
@@ -2063,28 +2274,37 @@ function dragStart(e,id){
 function dragEnd(){ DRAGID=null; clearMarks(); }
 function clearMarks(){ document.querySelectorAll('.dropa,.dropb,.ins.hot')
   .forEach(el=>el.classList.remove('dropa','dropb','hot')); }
+// Two things can be dropped on the stack: a card being moved within it, and a
+// clip arriving from the sidebar. Same targets, same marks — only the landing
+// differs, so each handler asks which is in flight rather than which gate it is.
+const dragging=()=>DRAGID!=null||DRAGCLIP!=null;
 function bindDrag(){
   document.querySelectorAll('#main .chunk').forEach(el=>{
     el.addEventListener('dragover',e=>{
-      if(DRAGID==null)return; e.preventDefault(); e.dataTransfer.dropEffect='move';
+      if(!dragging())return;
+      e.preventDefault(); e.dataTransfer.dropEffect=DRAGCLIP?'copy':'move';
       const r=el.getBoundingClientRect(), before=e.clientY<r.top+r.height/2;
       clearMarks(); el.classList.add(before?'dropb':'dropa');
     });
     el.addEventListener('drop',e=>{
-      if(DRAGID==null)return; e.preventDefault();
+      if(!dragging())return; e.preventDefault();
       const r=el.getBoundingClientRect(), before=e.clientY<r.top+r.height/2;
-      moveCard(DRAGID,(+el.id.slice(1))+(before?0:1));
+      const at=(+el.id.slice(1))+(before?0:1);
+      if(DRAGCLIP)return dropClipAt(at);
+      moveCard(DRAGID,at);
     });
   });
   // the gap between two cards is exactly where a drop aims, so the insert
   // strips take one too — the Nth strip is slot N
   document.querySelectorAll('#main .ins').forEach((el,at)=>{
     el.addEventListener('dragover',e=>{
-      if(DRAGID==null)return; e.preventDefault(); e.dataTransfer.dropEffect='move';
+      if(!dragging())return;
+      e.preventDefault(); e.dataTransfer.dropEffect=DRAGCLIP?'copy':'move';
       clearMarks(); el.classList.add('hot');
     });
     el.addEventListener('drop',e=>{
-      if(DRAGID==null)return; e.preventDefault();
+      if(!dragging())return; e.preventDefault();
+      if(DRAGCLIP)return dropClipAt(at);
       moveCard(DRAGID,at);
     });
   });
