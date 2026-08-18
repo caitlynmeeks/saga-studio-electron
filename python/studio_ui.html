@@ -1659,8 +1659,7 @@ function cardMenu(e,id){
   items.push({label:c.locked?'unlock':'lock',
     run:()=>setCard(id,{locked:!c.locked},true)});
   if(SEL.size>1)items.unshift(
-    {label:`group the ${SEL.size} selected…`, run:()=>{ openCtx(e,[]);
-       ctxAsk('','the yard, act one','group',v=>makeGroup(v)); }},'-');
+    {label:`group the ${SEL.size} selected`, run:()=>makeGroup(freeGroupName())},'-');
   if(c.group)items.push({label:`ungroup “${c.group}”`, run:()=>ungroup(c.group)});
   items.push('-',{label:'copy', run:()=>copyCard(id)});
   openCtx(e,items);
@@ -1828,13 +1827,22 @@ function gbar(g){
     <button class="tiny" onclick="ungroup('${esc(g)}')" title="ungroup — the cards stay where they are">×</button>
   </div>`;
 }
+function freeGroupName(){
+  // born with a name, renamed at leisure — a dialog at creation time is a
+  // toll booth in front of an act you have already decided on
+  const used=new Set(DOC.chunks.map(c=>c.group).filter(Boolean));
+  if(!used.has('New Group'))return 'New Group';
+  let i=2;
+  while(used.has(`New Group (${i})`))i++;
+  return `New Group (${i})`;
+}
 async function makeGroup(v){
   const r=await api('/api/group',{name:DOC.name,ids:[...SEL],gname:v});
   if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
   SEL.clear(); $('chatnote').textContent='';
   await open_(DOC.name,true);
   $('status').innerHTML=`<span class="ok">grouped ${r.cards} card${r.cards===1?'':'s'} as “${esc(r.gname)}”</span>`+
-    ' — drag the bar to move them together, fold them with ▾';
+    ' — right-click the bar to rename it, drag it to move them together';
 }
 async function ungroup(g){
   const r=await api('/api/ungroup',{name:DOC.name,gname:g});
@@ -1878,8 +1886,22 @@ async function dropGroupAt(at){
 // swallowed there, so selecting never also moves the amber editing cursor —
 // that double meaning was what made multi-select feel haunted. Form fields
 // keep their native shift-click: selecting text is not selecting cards.
+function paintSel(){
+  document.querySelectorAll('#main .chunk.sel')
+    .forEach(el=>el.classList.remove('sel'));
+  SEL.forEach(id=>{ const el=$('c'+id); if(el)el.classList.add('sel'); });
+  const cn=$('chatnote'); if(cn)cn.textContent=SEL.size?SEL.size+' chunk(s) as context':'';
+}
 $('main').addEventListener('mousedown',e=>{
-  if(!e.shiftKey&&!e.metaKey&&!e.ctrlKey)return;
+  const mod=e.shiftKey||e.metaKey||e.ctrlKey;
+  if(!mod){
+    // a plain click starts over: the gathered cards let go — except a click
+    // on a discuss checkbox, which is the one place a selection is spent
+    if(SEL.size&&!e.target.closest('.dchk')){
+      SEL.clear(); paintSel(); $('status').textContent='';
+    }
+    return;                                  // and the click proceeds as ever
+  }
   if(e.target.closest('input,textarea,select,button'))return;
   const card=e.target.closest('.chunk'); if(!card)return;
   e.preventDefault(); e.stopPropagation();   // setCur stays out of this
@@ -1888,7 +1910,7 @@ $('main').addEventListener('mousedown',e=>{
   card.classList.toggle('sel',SEL.has(id));
   $('status').textContent=SEL.size>1
     ?SEL.size+' cards selected — right-click a card header to group them'
-    :SEL.size?'1 card selected — shift-click more, then right-click a header':'';
+    :SEL.size?'1 card selected — ⌘-click more, then right-click a header':'';
 },true);
 function cardHTML(c){
   if(c.min)return minCard(c);
@@ -1906,6 +1928,8 @@ function cardHTML(c){
 const cardName=c=>c.label||clipLabel(c)||'(empty card)';
 const minBtn=id=>`<button class="tiny" onclick="setMin(${id},true)"
   title="collapse to a bar — easier to drag; right-click the header to name it">▾</button>`;
+const muteBtn=c=>`<button class="tiny" onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>`;
+const delBtn=id=>`<button class="tiny" onclick="del(${id})" style="color:var(--red)" title="remove this card">×</button>`;
 function minCard(c){
   return `
    <div class="chunk min ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
@@ -1918,7 +1942,7 @@ function minCard(c){
       ${c.mute?'<span class="pill warn">muted</span>':''}
       ${tagsUi(c)}
       <span style="flex:1"></span>
-      ${copyBtn(c.id)}
+      ${copyBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
       <button class="tiny" onclick="setMin(${c.id},false)" title="expand">▸</button>
     </div>
    </div>`;
@@ -2057,7 +2081,7 @@ function speechCard(c){return `
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
-      ${copyBtn(c.id)}${minBtn(c.id)}
+      ${copyBtn(c.id)}${minBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
       <label class="mut dchk" style="font-size:11px"><input type="checkbox" ${SEL.has(c.id)?'checked':''}
         onchange="pick(${c.id},this.checked)"> discuss</label>
     </div>
@@ -2078,8 +2102,6 @@ function speechCard(c){return `
       <button onclick="splitAt(${c.id})">split</button>
       <button onclick="merge(${c.id})">merge next</button>
       <button onclick="dup(${c.id})">duplicate</button>
-      <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
-      <button onclick="del(${c.id})" style="color:var(--red)">remove</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
@@ -2102,7 +2124,7 @@ function audioCard(c){
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
-      ${copyBtn(c.id)}${minBtn(c.id)}
+      ${copyBtn(c.id)}${minBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
     <div class="arow">
       <select onchange="setCard(${c.id},{clip:this.value},true)" style="max-width:230px">
@@ -2144,8 +2166,6 @@ function audioCard(c){
     <div class="act">
       <button id="sub${c.id}" class="${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
         title="a caption for the sound — “(Foghorn blowing)”, “(Music)” — for viewers with the sound off">subtitle</button>
-      <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
-      <button onclick="del(${c.id})" style="color:var(--red)">remove</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
@@ -2182,7 +2202,7 @@ function voicedCard(c){
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
-      ${copyBtn(c.id)}${minBtn(c.id)}
+      ${copyBtn(c.id)}${minBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
     <div class="arow">
       <span class="lbl">you said</span>
@@ -2202,8 +2222,6 @@ function voicedCard(c){
       <button id="sub${c.id}" class="${((c.sub||'').trim()||c.chain)?'dirty':''}" onclick="toggleSub(${c.id})"
         title="a voiced card has no prose — this is what the stage shows while your performance plays">subtitle</button>
       <button onclick="dup(${c.id})">duplicate</button>
-      <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
-      <button onclick="del(${c.id})" style="color:var(--red)">remove</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
@@ -2224,9 +2242,7 @@ function silenceCard(c){return `
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
-      ${copyBtn(c.id)}${minBtn(c.id)}
-      <button class="tiny" onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
-      <button class="tiny" onclick="del(${c.id})" style="color:var(--red)" title="remove">×</button>
+      ${copyBtn(c.id)}${minBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
    </div>`;
 }
@@ -2256,7 +2272,7 @@ function visualCard(c){
       ${c.mute?'<span class="pill warn">muted</span>':''}
       ${tagsUi(c)}
       <span style="flex:1"></span>
-      ${copyBtn(c.id)}${minBtn(c.id)}
+      ${copyBtn(c.id)}${minBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
     <div class="arow">
       <select onchange="setCard(${c.id},{media:this.value},true)" style="max-width:230px">
@@ -2268,8 +2284,6 @@ function visualCard(c){
     </div>
     <div class="arow">${show}</div>
     <div class="act">
-      <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
-      <button onclick="del(${c.id})" style="color:var(--red)">remove</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
@@ -2296,7 +2310,7 @@ function choiceCard(c){
       ${c.mute?'<span class="pill warn">muted</span>':''}
       ${tagsUi(c)}
       <span style="flex:1"></span>
-      ${copyBtn(c.id)}${minBtn(c.id)}
+      ${copyBtn(c.id)}${minBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
     <div id="op${c.id}">${opts.map((o,i)=>optRow(c,o,i)).join('')}</div>
     <div class="act">
@@ -2304,8 +2318,6 @@ function choiceCard(c){
       <span class="mut" id="ah${c.id}" style="font-size:11px">${
         c.auto?'first passing option is taken silently':'the stage stops here and asks'}</span>
       <span style="flex:1"></span>
-      <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
-      <button onclick="del(${c.id})" style="color:var(--red)">remove</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
