@@ -394,6 +394,10 @@ def params_for(c, doc, profs=None):
 
 
 def chunk_hash(c, doc, profs=None):
+    if c.get("type") == "group":
+        # a group bar makes no sound; a constant key means no caller can crash
+        # on it, and no file will ever exist under it
+        return "g" + hashlib.sha256(b"group").hexdigest()[:19]
     p = params_for(c, doc, profs)
     if c.get("type") == "voiced":
         # Only two things decide what a voiced card sounds like: the recording
@@ -552,6 +556,11 @@ def paste_card(src):
     elif kind == "choice":
         c = {"id": 0, "type": "choice", "auto": bool(src.get("auto")),
              "options": clean_options(src.get("options")), "note": ""}
+    elif kind == "group":
+        c = {"id": 0, "type": "group",
+             "gname": re.sub(r"[\"'`\\<>&]", "",
+                             str(src.get("gname") or "")).strip()[:60] or "Group",
+             "note": ""}
     elif kind == "voiced":
         # `perf` is a checksum this program wrote, so it is hex and nothing
         # else; `perfname` is only what to call it on screen.
@@ -702,9 +711,79 @@ def pdir(name):
     return ROOT / re.sub(r"[^a-z0-9_-]+", "-", name.lower())[:60]
 
 
+def normalize_groups(doc):
+    """A group is still a contiguous run of cards sharing a name — but its bar
+    is now a real card (type "group"), so it can carry anchor tags and can
+    stand with no members at all. This keeps bars and runs in step whatever
+    just happened: every run gets exactly one bar, seated directly above its
+    first member; a bar whose members have gone keeps its place as an empty
+    group; docs from before bars existed grow theirs here, which is the whole
+    migration. Idempotent, and cheap enough to run on every load and save."""
+    ch = doc.get("chunks") or []
+    bars, order = {}, []
+    for c in ch:
+        if c.get("type") == "group":
+            g = re.sub(r"[\"'`\\<>&]", "",
+                       str(c.get("gname") or "")).strip()[:60] or "Group"
+            if g in bars:                     # a paste's double: number it
+                k = 2
+                while f"{g} ({k})" in bars:
+                    k += 1
+                g = f"{g} ({k})"
+            c["gname"] = g
+            bars[g] = c
+        order.append(c)
+    member_names = {c.get("group") for c in order
+                    if c.get("type") != "group" and c.get("group")}
+    out, placed, prev, cur = [], set(), None, None
+    for c in order:
+        if c.get("type") == "group":
+            # a bar with members is re-seated at its run, below; an empty
+            # one keeps the place it holds itself
+            if c["gname"] not in member_names:
+                out.append(c)
+            prev = None
+            continue
+        g = c.get("group") or None
+        if g != prev:
+            cur = None
+            if g:
+                gg = g
+                if gg in placed:              # a second run under one name
+                    k = 2
+                    while f"{gg} ({k})" in placed or f"{gg} ({k})" in bars:
+                        k += 1
+                    gg = f"{gg} ({k})"
+                bar = bars.get(gg) or {"id": 0, "type": "group",
+                                       "gname": gg, "note": ""}
+                bar["gname"] = gg
+                out.append(bar)
+                placed.add(gg)
+                cur = gg
+        if g:
+            c["group"] = cur
+        out.append(c)
+        prev = g
+    doc["chunks"] = out
+    for i, c in enumerate(out):
+        c["id"] = i
+
+
+def group_exists(ch, g, skip=None):
+    """Is `g` a group here — a run of members, or an empty group's bar?
+    Joining an empty group must count, or its bar could never take a card."""
+    return any((x.get("group") == g
+                or (x.get("type") == "group" and x.get("gname") == g))
+               for x in ch if x is not skip)
+
+
 def load(name):
     f = pdir(name) / "doc.json"
-    return json.loads(f.read_text()) if f.exists() else None
+    if not f.exists():
+        return None
+    doc = json.loads(f.read_text())
+    normalize_groups(doc)
+    return doc
 
 
 UNDO_DEPTH = 25
@@ -736,6 +815,7 @@ def save(doc):
     end, which is exactly the "Extra data" JSONDecodeError that made a
     project unreadable. fsync before the rename so the bytes are on disk and
     not merely in the page cache when the directory entry flips."""
+    normalize_groups(doc)     # bars follow their runs through every mutation
     d = pdir(doc["name"])
     d.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".doc.", suffix=".tmp")
@@ -2067,7 +2147,7 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
         # where interactive playback stops, and the audiobook does not stop.
         # Both must turn back HERE: the default branch below hashes the card,
         # and hashing starts by reading text these kinds have not got.
-        if kind in ("visual", "choice"):
+        if kind in ("visual", "choice", "group"):
             note(c)
             continue
         # "runs on": no rest before this card, so a sentence split across two
@@ -3149,14 +3229,34 @@ class H(BaseHTTPRequestHandler):
                 elif kind == "voiced":
                     c = {"id": 0, "type": "voiced", "perf": "", "perfname": "",
                          "note": ""}
+                elif kind == "group":
+                    # an empty group is a valid card: a scene with a bar and a
+                    # position, waiting for members — and, tagged, a jump target
+                    taken = {x.get("gname") for x in doc["chunks"]
+                             if x.get("type") == "group"}
+                    taken |= {x.get("group") for x in doc["chunks"]
+                              if x.get("group")}
+                    g, k = "New Group", 2
+                    while g in taken:
+                        g, k = f"New Group ({k})", k + 1
+                    c = {"id": 0, "type": "group", "gname": g, "note": ""}
                 else:
                     c = {"id": 0, "text": "", "params": {}, "note": ""}
+                at = max(0, min(int(d.get("at", 0)), len(doc["chunks"])))
                 grp = str(d.get("group") or "")
-                if grp and any(x.get("group") == grp for x in doc["chunks"]):
+                if kind == "group":
+                    # groups do not nest: born inside another's indent, the new
+                    # bar slides down past that run rather than tearing it
+                    ch = doc["chunks"]
+                    if 0 < at < len(ch) and ch[at].get("group") \
+                            and ch[at - 1].get("group") == ch[at].get("group"):
+                        g0 = ch[at]["group"]
+                        while at < len(ch) and ch[at].get("group") == g0:
+                            at += 1
+                elif grp and group_exists(doc["chunks"], grp):
                     # born inside a group's indent: a member, or the run
                     # would be torn in two by its own insert strip
                     c["group"] = grp
-                at = max(0, min(int(d.get("at", 0)), len(doc["chunks"])))
                 doc["chunks"].insert(at, c)
                 for i, c in enumerate(doc["chunks"]):
                     c["id"] = i
@@ -3172,7 +3272,8 @@ class H(BaseHTTPRequestHandler):
                 at = max(0, min(int(d.get("at", 0)), len(doc["chunks"])))
                 pc = paste_card(card)
                 grp = str(d.get("group") or "")
-                if grp and any(x.get("group") == grp for x in doc["chunks"]):
+                if grp and pc.get("type") != "group" \
+                        and group_exists(doc["chunks"], grp):
                     pc["group"] = grp
                 doc["chunks"].insert(at, pc)
                 for i, c in enumerate(doc["chunks"]):
@@ -3209,8 +3310,7 @@ class H(BaseHTTPRequestHandler):
                         mv.pop("group", None)
                         changed = True
                     elif (into and mv.get("group") != into
-                          and any(x.get("group") == into
-                                  for x in ch if x is not mv)):
+                          and group_exists(ch, into, mv)):
                         snapshot(doc, "join the group")
                         mv["group"] = into
                         changed = True
@@ -3229,7 +3329,7 @@ class H(BaseHTTPRequestHandler):
                     mv.pop("group", None)
                 if out:
                     mv.pop("group", None)
-                elif into and any(x.get("group") == into for x in ch if x is not mv):
+                elif into and group_exists(ch, into, mv):
                     mv["group"] = into
                 for i, c in enumerate(ch):
                     c["id"] = i
@@ -3256,6 +3356,7 @@ class H(BaseHTTPRequestHandler):
                                             "shift-click their headers"})
                 a, b = min(idx), max(idx)
                 if any(c.get("group") == gname
+                       or (c.get("type") == "group" and c.get("gname") == gname)
                        for c in doc["chunks"][:a] + doc["chunks"][b + 1:]):
                     return self._send(400, {"error": f"“{gname}” is already a group "
                                             f"here — pick another name"})
@@ -3274,6 +3375,10 @@ class H(BaseHTTPRequestHandler):
                     if c.get("group") == gname:
                         c.pop("group", None)
                         n += 1
+                # dissolving the group takes its bar — and its anchor — with it
+                doc["chunks"] = [c for c in doc["chunks"]
+                                 if not (c.get("type") == "group"
+                                         and c.get("gname") == gname)]
                 save(doc)
                 return self._send(200, {"ok": True, "cards": n})
 
@@ -3283,9 +3388,12 @@ class H(BaseHTTPRequestHandler):
                 new = re.sub(r"[\"'`\\<>&]", "", str(d.get("to") or "")).strip()[:60]
                 if not new:
                     return self._send(400, {"error": "a name is needed"})
-                if not any(c.get("group") == old for c in doc["chunks"]):
+                owns = lambda c, g: (c.get("group") == g
+                                     or (c.get("type") == "group"
+                                         and c.get("gname") == g))
+                if not any(owns(c, old) for c in doc["chunks"]):
                     return self._send(404, {"error": f"no group “{old}”"})
-                if new != old and any(c.get("group") == new for c in doc["chunks"]):
+                if new != old and any(owns(c, new) for c in doc["chunks"]):
                     return self._send(400, {"error": f"“{new}” is already a group here "
                                             f"— pick another name"})
                 snapshot(doc, f"rename group “{old}”")
@@ -3294,6 +3402,8 @@ class H(BaseHTTPRequestHandler):
                     if c.get("group") == old:
                         c["group"] = new
                         n += 1
+                    if c.get("type") == "group" and c.get("gname") == old:
+                        c["gname"] = new
                 save(doc)
                 return self._send(200, {"ok": True, "gname": new, "cards": n})
 
@@ -3301,7 +3411,12 @@ class H(BaseHTTPRequestHandler):
                 doc = load(d["name"])
                 gname = d.get("gname")
                 ch = doc["chunks"]
-                idx = [k for k, c in enumerate(ch) if c.get("group") == gname]
+                # the bar rides with its run — and for an empty group the bar
+                # IS the whole block
+                idx = [k for k, c in enumerate(ch)
+                       if c.get("group") == gname
+                       or (c.get("type") == "group"
+                           and c.get("gname") == gname)]
                 if not idx:
                     return self._send(404, {"error": f"no group “{gname}”"})
                 a, b = min(idx), max(idx) + 1
@@ -3340,6 +3455,12 @@ class H(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "that card is locked — "
                                             "unlock it before removing it"})
                 snapshot(doc, "remove card")
+                if gone is not None and gone.get("type") == "group":
+                    # removing the bar dissolves the group; the members stay,
+                    # in place and in order — or save() would grow it right back
+                    for c in doc["chunks"]:
+                        if c.get("group") == gone.get("gname"):
+                            c.pop("group", None)
                 doc["chunks"] = [c for c in doc["chunks"] if c["id"] != d["id"]]
                 for i, c in enumerate(doc["chunks"]):
                     c["id"] = i

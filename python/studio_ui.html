@@ -1791,15 +1791,23 @@ async function duplicateProfile(n){
 // be born exactly where it belongs.
 function renderDoc(){
   tagCounts();                        // tagsUi reads TAGN for its dup warnings
-  // Groups render as a bar above their first member. A folded group's cards
-  // stay in the DOM at display:none — bindDrag counts strips by index, and a
-  // missing strip would shift every drop slot after it.
-  let prevG=null;
+  // A group's bar is a real card now (the server keeps it seated above its
+  // run), so it renders from the card — which is what lets it carry anchor
+  // tags, and lets an empty group hold a place of its own. A folded group's
+  // cards stay in the DOM at display:none — bindDrag counts strips by index,
+  // and a missing strip would shift every drop slot after it.
   $('main').innerHTML=insBar(0)+DOC.chunks.map((c,ix)=>{
     let h='';
+    if(c.type==='group'){
+      const gg=c.gname||'Group';
+      h+=gbar(c);
+      // the strip under the bar is the group's top slot, inside the indent —
+      // which is also how an empty group takes its first member
+      h+=isGmin(gg)?'<div class="ins gfold"></div>'
+        :`<div class="gmem" data-g="${esc(gg)}">${insBar(c.id+1)}</div>`;
+      return h;
+    }
     const g=c.group||null;
-    if(g&&g!==prevG)h+=gbar(g);
-    prevG=g;
     const nxt=DOC.chunks[ix+1], lastOf=g&&(!nxt||nxt.group!==g);
     if(g&&isGmin(g))h+=`<div class="gfold">${cardHTML(c)}</div><div class="ins gfold"></div>`;
     else if(g){
@@ -1855,18 +1863,20 @@ async function toggleGmin(g){
   const now=find();
   if(now&&was!=null)$('main').scrollTop+=now.getBoundingClientRect().top-was;
 }
-function gbar(g){
+function gbar(c){
   // the name was stripped of quote/angle characters on the way in, so it can
   // sit inside these handlers without breaking out of them
+  const g=c.gname||'Group';
   const mem=DOC.chunks.filter(x=>x.group===g), n=mem.length, min=isGmin(g);
-  const allLocked=n>0&&mem.every(c=>c.locked), allMuted=n>0&&mem.every(c=>c.mute);
-  return `<div class="gbar" data-g="${esc(g)}" draggable="true"
+  const allLocked=n>0&&mem.every(x=>x.locked), allMuted=n>0&&mem.every(x=>x.mute);
+  return `<div class="gbar" id="c${c.id}" data-g="${esc(g)}" draggable="true"
     title="drag to move the whole group · drop a card on me and it joins · right-click for more"
     oncontextmenu="groupMenu(event,'${esc(g)}')"
     ondragstart="groupDragStart(event,'${esc(g)}')" ondragend="groupDragEnd()">
     <button class="tiny" onclick="toggleGmin('${esc(g)}')" title="${min?'unfold':'fold away'} these cards">${min?'▸':'▾'}</button>
     <b ondblclick="toggleGmin('${esc(g)}')">${esc(g)}</b>
-    <span class="mut" style="font-size:11px">${n} card${n===1?'':'s'}${min?' · folded':''}</span>
+    <span class="mut" style="font-size:11px">${n?n+' card'+(n===1?'':'s'):'empty — drop cards on me'}${min?' · folded':''}</span>
+    ${tagsUi(c)}
     <span style="flex:1"></span>
     <button class="tiny" onclick="lockGroup('${esc(g)}')"
       style="filter:grayscale(1)${allLocked?'':';opacity:.35'}"
@@ -1901,7 +1911,8 @@ async function muteGroup(g){
 function freeGroupName(){
   // born with a name, renamed at leisure — a dialog at creation time is a
   // toll booth in front of an act you have already decided on
-  const used=new Set(DOC.chunks.map(c=>c.group).filter(Boolean));
+  const used=new Set(DOC.chunks.flatMap(c=>
+    c.type==='group'?[c.gname]:c.group?[c.group]:[]));
   if(!used.has('New Group'))return 'New Group';
   let i=2;
   while(used.has(`New Group (${i})`))i++;
@@ -1944,6 +1955,8 @@ async function popFromGroup(id){
 async function dropIntoGroup(id,g){
   DRAGID=null; clearMarks();
   let last=-1; DOC.chunks.forEach((x,ix)=>{ if(x.group===g)last=ix; });
+  // an empty group has no members to land after — its bar holds the slot
+  if(last<0)last=DOC.chunks.findIndex(x=>x.type==='group'&&x.gname===g);
   if(last<0||!DOC)return;
   await flushAll();
   // the bar means "in here" — and new arrivals go to the BOTTOM, where a
@@ -1997,6 +2010,7 @@ $('main').addEventListener('mousedown',e=>{
     :SEL.size?'1 card selected — ⌘-click more, then right-click a header':'';
 },true);
 function cardHTML(c){
+  if(c.type==='group')return gbar(c);   // renderDoc goes first; this is for strays
   if(c.min)return minCard(c);
   return c.type==='audio'?audioCard(c)
     :c.type==='silence'?silenceCard(c)
@@ -2059,6 +2073,7 @@ const insBar=at=>`<div class="ins">
     <button onclick="insertCard(${at},'audio',event)" title="insert a music / sound-effect card here">+ ♪ audio</button>
     <button onclick="insertCard(${at},'visual',event)" title="insert a picture or film — the stage shows it from here until the next visual">+ ⛶ visual</button>
     <button onclick="insertCard(${at},'choice',event)" title="insert a choice — the stage stops here and asks; the audiobook walks straight past">+ ⑂ choice</button>
+    <button onclick="insertCard(${at},'group',event)" title="insert a group — a scene with a bar of its own, empty until cards join it; tag the bar and a choice can jump to it">+ ⊞ group</button>
     <button onclick="insertCard(${at},'silence',event)" title="insert a timed pause here">+ silence</button>
   </div>`;
 const grip=id=>`<span class="grip" draggable="true" ondragstart="dragStart(event,${id})"
@@ -2087,8 +2102,8 @@ const tagsUi=c=>`<span class="tags" id="tg${c.id}">${(c.tags||[]).map(t=>
     title="plays only when ${esc(c.when)} holds — click to edit">?${esc(c.when)
     }<i onclick="event.stopPropagation();saveWhen(${c.id},'')" title="always play it">×</i></span>`:''
   }<button class="tiny" onclick="addTag(event,${c.id})"
-    title="tag this card — a label, and somewhere a choice can jump to">+tag</button>${
-  c.when?'':`<button class="tiny" onclick="editWhen(event,${c.id})"
+    title="tag this ${c.type==='group'?'group — a choice can jump to it as a scene':'card — a label, and somewhere a choice can jump to'}">+tag</button>${
+  (c.when||c.type==='group')?'':`<button class="tiny" onclick="editWhen(event,${c.id})"
     title="play this card only when a condition holds — brave, !met_gertie, coins>=3">+when</button>`}</span>`;
 function addTag(ev,id){
   const host=ev.target.parentElement;
@@ -3067,6 +3082,7 @@ async function del(id){
     :c.type==='voiced'?`◎ voiced — ${c.perfname||'no recording yet'}`
     :c.type==='visual'?`⛶ visual — ${c.media||'nothing chosen'} (the file stays in the library)`
     :c.type==='choice'?`⑂ choice — ${(c.options||[]).length} option${(c.options||[]).length===1?'':'s'}`
+    :c.type==='group'?`⊞ group “${c.gname||''}” — its cards stay, only the bar goes`
     :c.text.slice(0,90)+'…';
   if(!confirm(`Remove card #${id}?\n\n${what}`))return;
   await flushAll();
@@ -3220,6 +3236,7 @@ const clipLabel=c=>!c?'':
   :c.type==='voiced'?`◎ ${c.perfname||'no recording'}`
   :c.type==='visual'?`⛶ ${c.media||'no visual'}`
   :c.type==='choice'?`⑂ ${(c.options||[]).length} option${(c.options||[]).length===1?'':'s'}`
+  :c.type==='group'?`⊞ ${c.gname||'group'}`
   :'“'+(c.text||'').replace(/\s+/g,' ').trim().slice(0,44)+((c.text||'').length>44?'…':'')+'”';
 // The paste buttons live in strips that were built before the copy happened,
 // so this paints them where they stand rather than rebuilding the stack: a
@@ -3242,6 +3259,7 @@ function cardClip(c){
   else if(k.type==='visual')k.media=c.media||'';
   else if(k.type==='choice')Object.assign(k,
     {options:c.options||[], auto:!!c.auto});
+  else if(k.type==='group')k.gname=c.gname||'Group';
   else if(k.type==='voiced')Object.assign(k,
     {perf:c.perf||'', perfname:c.perfname||'', profile:c.profile, seed:c.seed});
   else Object.assign(k,
@@ -3307,7 +3325,8 @@ async function pasteGroup(at,grp){
   }
   if(!grp){
     const base=CLIP.gname||'Group';
-    const used=new Set(DOC.chunks.map(c=>c.group).filter(Boolean));
+    const used=new Set(DOC.chunks.flatMap(c=>
+      c.type==='group'?[c.gname]:c.group?[c.group]:[]));
     let v=base; for(let k=2;used.has(v);k++)v=`${base} (${k})`;
     const r=await api('/api/group',{name:DOC.name,ids:cards.map((_,i)=>at+i),gname:v});
     if(r.error)$('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`;
