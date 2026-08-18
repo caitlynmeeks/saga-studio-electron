@@ -863,6 +863,14 @@ const fmtProf=p=>`pace ${(+p.cfg).toFixed(2)} · feel ${(+p.exag).toFixed(2)}`+
   ((p.voices||[])[p.active||0]?` · ${(p.voices||[])[p.active||0]}`:'');
 
 function editProfileAt(i){ editProfile(profNames()[i]); }
+function inspectProfile(n){
+  if(!(STATE.profiles||{})[n])return;
+  if(EDITING!==n){
+    if(!confirmDiscard())return;
+    EDITING=n; DRAFT=draftOf(n); IMPACT=null;
+  }
+  showPanel('inspect'); renderProfiles();
+}
 function editProfile(n){
   if(EDITING===n)return closeProf();
   if(!confirmDiscard())return;
@@ -1507,7 +1515,9 @@ function speechCard(c){return `
       <span class="dot ${c.mute?'':(c.ready?'ready':'stale')}"></span>
       <span>#${c.id}</span>
       <span class="mut chars">${c.text.length} ch</span>
-      <select onchange="setProfile(${c.id},this.value)" style="font-size:11px;padding:1px 4px">
+      <select onchange="setProfile(${c.id},this.value)" style="font-size:11px;padding:1px 4px"
+        onmousedown="if(event.altKey){event.preventDefault();inspectProfile(this.value)}"
+        title="⌥-click opens this profile in the inspector">
         ${Object.keys(STATE.profiles||{}).map(p=>
           `<option ${ (c.profile||'Default')===p?'selected':''}>${p}</option>`).join('')}
       </select>
@@ -1624,7 +1634,8 @@ function voicedCard(c){
       <span>#${c.id}</span>
       <span class="pill">◎ voiced</span>
       <select onchange="setProfile(${c.id},this.value)" style="font-size:11px;padding:1px 4px"
-        title="the character this performance is spoken as — only the voice is used">
+        onmousedown="if(event.altKey){event.preventDefault();inspectProfile(this.value)}"
+        title="the character this performance is spoken as — only the voice is used. ⌥-click opens it in the inspector.">
         ${Object.keys(STATE.profiles||{}).map(p=>
           `<option ${(c.profile||'Default')===p?'selected':''}>${p}</option>`).join('')}
       </select>
