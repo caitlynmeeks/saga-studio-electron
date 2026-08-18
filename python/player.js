@@ -124,12 +124,18 @@ const SagaPlay = (() => {
   // before the audio moves on; clamped so a two-word line does not smear and
   // a monologue does not blur. Returns a canceller, because captions change
   // mid-flight and two typewriters on one element write over each other.
-  function typeCaption (el, text, secs) {
-    el.textContent = ''
+  function typeCaption (el, text, secs, from) {
+    // `from` is where the fresh words start: a chained caption keeps its
+    // standing prefix on screen and types only what this card adds, at a
+    // rate set by this card's own stretch of audio — which is what keeps
+    // the pace honest across a chain of differently-sized cards.
+    from = from || 0
+    el.textContent = text.slice(0, from)
     const n = text.length
-    if (!n) return () => {}
-    const cps = Math.min(120, Math.max(12, n / Math.max(0.6, (secs || n / 15) * 0.9)))
-    let i = 0
+    if (n <= from) return () => {}
+    const fresh = n - from
+    const cps = Math.min(120, Math.max(12, fresh / Math.max(0.6, (secs || fresh / 15) * 0.9)))
+    let i = from
     const t = setInterval(() => {
       i++
       el.textContent = text.slice(0, i)
@@ -138,6 +144,27 @@ const SagaPlay = (() => {
     return () => clearInterval(t)
   }
 
-  return { applySet, passes, findTag, runEnd, walk, segments, typeCaption }
+  // Chained captions. A card marked `chain` leaves its words standing when it
+  // ends, and the next caption-bearing card appends to them — one growing
+  // block across cards that were split for delivery, not for meaning. `st` is
+  // the player's caption state ({txt, chain}), mutated in place. Returns what
+  // to show and where the fresh text begins; `hold` means a wordless card sat
+  // down inside a chain and the caption (and any typewriter mid-word) should
+  // simply be left alone.
+  function chainStep (st, card, text) {
+    if (!text) {
+      if (st.chain) return { full: st.txt, from: st.txt.length, hold: true }
+      st.txt = ''
+      return { full: '', from: 0 }
+    }
+    const joined = st.chain && st.txt
+    const full = joined ? st.txt + ' ' + text : text
+    const from = joined ? st.txt.length + 1 : 0
+    st.txt = card.chain ? full : ''
+    st.chain = !!card.chain
+    return { full, from }
+  }
+
+  return { applySet, passes, findTag, runEnd, walk, segments, typeCaption, chainStep }
 })()
 if (typeof module !== 'undefined') module.exports = SagaPlay

@@ -545,6 +545,8 @@ def paste_card(src):
     sub = str(src.get("sub") or "")[:500]
     if sub:
         c["sub"] = sub
+    if src.get("chain"):
+        c["chain"] = True
     label = str(src.get("label") or "")[:80]
     if label:
         c["label"] = label
@@ -2211,7 +2213,7 @@ def _export_chunk(c):
     out = {"id": c["id"], "type": c.get("type", "speech")}
     if is_speech(c):
         out["text"] = c["text"]
-    for k in ("tags", "when", "auto", "mute", "media", "mediakind", "sub"):
+    for k in ("tags", "when", "auto", "mute", "media", "mediakind", "sub", "chain"):
         if c.get(k):
             out[k] = c[k]
     if c.get("type") == "choice":
@@ -2886,6 +2888,11 @@ class H(BaseHTTPRequestHandler):
                             # words at all for a voiced card. Display only:
                             # never in any hash, so captioning costs nothing.
                             c["sub"] = str(d["sub"] or "")[:500]
+                        if "chain" in d:
+                            # the caption stands when this card ends, and the
+                            # next caption appends — one block across cards
+                            # that were split for delivery, not for meaning
+                            c["chain"] = bool(d["chain"])
                         if "when" in d:        # plays only when this holds
                             c["when"] = clean_when(d["when"])
                         # choice-card fields, validated against the grammar —

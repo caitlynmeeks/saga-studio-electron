@@ -1974,7 +1974,7 @@ function speechCard(c){return `
     </div>
     <textarea id="t${c.id}" oninput="touched(${c.id})" onblur="flush(${c.id})"
       onfocus="setCur(${c.id})"${c.locked?' readonly':''}${(HEIGHT[c.id]||c.height)?` style="height:${HEIGHT[c.id]||c.height}px"`:''}>${esc(c.text)}</textarea>
-    ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
+    ${(SUBS.has(c.id)||c.sub||c.chain)?subRow(c):''}
     ${DELIV.has(c.id)?delivRow(c):''}
     <div class="act">
       <button id="pf${c.id}" onclick="playFull(${c.id})" ${c.ready&&!c.mute?'':'disabled'}>▶ full</button>
@@ -1984,7 +1984,7 @@ function speechCard(c){return `
       <button id="dv${c.id}" class="${Object.keys(c.params||{}).length?'dirty':''}"
         onclick="toggleDeliv(${c.id})"
         title="change the engine or the delivery for this one card only">delivery</button>
-      <button id="sub${c.id}" class="${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
+      <button id="sub${c.id}" class="${((c.sub||'').trim()||c.chain)?'dirty':''}" onclick="toggleSub(${c.id})"
         title="what the stage shows, when that differs from what is spoken — Teide on screen, tay-dee in the booth">subtitle</button>
       <button onclick="splitAt(${c.id})">split</button>
       <button onclick="merge(${c.id})">merge next</button>
@@ -2100,14 +2100,14 @@ function voicedCard(c){
       <button id="pk${c.id}" onclick="playPerf(${c.id})" ${c.haveperf?'':'disabled'}
         title="hear your own recording, before conversion">▶ yours</button>
     </div>
-    ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
+    ${(SUBS.has(c.id)||c.sub||c.chain)?subRow(c):''}
     <div class="act">
       <button id="pf${c.id}" onclick="playFull(${c.id})" ${c.ready&&!c.mute?'':'disabled'}
         title="hear it in the character's voice">▶ in voice</button>
       <button id="rb${c.id}" class="pri" onclick="one(${c.id})"
         ${c.mute||!c.haveperf?'disabled':''}>render</button>
       ${takeUi(c)}
-      <button id="sub${c.id}" class="${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
+      <button id="sub${c.id}" class="${((c.sub||'').trim()||c.chain)?'dirty':''}" onclick="toggleSub(${c.id})"
         title="a voiced card has no prose — this is what the stage shows while your performance plays">subtitle</button>
       <button onclick="dup(${c.id})">duplicate</button>
       <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
@@ -2574,16 +2574,20 @@ function subRow(c){
     <input value="${esc(c.sub||'')}" placeholder="${c.type==='voiced'
       ?'what the stage shows while this performance plays'
       :'what the stage shows — the card’s text is what is spoken'}"
-      onchange="setCard(${c.id},{sub:this.value});paintSubBtn(${c.id},this.value)">
+      onchange="setCard(${c.id},{sub:this.value});paintSubBtn(${c.id})">
+    <label class="mut" style="font-size:11px;white-space:nowrap"
+      title="don’t clear this caption when the card ends — the next caption appends to it, one growing block across cards split for delivery. Silences and sound clips in between leave it standing.">
+      <input type="checkbox" ${c.chain?'checked':''}
+        onchange="setCard(${c.id},{chain:this.checked});paintSubBtn(${c.id})"> ⇢ chain</label>
   </div>`;
 }
 function toggleSub(id){
   const row=$('sb'+id);
   if(row){
     const c=DOC&&DOC.chunks.find(x=>x.id===id);
-    // a card WITH a subtitle keeps its row — emptying the field is how a
-    // subtitle goes away, and hiding a set one would look like losing it
-    if(c&&c.sub)return void row.querySelector('input').focus();
+    // a card WITH a subtitle or a chain keeps its row — emptying the field
+    // and unticking are how those go away; hiding would look like losing them
+    if(c&&(c.sub||c.chain))return void row.querySelector('input').focus();
     row.remove(); SUBS.delete(id); return;
   }
   const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
@@ -2593,9 +2597,20 @@ function toggleSub(id){
   const inp=document.querySelector('#sb'+id+' input');
   if(inp)inp.focus();
 }
-function paintSubBtn(id,v){
-  const b=$('sub'+id);
-  if(b)b.classList.toggle('dirty',!!(v||'').trim());
+function paintSubBtn(id){
+  // read the row itself, not DOC — the save that follows this repaint has
+  // not landed yet, and the inputs are what the user actually sees
+  const row=$('sb'+id), b=$('sub'+id);
+  if(!b)return;
+  let has;
+  if(row){
+    has=row.querySelector('input').value.trim()
+      ||row.querySelector('input[type=checkbox]').checked;
+  }else{
+    const c=DOC&&DOC.chunks.find(x=>x.id===id);
+    has=c&&((c.sub||'').trim()||c.chain);
+  }
+  b.classList.toggle('dirty',!!has);
 }
 const ENGLABEL={chatterbox:'Chatterbox', omnivoice:'OmniVoice'};
 function enginePill(c){

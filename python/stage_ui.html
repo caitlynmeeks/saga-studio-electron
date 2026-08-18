@@ -134,13 +134,13 @@ function show(c){
   room.insertBefore(el,$('caption'));
 }
 
-let TYPER=null;
-function caption(text,secs){
+let TYPER=null, CAPST={txt:'',chain:false};
+function caption(text,secs,from){
   const el=$('caption');
   if(TYPER){ TYPER(); TYPER=null; }
   if(!text)return void el.classList.remove('on');
   el.classList.add('on');
-  if($('twk').checked&&secs>0)TYPER=SagaPlay.typeCaption(el,text,secs);
+  if($('twk').checked&&secs>0)TYPER=SagaPlay.typeCaption(el,text,secs,from||0);
   else el.textContent=text;
 }
 
@@ -160,6 +160,7 @@ async function story(fromId){
   await load();
   if(!DOC||tok!==TOKEN)return;
   VARS={};
+  CAPST={txt:'',chain:false};             // a fresh ride starts a fresh block
   let start=0;
   if(fromId!=null){ const k=DOC.chunks.findIndex(c=>c.id===fromId); if(k>=0)start=k; }
   await SagaPlay.walk(DOC.chunks,{
@@ -191,6 +192,7 @@ function playRun(tok,from,upto){
 function ask(tok,opts){
   return new Promise(res=>{
     if(tok!==TOKEN)return res(null);
+    CAPST={txt:'',chain:false};           // a choice breaks the chain
     $('playb').textContent='▶ play';
     const ch=$('chooser');
     ch.innerHTML=opts.map((o,i)=>`<button data-i="${i}">${esc(o.label)||'…'}</button>`).join('');
@@ -253,9 +255,13 @@ function tick(){
       if(x&&x.type==='visual'&&x.ready)vis=x; }
     if(vis)show(vis);
     // the subtitle wins over the spoken text — "Teide" on screen while the
-    // booth was fed "tay-dee" — and it is the only words a voiced card has
+    // booth was fed "tay-dee" — and it is the only words a voiced card has.
+    // chainStep decides whether these words replace the caption, append to a
+    // standing chain, or (a wordless card inside a chain) leave it alone —
+    // so a silence or a music bed between chained cards holds the block.
     const dur=(i+1<MARKS.length?MARKS[i+1].at:(AUDIO.duration||t))-MARKS[i].at;
-    caption(c.sub||((c.type||'speech')==='speech'?c.text:''),dur);
+    const r=SagaPlay.chainStep(CAPST,c,c.sub||((c.type||'speech')==='speech'?c.text:''));
+    if(!r.hold)caption(r.full,dur,r.from);
   }
   say({type:'playing',card:MARKS[i].id});
 }
