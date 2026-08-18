@@ -214,6 +214,7 @@ padding:1px 6px;border-radius:99px}
 .sortbar button:hover{color:var(--fg)}
 .sortbar button.on{background:var(--chrome);color:var(--bright)}
 /* right-click menus */
+body[data-ctx="1"] .ins{opacity:0!important;pointer-events:none}
 .ctx{position:fixed;z-index:200;min-width:168px;background:var(--chrome);
 border:1px solid var(--line);border-radius:7px;padding:4px;
 box-shadow:0 8px 24px rgba(0,0,0,.45)}
@@ -657,6 +658,7 @@ async function openProject(name){ await flushAll(); await open_(name);
 // where it sits in the window before the rebuild, and put it back there after.
 // `from` is measured on the old stack and `to` located on the new one; they
 // differ whenever an edit renumbers, as removing or moving a card does.
+let SELKEY='';
 const anchorOf=a=>a==null?null:(typeof a==='number'?{from:a,to:a}:a);
 function anchorTop(a){
   const el=a&&$('c'+a.from);
@@ -677,6 +679,13 @@ async function open_(name,quiet,anchor){
   // height some card happened to occupy in the last one.
   const an=quiet?anchorOf(anchor!=null?anchor:CUR):null, was=anchorTop(an);
   if(!quiet)SEL.clear();
+  // a structural edit renumbers every id, so a selection made under the old
+  // numbering now points at strangers — drop it rather than let the group
+  // menu count ghosts. Same-count rebuilds (a lone card moved) clear where
+  // the move happens instead.
+  if(SELKEY!==DOC.name+':'+DOC.chunks.length){ SEL.clear();
+    const cn=$('chatnote'); if(cn)cn.textContent=''; }
+  SELKEY=DOC.name+':'+DOC.chunks.length;
   // a card removed under you, or another document opened, leaves nothing to
   // start from — say so rather than pointing the preview at a stranger
   if(!quiet||!DOC.chunks.some(c=>c.id===CUR))CUR=null;
@@ -1573,7 +1582,7 @@ async function publishWeb(){
 // their own closures, so nothing has to be encoded into an HTML attribute and
 // a profile called "Gertie's" cannot break the markup that offers to rename it.
 let CTX=null;
-function closeCtx(){ if(CTX){ CTX.remove(); CTX=null; } }
+function closeCtx(){ if(CTX){ CTX.remove(); CTX=null; } document.body.dataset.ctx=''; }
 document.addEventListener('click',closeCtx);
 // Close when the page scrolls under the menu — but not when something *inside*
 // it scrolls. An input follows its caret by scrolling horizontally the moment
@@ -1594,6 +1603,7 @@ function openCtx(e,items){
     :`<button data-i="${i}" ${it.disabled?'disabled':''} ${it.danger?'class="danger"':''}
        >${esc(it.label)}</button>`).join('');
   document.body.appendChild(m);
+  document.body.dataset.ctx='1';     // the insert strips hold still under a menu
   // keep it on screen when you right-click near an edge
   m.style.left=Math.max(6,Math.min(e.clientX,innerWidth-m.offsetWidth-8))+'px';
   m.style.top=Math.max(6,Math.min(e.clientY,innerHeight-m.offsetHeight-8))+'px';
@@ -1800,6 +1810,7 @@ function groupDragStart(e,g){
 }
 function groupDragEnd(){ DRAGGROUP=null; document.body.dataset.dropclip=''; clearMarks(); }
 async function dropGroupAt(at){
+  SEL.clear();
   const g=DRAGGROUP; DRAGGROUP=null; clearMarks();
   document.body.dataset.dropclip='';
   if(!g||!DOC)return;
@@ -1809,19 +1820,23 @@ async function dropGroupAt(at){
   HEIGHT={}; CUR=null;
   await open_(DOC.name,true);
 }
-// Shift-click gathers cards for grouping — the same SEL the discuss panel
-// reads, so a selection is a selection wherever it is spent.
+// Shift-click (or ⌘/ctrl-click) gathers cards for grouping — the same SEL
+// the discuss panel reads. Captured BEFORE the card's own mousedown, and
+// swallowed there, so selecting never also moves the amber editing cursor —
+// that double meaning was what made multi-select feel haunted. Form fields
+// keep their native shift-click: selecting text is not selecting cards.
 $('main').addEventListener('mousedown',e=>{
-  if(!e.shiftKey)return;
+  if(!e.shiftKey&&!e.metaKey&&!e.ctrlKey)return;
+  if(e.target.closest('input,textarea,select,button'))return;
   const card=e.target.closest('.chunk'); if(!card)return;
-  e.preventDefault();                     // no text selection on a shift-click
+  e.preventDefault(); e.stopPropagation();   // setCur stays out of this
   const id=+card.id.slice(1);
   pick(id,!SEL.has(id));
   card.classList.toggle('sel',SEL.has(id));
   $('status').textContent=SEL.size>1
     ?SEL.size+' cards selected — right-click a card header to group them'
     :SEL.size?'1 card selected — shift-click more, then right-click a header':'';
-});
+},true);
 function cardHTML(c){
   if(c.min)return minCard(c);
   return c.type==='audio'?audioCard(c)
@@ -1840,7 +1855,7 @@ const minBtn=id=>`<button class="tiny" onclick="setMin(${id},true)"
   title="collapse to a bar — easier to drag; right-click the header to name it">▾</button>`;
 function minCard(c){
   return `
-   <div class="chunk min ${CUR===c.id?'cur':''}" id="c${c.id}"
+   <div class="chunk min ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top" style="border-bottom:0">
       ${grip(c.id)}
@@ -2022,7 +2037,7 @@ function audioCard(c){
   const len=c.cliplen||(cur&&cur.secs)||0;
   const fade=c.fade||[0,100], g=c.gain==null?100:c.gain, after=c.after==null?5:c.after;
   return `
-   <div class="chunk ${CUR===c.id?'cur':''}" id="c${c.id}"
+   <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top">
       ${grip(c.id)}
@@ -2097,7 +2112,7 @@ function voicedCard(c){
     : !c.haveperf ? '<span class="warn">that recording is missing from takes/</span>'
     : esc(c.perfname||'performance')+(len?' <span class="mut">· '+fmtSecs(len)+'</span>':'');
   return `
-   <div class="chunk ${CUR===c.id?'cur':''}" id="c${c.id}"
+   <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top">
       ${grip(c.id)}
@@ -2142,7 +2157,7 @@ function voicedCard(c){
 }
 
 function silenceCard(c){return `
-   <div class="chunk ${CUR===c.id?'cur':''}" id="c${c.id}"
+   <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top" style="border-bottom:0">
       ${grip(c.id)}
@@ -2177,7 +2192,7 @@ function visualCard(c){
       :`<img src="/api/media?f=${encodeURIComponent(c.media)}" loading="lazy"
          style="max-height:150px;max-width:100%;border-radius:6px;object-fit:contain">`;
   return `
-   <div class="chunk ${CUR===c.id?'cur':''}" id="c${c.id}"
+   <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top">
       ${grip(c.id)}
@@ -2215,7 +2230,7 @@ function visualCard(c){
 function choiceCard(c){
   const opts=c.options||[];
   return `
-   <div class="chunk ${CUR===c.id?'cur':''}" id="c${c.id}"
+   <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
     <div class="top">
       ${grip(c.id)}
@@ -3161,6 +3176,7 @@ async function moveCard(id,to){
   await flushAll();
   await api('/api/move',{name:DOC.name,id,to});
   HEIGHT={}; CUR=null;
+  SEL.clear();     // ids renumbered under the selection; same count, so say so here
   // Follow the card you dragged to wherever it landed — closing the gap it
   // left and scrolling off to find it are two separate annoyances. Moving it
   // down shifts every card it passed up one slot, so it lands at to-1.
