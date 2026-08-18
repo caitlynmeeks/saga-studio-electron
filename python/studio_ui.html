@@ -153,7 +153,10 @@ color:var(--dim);white-space:nowrap}
 border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:6px;
 background:#14120d;cursor:grab;font-size:12px}
 .gbar b{color:var(--amber);font-weight:600}
-.gfold{display:none}
+/* .ins.gfold too: the strip's own display:flex sits later in this sheet and
+   would win the specificity tie, leaving a folded group trailing a stack of
+   empty twenty-pixel strips — the mystery gap under the bar */
+.gfold,.ins.gfold{display:none}
 .cardname{color:var(--bright);overflow:hidden;text-overflow:ellipsis;
 white-space:nowrap;max-width:42ch}
 button.tiny{padding:0 5px;font-size:12px;line-height:17px;border-color:transparent;color:var(--faint)}
@@ -1768,16 +1771,24 @@ let GMIN={};
 try{ GMIN=JSON.parse(localStorage.getItem('saga.gmin')||'{}'); }catch(e){}
 const gkey=g=>(DOC?DOC.name:'')+'/'+g;
 const isGmin=g=>!!GMIN[gkey(g)];
-function toggleGmin(g){
+async function toggleGmin(g){
   if(GMIN[gkey(g)])delete GMIN[gkey(g)]; else GMIN[gkey(g)]=1;
   try{ localStorage.setItem('saga.gmin',JSON.stringify(GMIN)); }catch(e){}
-  open_(DOC.name,true);
+  // The bar itself must not dance. Hold its place on the glass through the
+  // rebuild, so folding and unfolding move the cards BELOW it and the same
+  // spot keeps toggling it — open, close, open, without chasing the bar.
+  const find=()=>[...document.querySelectorAll('#main .gbar')]
+    .find(el=>el.dataset.g===g);
+  const bar=find(), was=bar?bar.getBoundingClientRect().top:null;
+  await open_(DOC.name,true);
+  const now=find();
+  if(now&&was!=null)$('main').scrollTop+=now.getBoundingClientRect().top-was;
 }
 function gbar(g){
   // the name was stripped of quote/angle characters on the way in, so it can
   // sit inside these handlers without breaking out of them
   const n=DOC.chunks.filter(x=>x.group===g).length, min=isGmin(g);
-  return `<div class="gbar" draggable="true" title="drag to move the whole group"
+  return `<div class="gbar" data-g="${esc(g)}" draggable="true" title="drag to move the whole group"
     ondragstart="groupDragStart(event,'${esc(g)}')" ondragend="groupDragEnd()">
     <button class="tiny" onclick="toggleGmin('${esc(g)}')" title="${min?'unfold':'fold away'} these cards">${min?'▸':'▾'}</button>
     <b ondblclick="toggleGmin('${esc(g)}')">${esc(g)}</b>
