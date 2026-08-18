@@ -144,6 +144,18 @@ color:var(--dim);white-space:nowrap}
 .opt .olabel{flex:2;min-width:90px}
 .opt .oscript{flex:1;min-width:70px;font-size:11px;color:var(--dim)}
 .opt select{max-width:150px;font-size:11px}
+/* what the stage shows, when it differs from what is spoken */
+.subrow input{flex:1;color:var(--bright)}
+/* a collapsed card: the header bar carries the whole identity */
+.chunk.min{background:#101413}
+/* a group's bar — fold, name, drag-handle for the whole run */
+.gbar{display:flex;gap:8px;align-items:center;padding:5px 10px;margin:2px 0 7px;
+border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:6px;
+background:#14120d;cursor:grab;font-size:12px}
+.gbar b{color:var(--amber);font-weight:600}
+.gfold{display:none}
+.cardname{color:var(--bright);overflow:hidden;text-overflow:ellipsis;
+white-space:nowrap;max-width:42ch}
 button.tiny{padding:0 5px;font-size:12px;line-height:17px;border-color:transparent;color:var(--faint)}
 .proj:hover button.tiny{border-color:var(--line)}
 /* same bargain in a card header: invisible until the card is under the mouse,
@@ -1605,6 +1617,34 @@ function ctxAsk(suggested,placeholder,label,onOk){
   inp.focus(); inp.select();
 }
 
+// Every per-card verb that never earned a button lives on the header's
+// right-click: collapse, naming, locking. Delegated once — the stack rebuilds
+// constantly and per-card listeners would double up. Inputs keep their native
+// menu; only the plain header surface is claimed.
+document.addEventListener('contextmenu',e=>{
+  if(e.target.closest('input,select,textarea,button'))return;
+  const top=e.target.closest('#main .chunk > .top'); if(!top)return;
+  const card=top.closest('.chunk');
+  cardMenu(e,+card.id.slice(1));
+});
+function cardMenu(e,id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const items=[
+    {label:c.min?'expand':'collapse to a bar', run:()=>setMin(id,!c.min)},
+    {label:c.label?'rename…':'name…', run:()=>{ openCtx(e,[]);
+       ctxAsk(c.label||'','Maisie discovers the plan','name',v=>setCard(id,{label:v},true)); }},
+  ];
+  if(c.label)items.push({label:'clear the name', run:()=>setCard(id,{label:''},true)});
+  items.push({label:c.locked?'unlock':'lock',
+    run:()=>setCard(id,{locked:!c.locked},true)});
+  if(SEL.size>1)items.unshift(
+    {label:`group the ${SEL.size} selected…`, run:()=>{ openCtx(e,[]);
+       ctxAsk('','the yard, act one','group',v=>makeGroup(v)); }},'-');
+  if(c.group)items.push({label:`ungroup “${c.group}”`, run:()=>ungroup(c.group)});
+  items.push('-',{label:'copy', run:()=>copyCard(id)});
+  openCtx(e,items);
+}
+
 function projMenu(e,name){
   const p=(STATE.projects||[]).find(x=>x.name===name); if(!p)return;
   openCtx(e,[
@@ -1688,17 +1728,129 @@ async function duplicateProfile(n){
 // be born exactly where it belongs.
 function renderDoc(){
   tagCounts();                        // tagsUi reads TAGN for its dup warnings
-  $('main').innerHTML=insBar(0)+DOC.chunks.map(c=>cardHTML(c)+insBar(c.id+1)).join('');
+  // Groups render as a bar above their first member. A folded group's cards
+  // stay in the DOM at display:none — bindDrag counts strips by index, and a
+  // missing strip would shift every drop slot after it.
+  let prevG=null;
+  $('main').innerHTML=insBar(0)+DOC.chunks.map(c=>{
+    let h='';
+    const g=c.group||null;
+    if(g&&g!==prevG)h+=gbar(g);
+    prevG=g;
+    if(g&&isGmin(g))h+=`<div class="gfold">${cardHTML(c)}</div><div class="ins gfold"></div>`;
+    else h+=cardHTML(c)+insBar(c.id+1);
+    return h;
+  }).join('');
   DOC.chunks.forEach(c=>{ if(c.type==='audio')fadeUi(c.id); });
   bindDrag(); paintClip();          // the strips are new, so their paste buttons are too
 }
+// ── groups ────────────────────────────────────────────────
+// A contiguous run of cards under one name — a scene, a beat — with a bar
+// that folds them away and drags them as one. Presentation only: nothing
+// downstream reads it. Fold state is this machine's business, not the
+// document's, so it lives beside the other view state in localStorage.
+let GMIN={};
+try{ GMIN=JSON.parse(localStorage.getItem('saga.gmin')||'{}'); }catch(e){}
+const gkey=g=>(DOC?DOC.name:'')+'/'+g;
+const isGmin=g=>!!GMIN[gkey(g)];
+function toggleGmin(g){
+  if(GMIN[gkey(g)])delete GMIN[gkey(g)]; else GMIN[gkey(g)]=1;
+  try{ localStorage.setItem('saga.gmin',JSON.stringify(GMIN)); }catch(e){}
+  open_(DOC.name,true);
+}
+function gbar(g){
+  // the name was stripped of quote/angle characters on the way in, so it can
+  // sit inside these handlers without breaking out of them
+  const n=DOC.chunks.filter(x=>x.group===g).length, min=isGmin(g);
+  return `<div class="gbar" draggable="true" title="drag to move the whole group"
+    ondragstart="groupDragStart(event,'${esc(g)}')" ondragend="groupDragEnd()">
+    <button class="tiny" onclick="toggleGmin('${esc(g)}')" title="${min?'unfold':'fold away'} these cards">${min?'▸':'▾'}</button>
+    <b ondblclick="toggleGmin('${esc(g)}')">${esc(g)}</b>
+    <span class="mut" style="font-size:11px">${n} card${n===1?'':'s'}${min?' · folded':''}</span>
+    <span style="flex:1"></span>
+    <button class="tiny" onclick="ungroup('${esc(g)}')" title="ungroup — the cards stay where they are">×</button>
+  </div>`;
+}
+async function makeGroup(v){
+  const r=await api('/api/group',{name:DOC.name,ids:[...SEL],gname:v});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  SEL.clear(); $('chatnote').textContent='';
+  await open_(DOC.name,true);
+  $('status').innerHTML=`<span class="ok">grouped ${r.cards} card${r.cards===1?'':'s'} as “${esc(r.gname)}”</span>`+
+    ' — drag the bar to move them together, fold them with ▾';
+}
+async function ungroup(g){
+  const r=await api('/api/ungroup',{name:DOC.name,gname:g});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  delete GMIN[gkey(g)];
+  await open_(DOC.name,true);
+  $('status').innerHTML=`<span class="ok">ungrouped “${esc(g)}”</span> — the cards stay where they are`;
+}
+let DRAGGROUP=null;
+function groupDragStart(e,g){
+  DRAGGROUP=g;
+  document.body.dataset.dropclip='1';     // light the gaps, as an arriving clip does
+  e.dataTransfer.effectAllowed='move';
+  try{ e.dataTransfer.setData('text/plain',g); }catch(_){}
+}
+function groupDragEnd(){ DRAGGROUP=null; document.body.dataset.dropclip=''; clearMarks(); }
+async function dropGroupAt(at){
+  const g=DRAGGROUP; DRAGGROUP=null; clearMarks();
+  document.body.dataset.dropclip='';
+  if(!g||!DOC)return;
+  await flushAll();
+  const r=await api('/api/move_group',{name:DOC.name,gname:g,to:at});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  HEIGHT={}; CUR=null;
+  await open_(DOC.name,true);
+}
+// Shift-click gathers cards for grouping — the same SEL the discuss panel
+// reads, so a selection is a selection wherever it is spent.
+$('main').addEventListener('mousedown',e=>{
+  if(!e.shiftKey)return;
+  const card=e.target.closest('.chunk'); if(!card)return;
+  e.preventDefault();                     // no text selection on a shift-click
+  const id=+card.id.slice(1);
+  pick(id,!SEL.has(id));
+  card.classList.toggle('sel',SEL.has(id));
+  $('status').textContent=SEL.size>1
+    ?SEL.size+' cards selected — right-click a card header to group them'
+    :SEL.size?'1 card selected — shift-click more, then right-click a header':'';
+});
 function cardHTML(c){
+  if(c.min)return minCard(c);
   return c.type==='audio'?audioCard(c)
     :c.type==='silence'?silenceCard(c)
     :c.type==='voiced'?voicedCard(c)
     :c.type==='visual'?visualCard(c)
     :c.type==='choice'?choiceCard(c):speechCard(c);
 }
+// ── collapsed cards ───────────────────────────────────────
+// A card folded down to its header bar: same identity, same dot, same grip —
+// which is the point, because a bar is what you can actually drag around a
+// two-hundred-card stack. The name is yours if you set one ("Maisie discovers
+// the plan"), the card's own gist otherwise.
+const cardName=c=>c.label||clipLabel(c)||'(empty card)';
+const minBtn=id=>`<button class="tiny" onclick="setMin(${id},true)"
+  title="collapse to a bar — easier to drag; right-click the header to name it">▾</button>`;
+function minCard(c){
+  return `
+   <div class="chunk min ${CUR===c.id?'cur':''}" id="c${c.id}"
+     onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
+    <div class="top" style="border-bottom:0">
+      ${grip(c.id)}
+      <span class="dot ${c.mute?'':(c.ready?'ready':'stale')}"></span>
+      <span>#${c.id}</span>
+      <span class="cardname" title="right-click to name this card">${esc(cardName(c))}</span>
+      ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${tagsUi(c)}
+      <span style="flex:1"></span>
+      ${copyBtn(c.id)}
+      <button class="tiny" onclick="setMin(${c.id},false)" title="expand">▸</button>
+    </div>
+   </div>`;
+}
+async function setMin(id,on){ await setCard(id,{min:on},true); }
 const insBar=at=>`<div class="ins">
     <button class="pb" onclick="pasteCard(${at})">+ paste</button>
     <button onclick="insertCard(${at},'speech')" title="insert an empty text card here">+ text</button>
@@ -1724,7 +1876,9 @@ function tagCounts(){
   const dl=$('taglist');
   if(dl)dl.innerHTML=[...TAGN.keys()].sort().map(t=>`<option value="${esc(t)}">`).join('');
 }
-const tagsUi=c=>`<span class="tags" id="tg${c.id}">${(c.tags||[]).map(t=>
+const tagsUi=c=>`<span class="tags" id="tg${c.id}">${
+  c.locked?'<span class="pill" title="locked — right-click the header to unlock">🔒</span>':''
+  }${(c.tags||[]).map(t=>
     `<span class="tag${(TAGN.get(t)||0)>1?' dup':''}"${(TAGN.get(t)||0)>1
       ?' title="this tag is on more than one card — a jump lands on the first"':''
     }>${esc(t)}<i onclick="rmTag(${c.id},'${esc(t)}')" title="remove this tag">×</i></span>`).join('')
@@ -1809,12 +1963,13 @@ function speechCard(c){return `
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
-      ${copyBtn(c.id)}
+      ${copyBtn(c.id)}${minBtn(c.id)}
       <label class="mut dchk" style="font-size:11px"><input type="checkbox" ${SEL.has(c.id)?'checked':''}
         onchange="pick(${c.id},this.checked)"> discuss</label>
     </div>
     <textarea id="t${c.id}" oninput="touched(${c.id})" onblur="flush(${c.id})"
-      onfocus="setCur(${c.id})"${(HEIGHT[c.id]||c.height)?` style="height:${HEIGHT[c.id]||c.height}px"`:''}>${esc(c.text)}</textarea>
+      onfocus="setCur(${c.id})"${c.locked?' readonly':''}${(HEIGHT[c.id]||c.height)?` style="height:${HEIGHT[c.id]||c.height}px"`:''}>${esc(c.text)}</textarea>
+    ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
     ${DELIV.has(c.id)?delivRow(c):''}
     <div class="act">
       <button id="pf${c.id}" onclick="playFull(${c.id})" ${c.ready&&!c.mute?'':'disabled'}>▶ full</button>
@@ -1824,6 +1979,8 @@ function speechCard(c){return `
       <button id="dv${c.id}" class="${Object.keys(c.params||{}).length?'dirty':''}"
         onclick="toggleDeliv(${c.id})"
         title="change the engine or the delivery for this one card only">delivery</button>
+      <button id="sub${c.id}" class="${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
+        title="what the stage shows, when that differs from what is spoken — Teide on screen, tay-dee in the booth">subtitle</button>
       <button onclick="splitAt(${c.id})">split</button>
       <button onclick="merge(${c.id})">merge next</button>
       <button onclick="dup(${c.id})">duplicate</button>
@@ -1851,7 +2008,7 @@ function audioCard(c){
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
-      ${copyBtn(c.id)}
+      ${copyBtn(c.id)}${minBtn(c.id)}
     </div>
     <div class="arow">
       <select onchange="setCard(${c.id},{clip:this.value},true)" style="max-width:230px">
@@ -1928,7 +2085,7 @@ function voicedCard(c){
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
-      ${copyBtn(c.id)}
+      ${copyBtn(c.id)}${minBtn(c.id)}
     </div>
     <div class="arow">
       <span class="lbl">you said</span>
@@ -1938,12 +2095,15 @@ function voicedCard(c){
       <button id="pk${c.id}" onclick="playPerf(${c.id})" ${c.haveperf?'':'disabled'}
         title="hear your own recording, before conversion">▶ yours</button>
     </div>
+    ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
     <div class="act">
       <button id="pf${c.id}" onclick="playFull(${c.id})" ${c.ready&&!c.mute?'':'disabled'}
         title="hear it in the character's voice">▶ in voice</button>
       <button id="rb${c.id}" class="pri" onclick="one(${c.id})"
         ${c.mute||!c.haveperf?'disabled':''}>render</button>
       ${takeUi(c)}
+      <button id="sub${c.id}" class="${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
+        title="a voiced card has no prose — this is what the stage shows while your performance plays">subtitle</button>
       <button onclick="dup(${c.id})">duplicate</button>
       <button onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
       <button onclick="del(${c.id})" style="color:var(--red)">remove</button>
@@ -1967,7 +2127,7 @@ function silenceCard(c){return `
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
-      ${copyBtn(c.id)}
+      ${copyBtn(c.id)}${minBtn(c.id)}
       <button class="tiny" onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>
       <button class="tiny" onclick="del(${c.id})" style="color:var(--red)" title="remove">×</button>
     </div>
@@ -1999,7 +2159,7 @@ function visualCard(c){
       ${c.mute?'<span class="pill warn">muted</span>':''}
       ${tagsUi(c)}
       <span style="flex:1"></span>
-      ${copyBtn(c.id)}
+      ${copyBtn(c.id)}${minBtn(c.id)}
     </div>
     <div class="arow">
       <select onchange="setCard(${c.id},{media:this.value},true)" style="max-width:230px">
@@ -2039,7 +2199,7 @@ function choiceCard(c){
       ${c.mute?'<span class="pill warn">muted</span>':''}
       ${tagsUi(c)}
       <span style="flex:1"></span>
-      ${copyBtn(c.id)}
+      ${copyBtn(c.id)}${minBtn(c.id)}
     </div>
     <div id="op${c.id}">${opts.map((o,i)=>optRow(c,o,i)).join('')}</div>
     <div class="act">
@@ -2396,6 +2556,42 @@ async function setRunon(id,on){
 // disappointed. Same reason the engine is on the card header at all: with two
 // engines in one document, "which one spoke this?" stopped being obvious.
 let DELIV=new Set();
+// ── subtitles ─────────────────────────────────────────────
+// The card's text is what the model SPEAKS; the subtitle is what the stage
+// SHOWS. They part company exactly when you misspell a word on purpose so the
+// actor pronounces it — "tay-dee" spoken, "Teide" shown — and on a voiced
+// card, which has a performance and no prose at all. Display only, in no
+// hash: captioning a finished book re-renders nothing.
+let SUBS=new Set();
+function subRow(c){
+  return `<div class="arow subrow" id="sb${c.id}">
+    <span class="lbl">shown</span>
+    <input value="${esc(c.sub||'')}" placeholder="${c.type==='voiced'
+      ?'what the stage shows while this performance plays'
+      :'what the stage shows — the card’s text is what is spoken'}"
+      onchange="setCard(${c.id},{sub:this.value});paintSubBtn(${c.id},this.value)">
+  </div>`;
+}
+function toggleSub(id){
+  const row=$('sb'+id);
+  if(row){
+    const c=DOC&&DOC.chunks.find(x=>x.id===id);
+    // a card WITH a subtitle keeps its row — emptying the field is how a
+    // subtitle goes away, and hiding a set one would look like losing it
+    if(c&&c.sub)return void row.querySelector('input').focus();
+    row.remove(); SUBS.delete(id); return;
+  }
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  SUBS.add(id);
+  const act=document.querySelector('#c'+id+' .act');
+  if(act)act.insertAdjacentHTML('beforebegin', subRow(c));
+  const inp=document.querySelector('#sb'+id+' input');
+  if(inp)inp.focus();
+}
+function paintSubBtn(id,v){
+  const b=$('sub'+id);
+  if(b)b.classList.toggle('dirty',!!(v||'').trim());
+}
 const ENGLABEL={chatterbox:'Chatterbox', omnivoice:'OmniVoice'};
 function enginePill(c){
   const e=(c.effective||{}).engine||'chatterbox', own=c.params||{};
@@ -2635,6 +2831,8 @@ async function dup(id){ await flushAll();
   await api('/api/duplicate',{name:DOC.name,id}); open_(DOC.name,true,id); }
 async function del(id){
   const c=DOC.chunks.find(x=>x.id===id);
+  if(c&&c.locked)return void($('status').innerHTML=
+    '<span class="warn">that card is locked</span> — right-click its header to unlock it');
   const what=c.type==='audio'?`♪ audio card — ${c.clip||'no clip chosen'}`
     :c.type==='silence'?`${c.secs==null?1:c.secs}s of silence`
     :c.type==='voiced'?`◎ voiced — ${c.perfname||'no recording yet'}`
@@ -2678,7 +2876,9 @@ const fmtSecs=s=>s>=60?`${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(
 // name); sliders and radios keep their own DOM, so a sync is enough and the
 // control never vanishes mid-drag
 async function setCard(id,patch,rebuild){
-  await api('/api/chunk',{name:DOC.name,id,...patch});
+  const r=await api('/api/chunk',{name:DOC.name,id,...patch});
+  // a refusal — a locked card, mostly — must be seen, or the control looks broken
+  if(r.error)$('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`;
   if(rebuild)open_(DOC.name,true,id); else await syncCards();
 }
 function fadeUi(id){
@@ -2805,6 +3005,10 @@ async function copyCard(id){
   const c=(DOC.chunks.find(x=>x.id===id))||was;
   CLIP={type:c.type||'speech', mute:!!c.mute, runon:!!c.runon, from:`${DOC.title} #${id}`};
   if(c.tags&&c.tags.length)CLIP.tags=c.tags;
+  if(c.sub)CLIP.sub=c.sub;
+  if(c.when)CLIP.when=c.when;
+  if(c.locked)CLIP.locked=true;
+  if(c.label)CLIP.label=c.label;
   if(CLIP.type==='audio')Object.assign(CLIP,
     {clip:c.clip||'', mode:c.mode||'full', after:c.after, fade:c.fade, gain:c.gain});
   else if(CLIP.type==='silence')CLIP.secs=c.secs;
@@ -2857,7 +3061,7 @@ function clearMarks(){ document.querySelectorAll('.dropa,.dropb,.ins.hot')
 // Two things can be dropped on the stack: a card being moved within it, and a
 // clip arriving from the sidebar. Same targets, same marks — only the landing
 // differs, so each handler asks which is in flight rather than which gate it is.
-const dragging=()=>DRAGID!=null||DRAGCLIP!=null||DRAGMEDIA!=null;
+const dragging=()=>DRAGID!=null||DRAGCLIP!=null||DRAGMEDIA!=null||DRAGGROUP!=null;
 function bindDrag(){
   document.querySelectorAll('#main .chunk').forEach(el=>{
     el.addEventListener('dragover',e=>{
@@ -2872,6 +3076,7 @@ function bindDrag(){
       const at=(+el.id.slice(1))+(before?0:1);
       if(DRAGCLIP)return dropClipAt(at);
       if(DRAGMEDIA)return dropMediaAt(at);
+      if(DRAGGROUP)return dropGroupAt(at);
       moveCard(DRAGID,at);
     });
   });
@@ -2887,6 +3092,7 @@ function bindDrag(){
       if(!dragging())return; e.preventDefault();
       if(DRAGCLIP)return dropClipAt(at);
       if(DRAGMEDIA)return dropMediaAt(at);
+      if(DRAGGROUP)return dropGroupAt(at);
       moveCard(DRAGID,at);
     });
   });

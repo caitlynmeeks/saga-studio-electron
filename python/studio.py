@@ -541,6 +541,15 @@ def paste_card(src):
     w = clean_when(src.get("when"))
     if w:
         c["when"] = w
+    # and its subtitle — the shown words belong to the card like the spoken ones
+    sub = str(src.get("sub") or "")[:500]
+    if sub:
+        c["sub"] = sub
+    label = str(src.get("label") or "")[:80]
+    if label:
+        c["label"] = label
+    if src.get("locked"):
+        c["locked"] = True
     return c
 
 
@@ -2202,7 +2211,7 @@ def _export_chunk(c):
     out = {"id": c["id"], "type": c.get("type", "speech")}
     if is_speech(c):
         out["text"] = c["text"]
-    for k in ("tags", "when", "auto", "mute", "media", "mediakind"):
+    for k in ("tags", "when", "auto", "mute", "media", "mediakind", "sub"):
         if c.get(k):
             out[k] = c[k]
     if c.get("type") == "choice":
@@ -2851,12 +2860,32 @@ class H(BaseHTTPRequestHandler):
                 snapshot(doc, "edit card")
                 for c in doc["chunks"]:
                     if c["id"] == d["id"]:
+                        # The lock, enforced where every edit lands rather than
+                        # in whichever controls remember to ask. Presentation
+                        # still moves — collapsing, naming, resizing a locked
+                        # card changes how it sits, not what it says — and
+                        # unlocking is its own request, never a rider on an
+                        # edit that would then slip through with it.
+                        if (c.get("locked")
+                                and set(d) - {"name", "id", "locked",
+                                              "min", "height", "label"}):
+                            return self._send(400, {"error": "that card is locked "
+                                              "— right-click its header to unlock it"})
+                        if "locked" in d:
+                            c["locked"] = bool(d["locked"])
                         if "text" in d:
                             c["text"] = normalise(d["text"])
                         if "note" in d:
                             c["note"] = d["note"]
                         if "tags" in d:
                             c["tags"] = clean_tags(d["tags"])
+                        if "sub" in d:
+                            # What the stage SHOWS while the card plays, when
+                            # that differs from what is spoken — "Teide" on
+                            # screen while the model is fed "tay-dee", or any
+                            # words at all for a voiced card. Display only:
+                            # never in any hash, so captioning costs nothing.
+                            c["sub"] = str(d["sub"] or "")[:500]
                         if "when" in d:        # plays only when this holds
                             c["when"] = clean_when(d["when"])
                         # choice-card fields, validated against the grammar —
@@ -2873,6 +2902,12 @@ class H(BaseHTTPRequestHandler):
                             c["runon"] = bool(d["runon"])
                         if "height" in d:          # editor height, persisted
                             c["height"] = int(d["height"])
+                        if "min" in d:             # collapsed to its header bar
+                            c["min"] = bool(d["min"])
+                        if "label" in d:
+                            # a name for the collapsed bar — "Maisie discovers
+                            # the plan" reads better than a text fragment
+                            c["label"] = str(d["label"] or "")[:80]
                         if "params" in d:
                             # A card's own overrides. Clamped here because they
                             # land in the hash: a stray value would name a wav
@@ -2977,6 +3012,79 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, {"ok": True, "moved": False})
                 snapshot(doc, "move card")
                 ch.insert(to, ch.pop(src))
+                # Groups are contiguous runs, and a drag must never leave one
+                # torn in two: a card dropped inside a run joins it, a member
+                # dragged away from its own run's edges leaves the group.
+                mv = ch[to]
+                prevg = ch[to - 1].get("group") if to > 0 else None
+                nextg = ch[to + 1].get("group") if to + 1 < len(ch) else None
+                if prevg and prevg == nextg:
+                    mv["group"] = prevg
+                elif mv.get("group") not in (prevg, nextg):
+                    mv.pop("group", None)
+                for i, c in enumerate(ch):
+                    c["id"] = i
+                save(doc)
+                return self._send(200, {"ok": True, "moved": True})
+
+            # ── groups ── a group is a contiguous run of cards sharing a name:
+            # a chapter, a scene, a beat. Presentation and one drag-handle —
+            # nothing downstream reads it: not the mix, not the walk, not the
+            # exports. The run stays contiguous by construction: grouping
+            # fills the span between the outermost picks, and a card dragged
+            # out of its run leaves the group (see /api/move).
+            if u.path == "/api/group":
+                doc = load(d["name"])
+                # names land in onclick attributes and menu labels, so the
+                # characters that could break out of either never get in
+                gname = re.sub(r"[\"'`\\<>&]", "", str(d.get("gname") or "")).strip()[:60]
+                if not gname:
+                    return self._send(400, {"error": "a group needs a name"})
+                ids = {int(i) for i in (d.get("ids") or [])}
+                idx = [k for k, c in enumerate(doc["chunks"]) if c["id"] in ids]
+                if not idx:
+                    return self._send(404, {"error": "pick some cards first — "
+                                            "shift-click their headers"})
+                a, b = min(idx), max(idx)
+                if any(c.get("group") == gname
+                       for c in doc["chunks"][:a] + doc["chunks"][b + 1:]):
+                    return self._send(400, {"error": f"“{gname}” is already a group "
+                                            f"here — pick another name"})
+                snapshot(doc, f"group “{gname}”")
+                for c in doc["chunks"][a:b + 1]:
+                    c["group"] = gname
+                save(doc)
+                return self._send(200, {"ok": True, "gname": gname, "cards": b - a + 1})
+
+            if u.path == "/api/ungroup":
+                doc = load(d["name"])
+                gname = d.get("gname")
+                snapshot(doc, f"ungroup “{gname}”")
+                n = 0
+                for c in doc["chunks"]:
+                    if c.get("group") == gname:
+                        c.pop("group", None)
+                        n += 1
+                save(doc)
+                return self._send(200, {"ok": True, "cards": n})
+
+            if u.path == "/api/move_group":
+                doc = load(d["name"])
+                gname = d.get("gname")
+                ch = doc["chunks"]
+                idx = [k for k, c in enumerate(ch) if c.get("group") == gname]
+                if not idx:
+                    return self._send(404, {"error": f"no group “{gname}”"})
+                a, b = min(idx), max(idx) + 1
+                to = max(0, min(int(d["to"]), len(ch)))
+                if a <= to <= b:
+                    return self._send(200, {"ok": True, "moved": False})
+                snapshot(doc, f"move group “{gname}”")
+                block = ch[a:b]
+                del ch[a:b]
+                if to > b:
+                    to -= len(block)
+                ch[to:to] = block
                 for i, c in enumerate(ch):
                     c["id"] = i
                 save(doc)
@@ -2998,6 +3106,10 @@ class H(BaseHTTPRequestHandler):
 
             if u.path == "/api/remove":
                 doc = load(d["name"])
+                gone = next((c for c in doc["chunks"] if c["id"] == d["id"]), None)
+                if gone is not None and gone.get("locked"):
+                    return self._send(400, {"error": "that card is locked — "
+                                            "unlock it before removing it"})
                 snapshot(doc, "remove card")
                 doc["chunks"] = [c for c in doc["chunks"] if c["id"] != d["id"]]
                 for i, c in enumerate(doc["chunks"]):
@@ -3113,7 +3225,7 @@ class H(BaseHTTPRequestHandler):
                 snapshot(doc, f"move cards to “{dst}”")
                 moved = 0
                 for c in doc["chunks"]:
-                    if not is_renderable(c):
+                    if not is_renderable(c) or c.get("locked"):
                         continue
                     if ids is not None and c["id"] not in ids:
                         continue
@@ -3142,7 +3254,8 @@ class H(BaseHTTPRequestHandler):
 
                 hits, stale_now, hitcount = [], 0, 0
                 for c in doc["chunks"]:
-                    if not is_speech(c):
+                    # a locked card's words are exactly what the lock protects
+                    if not is_speech(c) or c.get("locked"):
                         continue
                     new, n = pat.subn(repl, c["text"])
                     if not n:
@@ -3214,6 +3327,9 @@ class H(BaseHTTPRequestHandler):
                 snapshot(doc, "split")
                 out = []
                 for c in doc["chunks"]:
+                    if c["id"] == d["id"] and c.get("locked"):
+                        return self._send(400, {"error": "that card is locked — "
+                                                "unlock it before splitting it"})
                     if c["id"] == d["id"] and is_speech(c) and 0 < d["at"] < len(c["text"]):
                         a, b = c["text"][:d["at"]].strip(), c["text"][d["at"]:].strip()
                         out.append({**c, "text": a})
@@ -3245,6 +3361,11 @@ class H(BaseHTTPRequestHandler):
                     if skip:
                         skip = False
                         continue
+                    if (c["id"] == d["id"] and i + 1 < len(doc["chunks"])
+                            and (c.get("locked")
+                                 or doc["chunks"][i + 1].get("locked"))):
+                        return self._send(400, {"error": "a locked card cannot "
+                                                "be merged — unlock it first"})
                     if (c["id"] == d["id"] and i + 1 < len(doc["chunks"])
                             and is_speech(c) and is_speech(doc["chunks"][i + 1])):
                         nxt = doc["chunks"][i + 1]

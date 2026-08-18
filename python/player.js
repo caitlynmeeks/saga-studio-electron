@@ -118,6 +118,26 @@ const SagaPlay = (() => {
     return out
   }
 
-  return { applySet, passes, findTag, runEnd, walk, segments }
+  // Reveal a caption at the pace the audio gives it — the typewriter effect,
+  // off by default in both players. The rate comes from the stretch of time
+  // the card actually occupies, aiming to land the last character a beat
+  // before the audio moves on; clamped so a two-word line does not smear and
+  // a monologue does not blur. Returns a canceller, because captions change
+  // mid-flight and two typewriters on one element write over each other.
+  function typeCaption (el, text, secs) {
+    el.textContent = ''
+    const n = text.length
+    if (!n) return () => {}
+    const cps = Math.min(120, Math.max(12, n / Math.max(0.6, (secs || n / 15) * 0.9)))
+    let i = 0
+    const t = setInterval(() => {
+      i++
+      el.textContent = text.slice(0, i)
+      if (i >= n) clearInterval(t)
+    }, 1000 / cps)
+    return () => clearInterval(t)
+  }
+
+  return { applySet, passes, findTag, runEnd, walk, segments, typeCaption }
 })()
 if (typeof module !== 'undefined') module.exports = SagaPlay

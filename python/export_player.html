@@ -45,6 +45,9 @@ button:hover{border-color:var(--green);color:var(--green)}
 background:var(--chrome);border-top:1px solid var(--line);font-size:12px}
 #bar b{color:var(--bright);letter-spacing:.08em}
 #bar button{padding:3px 11px;font-size:12px;border-radius:5px}
+#bar button.lit{border-color:var(--green);color:var(--green)}
+.vol{display:flex;gap:5px;align-items:center;color:var(--dim)}
+.vol input{width:84px;accent-color:var(--green);background:none;border:0;padding:0}
 .mut{color:var(--dim)}.warn{color:var(--amber)}
 </style>
 </head>
@@ -59,7 +62,13 @@ background:var(--chrome);border-top:1px solid var(--line);font-size:12px}
   <span style="flex:1"></span>
   <span id="clock" class="mut"></span>
   <button id="playb" onclick="toggle()">▶ play</button>
-  <button onclick="story()" title="back to the top">⟲ from start</button>
+  <button onclick="story()" title="back to the top">⟲</button>
+  <span class="vol" title="volume">🔊<input type="range" id="vol" min="0" max="100" value="100"
+    oninput="setVol(this.value)"></span>
+  <button id="ccb" class="lit" onclick="toggleCC()" title="subtitles on / off">CC</button>
+  <button id="twb" onclick="toggleTW()" title="typewriter captions — revealed at the pace of the audio">⌨</button>
+  <button onclick="fullScreen()" title="full screen">⛶</button>
+  <button id="shb" onclick="share()" title="share this story">↗ share</button>
 </div>
 <script>
 /*SAGA_PLAYER*/
@@ -94,8 +103,43 @@ function show(c){
   }else{ el=document.createElement('img'); el.src=url; }
   room.insertBefore(el,$('caption'));
 }
-function caption(t){ const el=$('caption');
-  if(t){ el.textContent=t; el.classList.add('on'); } else el.classList.remove('on'); }
+// ── the control bar ───────────────────────────────────────
+// The knobs a viewer expects of a player: volume, captions, the typewriter,
+// full screen, share. Remembered per browser — a story reopened tomorrow
+// sounds and reads the way it was left.
+let CC=true, TW=false, TYPER=null;
+const pref=(k,v)=>{ try{ localStorage.setItem('saga.player.'+k,v) }catch(e){} };
+function setVol(v){ AUDIO.volume=v/100; pref('vol',v); }
+function toggleCC(){ CC=!CC; $('ccb').classList.toggle('lit',CC);
+  if(!CC)caption(''); pref('cc',CC?'1':'0'); }
+function toggleTW(){ TW=!TW; $('twb').classList.toggle('lit',TW); pref('tw',TW?'1':'0'); }
+function fullScreen(){
+  if(document.fullscreenElement)document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(()=>{});
+}
+async function share(){
+  const data={title:GRAPH.title,text:'“'+GRAPH.title+'” — an interactive story',
+              url:location.href};
+  if(navigator.share){ try{ await navigator.share(data); return; }catch(e){} }
+  try{ await navigator.clipboard.writeText(location.href);
+    const b=$('shb'), was=b.textContent; b.textContent='copied';
+    setTimeout(()=>{ b.textContent=was; },1200);
+  }catch(e){ prompt('copy the link to this story:',location.href); }
+}
+try{
+  const v=localStorage.getItem('saga.player.vol');
+  if(v!=null&&v!==''){ $('vol').value=v; AUDIO.volume=v/100; }
+  const c=localStorage.getItem('saga.player.cc'); if(c!=null)CC=c==='1';
+  const w=localStorage.getItem('saga.player.tw'); if(w!=null)TW=w==='1';
+  $('ccb').classList.toggle('lit',CC); $('twb').classList.toggle('lit',TW);
+}catch(e){}
+
+function caption(t,secs){ const el=$('caption');
+  if(TYPER){ TYPER(); TYPER=null; }
+  if(!t||!CC)return void el.classList.remove('on');
+  el.classList.add('on');
+  if(TW&&secs>0)TYPER=SagaPlay.typeCaption(el,t,secs);
+  else el.textContent=t; }
 
 function begin(){ $('gate').style.display='none'; story(); }
 
@@ -180,7 +224,8 @@ function tick(){
     for(let k=0;k<=i;k++){ const x=BYID.get(MARKS[k].id);
       if(x&&x.type==='visual')vis=x; }
     if(vis)show(vis);
-    caption((c.type||'speech')==='speech'?c.text:'');
+    const dur=(i+1<MARKS.length?MARKS[i+1].at:(AUDIO.duration||t))-MARKS[i].at;
+    caption(c.sub||((c.type||'speech')==='speech'?c.text:''),dur);
   }
 }
 const fmt=s=>{ s=Math.floor(s||0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
