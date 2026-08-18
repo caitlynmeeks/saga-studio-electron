@@ -1127,7 +1127,9 @@ def fx_render(src, f):
         out = np.asarray(fx(audio, sr)).reshape(-1)
     FX.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.stem + ".tmp.wav")
-    sf.write(str(tmp), out, sr)
+    # float32, like every render in audio/ — soundfile's wav default is 16-bit,
+    # and the fx cache feeds the assemble, not just the ear
+    sf.write(str(tmp), out, sr, subtype="FLOAT")
     tmp.rename(dest)
     return dest
 
@@ -2035,6 +2037,32 @@ class H(BaseHTTPRequestHandler):
             if not f:
                 return self._send(404, b"", "text/plain")
             return self._send_file(f, "audio/wav")
+        if u.path == "/api/card_audio":
+            # One card, as it will sound in the book — which since plugins
+            # means the rendered wav *through its profile's effect*. The plain
+            # /api/audio hash lookup predates fx and plays the file as the
+            # model made it, so a profile's plugin was audible in the book
+            # preview and silent on the card's own play button, which reads as
+            # "my settings did nothing". Cached by fx_render, so only the
+            # first press after a change pays the ~100ms.
+            doc = load(q.get("name", [""])[0])
+            if not doc:
+                return self._send(404, b"", "text/plain")
+            cid = int(q.get("id", ["-1"])[0])
+            c = next((x for x in doc["chunks"] if x["id"] == cid), None)
+            if c is None or not is_renderable(c):
+                return self._send(404, b"", "text/plain")
+            f = AUDIO / f"{chunk_hash(c, doc)}.wav"
+            if not f.exists():
+                return self._send(404, b"", "text/plain")
+            eff = fx_of(params_for(c, doc))
+            if eff:
+                try:
+                    f = fx_render(f, eff)
+                except Exception as ex:
+                    print(f"plugin failed on card {cid}: "
+                          f"{type(ex).__name__}: {ex}", flush=True)
+            return self._send_file(f, "audio/wav")
         if u.path == "/api/take":
             nm = re.sub(r"[^a-z0-9]", "", q.get("f", [""])[0])
             f = take_path(nm)
@@ -2470,6 +2498,25 @@ class H(BaseHTTPRequestHandler):
                 p[nm] = new
                 save_profiles(p)
                 return self._send(200, {"ok": True, "profiles": p})
+
+            if u.path == "/api/fx_preview":
+                # The profile editor's "hear it": the profile's reference clip
+                # through whatever the sliders say right now — the *draft*,
+                # unsaved values, because auditioning is what you do before
+                # deciding to keep something. Cached like every other fx pass.
+                try:
+                    vf = voice_file(d.get("voice") or "")
+                except FileNotFoundError as ex:
+                    return self._send(404, {"error": str(ex)})
+                pl = str(d.get("plugin") or "")
+                if not plugin_ok(pl):
+                    return self._send(400, {"error": "not a plugin folder this program reads"})
+                try:
+                    out = fx_render(vf, {"plugin": pl, "enabled": True,
+                                         "params": d.get("params") or {}})
+                except Exception as ex:
+                    return self._send(400, {"error": f"{type(ex).__name__}: {ex}"})
+                return self._send_file(out, "audio/wav")
 
             if u.path == "/api/profile/impact":
                 nm = (d.get("profile") or "").strip()

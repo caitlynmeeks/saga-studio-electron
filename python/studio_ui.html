@@ -215,6 +215,9 @@ border-top:1px solid var(--line);background:#0b0f0e}
 .dv label{min-width:64px}
 .dv input[type=range]{width:86px}
 .dv b{font-variant-numeric:tabular-nums;min-width:30px;color:var(--dim);font-weight:400}
+/* a card that has wandered from its profile says so on the button itself —
+   the custom pill in the header is easy to read past in a long stack */
+button.dirty{color:var(--amber);border-color:var(--amber)}
 /* an overridden knob is the one thing here worth spotting at a glance */
 .dv.on label,.dv.on b{color:var(--amber);font-weight:600}
 /* the profile editor */
@@ -811,6 +814,10 @@ function profEditor(n){
         align-items:center;margin-top:6px">
         <input type="checkbox" ${pfx.enabled?'checked':''} onchange="setFxOn(this.checked)">
         on — a shifter is never quite transparent, so off means off</label>
+      <div style="display:flex;gap:5px;margin:6px 0">
+        <button id="fxhear" onclick="fxAudition()"
+          title="the reference clip through these sliders — unsaved changes included">▶ hear it</button>
+      </div>
       ${PLUGPARAMS[fxp]
         ? PLUGPARAMS[fxp].map(d=>fxKnob(d,pfx)).join('')
         : '<div class="mut" style="font-size:11px;padding:6px 0">reading its controls…</div>'}
@@ -1178,6 +1185,27 @@ async function setFxPlugin(path){
   paintProfDirty(); scheduleImpact(); renderProfiles();
 }
 function setFxOn(on){ draftFx({enabled:on}); }
+async function fxAudition(){
+  if(!DRAFT)return;
+  const fx=DRAFT.fx||{};
+  if(!fx.plugin)return void($('status').textContent='pick a plugin first');
+  const v=(DRAFT.voices||[])[DRAFT.active||0];
+  if(!v)return void($('status').textContent='this profile has no voice clip to play');
+  const b=$('fxhear'); if(b){ b.disabled=true; b.textContent='processing…'; }
+  try{
+    const r=await fetch('/api/fx_preview',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({voice:v,plugin:fx.plugin,params:fx.params||{}})});
+    if(!r.ok){
+      let j={}; try{ j=await r.json(); }catch(e){}
+      return void($('status').innerHTML=`<span class="warn">${esc(j.error||'could not process')}</span>`);
+    }
+    const url=URL.createObjectURL(await r.blob());
+    if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
+    AUDIO=new Audio(url); AUDIO.play();
+    $('status').textContent=`“${v}” through the sliders as they stand — save to keep them`;
+  }finally{ if(b){ b.disabled=false; b.textContent='▶ hear it'; } }
+}
 function setFxParam(name,v){
   const params={...(((DRAFT||{}).fx||{}).params||{})};
   params[name]=v;
@@ -1491,7 +1519,8 @@ function speechCard(c){return `
       <button id="pv${c.id}" onclick="prev(${c.id})" disabled>preview selected</button>
       <button id="rb${c.id}" class="pri" onclick="one(${c.id})" ${c.mute?'disabled':''}>render</button>
       ${takeUi(c)}
-      <button onclick="toggleDeliv(${c.id})"
+      <button id="dv${c.id}" class="${Object.keys(c.params||{}).length?'dirty':''}"
+        onclick="toggleDeliv(${c.id})"
         title="change the engine or the delivery for this one card only">delivery</button>
       <button onclick="splitAt(${c.id})">split</button>
       <button onclick="merge(${c.id})">merge next</button>
@@ -1926,6 +1955,8 @@ function paintCardHead(id){
   const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
   const host=document.querySelector('#c'+id+' .engpill');
   if(host)host.innerHTML=enginePill(c);
+  const dv=$('dv'+id);
+  if(dv)dv.classList.toggle('dirty',!!Object.keys(c.params||{}).length);
 }
 // Inserted and removed as its own element rather than by rebuilding the card:
 // a rebuild would replace the node the drag listeners are bound to, and
@@ -2128,7 +2159,14 @@ function playHash(h){
   AUDIO.play();
 }
 function playFull(id){
-  const c=DOC.chunks.find(x=>x.id===id); if(!c||!c.ready)return; playHash(c.hash); }
+  const c=DOC.chunks.find(x=>x.id===id); if(!c||!c.ready)return;
+  // by name+id rather than by hash: the server can then put the card through
+  // its profile's plugin, so what you hear here is what the book will say
+  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
+  AUDIO=new Audio('/api/card_audio?name='+encodeURIComponent(DOC.name)+
+                  '&id='+id+'&t='+Date.now());
+  AUDIO.play();
+}
 async function splitAt(id){
   const t=$('t'+id), at=t.selectionStart;
   if(!at||at>=t.value.length)return alert('Put the cursor where it should split.');
