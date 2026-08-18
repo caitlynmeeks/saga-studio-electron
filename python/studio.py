@@ -2996,6 +2996,11 @@ class H(BaseHTTPRequestHandler):
                          "note": ""}
                 else:
                     c = {"id": 0, "text": "", "params": {}, "note": ""}
+                grp = str(d.get("group") or "")
+                if grp and any(x.get("group") == grp for x in doc["chunks"]):
+                    # born inside a group's indent: a member, or the run
+                    # would be torn in two by its own insert strip
+                    c["group"] = grp
                 at = max(0, min(int(d.get("at", 0)), len(doc["chunks"])))
                 doc["chunks"].insert(at, c)
                 for i, c in enumerate(doc["chunks"]):
@@ -3010,7 +3015,11 @@ class H(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "nothing to paste"})
                 snapshot(doc, "paste card")
                 at = max(0, min(int(d.get("at", 0)), len(doc["chunks"])))
-                doc["chunks"].insert(at, paste_card(card))
+                pc = paste_card(card)
+                grp = str(d.get("group") or "")
+                if grp and any(x.get("group") == grp for x in doc["chunks"]):
+                    pc["group"] = grp
+                doc["chunks"].insert(at, pc)
                 for i, c in enumerate(doc["chunks"]):
                     c["id"] = i
                 save(doc)
@@ -3027,25 +3036,45 @@ class H(BaseHTTPRequestHandler):
                 to = max(0, min(int(d["to"]), len(ch)))
                 if to > src:
                     to -= 1
+                # The client says which side of a group's indent the drop
+                # landed on — `into` a group, or `out` in the open — because
+                # geometry the user can SEE must outrank inference. The old
+                # neighbour guessing had one honest failure: the slot right
+                # under a group leaves the card adjacent to its own run, and
+                # adjacency read as membership, so dragging a member just
+                # below its group silently rejoined it.
+                into, out = d.get("into"), bool(d.get("out"))
                 if to == src:
-                    return self._send(200, {"ok": True, "moved": False})
+                    # not moving, but perhaps changing sides — "step out of
+                    # the group" for a last member is exactly this
+                    mv = ch[src]
+                    changed = False
+                    if out and mv.get("group") is not None:
+                        snapshot(doc, "step out of the group")
+                        mv.pop("group", None)
+                        changed = True
+                    elif (into and mv.get("group") != into
+                          and any(x.get("group") == into
+                                  for x in ch if x is not mv)):
+                        snapshot(doc, "join the group")
+                        mv["group"] = into
+                        changed = True
+                    if changed:
+                        save(doc)
+                    return self._send(200, {"ok": True, "moved": changed})
                 snapshot(doc, "move card")
                 ch.insert(to, ch.pop(src))
-                # Groups are contiguous runs, and a drag must never leave one
-                # torn in two: a card dropped inside a run joins it, a member
-                # dragged away from its own run's edges leaves the group.
                 mv = ch[to]
+                # neighbour inference still covers callers that say nothing
                 prevg = ch[to - 1].get("group") if to > 0 else None
                 nextg = ch[to + 1].get("group") if to + 1 < len(ch) else None
                 if prevg and prevg == nextg:
                     mv["group"] = prevg
                 elif mv.get("group") not in (prevg, nextg):
                     mv.pop("group", None)
-                # dropped on a group's BAR rather than between members: joining
-                # was the whole point, so the neighbour rule is overruled —
-                # but only into a group that actually exists here
-                into = d.get("into")
-                if into and any(x.get("group") == into for x in ch if x is not mv):
+                if out:
+                    mv.pop("group", None)
+                elif into and any(x.get("group") == into for x in ch if x is not mv):
                     mv["group"] = into
                 for i, c in enumerate(ch):
                     c["id"] = i

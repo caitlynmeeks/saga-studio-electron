@@ -1385,7 +1385,7 @@ function clipDragStart(e,i){
   $('status').textContent=`drop “${c.name}” between two cards to place it`;
 }
 function clipDragEnd(){ DRAGCLIP=null; document.body.dataset.dropclip=''; clearMarks(); }
-async function dropClipAt(at){
+async function dropClipAt(at,grp){
   // dragend clears these too, but drop runs first and rebuilds the stack — do
   // not leave every gap lit while that happens
   const clip=DRAGCLIP; DRAGCLIP=null; clearMarks();
@@ -1394,7 +1394,7 @@ async function dropClipAt(at){
   if(!DOC)return void($('status').innerHTML=
     '<span class="warn">open an episode first</span> — a clip needs somewhere to land');
   await flushAll();
-  const r=await api('/api/insert',{name:DOC.name,at,kind:'audio'});
+  const r=await api('/api/insert',{name:DOC.name,at,kind:'audio',group:grp||''});
   if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
   await api('/api/chunk',{name:DOC.name,id:r.id,clip});
   HEIGHT={}; CUR=null;                       // as insertCard: every card renumbers
@@ -1484,14 +1484,14 @@ function mediaDragStart(e,i){
   $('status').textContent=`drop “${m.name}” between two cards to place it`;
 }
 function mediaDragEnd(){ DRAGMEDIA=null; document.body.dataset.dropclip=''; clearMarks(); }
-async function dropMediaAt(at){
+async function dropMediaAt(at,grp){
   const media=DRAGMEDIA; DRAGMEDIA=null; clearMarks();
   document.body.dataset.dropclip='';
   if(!media)return;
   if(!DOC)return void($('status').innerHTML=
     '<span class="warn">open an episode first</span> — a visual needs somewhere to land');
   await flushAll();
-  const r=await api('/api/insert',{name:DOC.name,at,kind:'visual'});
+  const r=await api('/api/insert',{name:DOC.name,at,kind:'visual',group:grp||''});
   if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
   await api('/api/chunk',{name:DOC.name,id:r.id,media});
   HEIGHT={}; CUR=null;                        // as insertCard: every card renumbers
@@ -1660,7 +1660,9 @@ function cardMenu(e,id){
     run:()=>setCard(id,{locked:!c.locked},true)});
   if(SEL.size>1)items.unshift(
     {label:`group the ${SEL.size} selected`, run:()=>makeGroup(freeGroupName())},'-');
-  if(c.group)items.push({label:`ungroup “${c.group}”`, run:()=>ungroup(c.group)});
+  if(c.group)items.push(
+    {label:`step out of “${c.group}”`, run:()=>popFromGroup(id)},
+    {label:`dissolve “${c.group}” — the cards stay`, run:()=>ungroup(c.group)});
   items.push('-',{label:'copy', run:()=>copyCard(id)});
   openCtx(e,items);
 }
@@ -1764,7 +1766,7 @@ function renderDoc(){
       // inside the indent because dropping there joins, while the strip
       // after the last member stays outside — that slot means "after the
       // group", and its geometry should say so
-      h+=`<div class="gmem">${cardHTML(c)}${lastOf?'':insBar(c.id+1)}</div>`;
+      h+=`<div class="gmem" data-g="${esc(g)}">${cardHTML(c)}${lastOf?'':insBar(c.id+1)}</div>`;
       if(lastOf)h+=insBar(c.id+1);
     }
     else h+=cardHTML(c)+insBar(c.id+1);
@@ -1859,12 +1861,25 @@ function groupDragStart(e,g){
   try{ e.dataTransfer.setData('text/plain',g); }catch(_){}
 }
 function groupDragEnd(){ DRAGGROUP=null; document.body.dataset.dropclip=''; clearMarks(); }
+async function popFromGroup(id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c||!c.group)return;
+  const g=c.group;
+  let last=-1; DOC.chunks.forEach((x,ix)=>{ if(x.group===g)last=ix; });
+  await flushAll();
+  const r=await api('/api/move',{name:DOC.name,id,to:last+1,out:true});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  HEIGHT={}; CUR=null; SEL.clear();
+  await open_(DOC.name,true);
+  $('status').innerHTML=`<span class="ok">card stepped out of “${esc(g)}”</span> — it sits just beneath the group`;
+}
 async function dropIntoGroup(id,g){
   DRAGID=null; clearMarks();
-  const first=DOC.chunks.findIndex(x=>x.group===g);
-  if(first<0||!DOC)return;
+  let last=-1; DOC.chunks.forEach((x,ix)=>{ if(x.group===g)last=ix; });
+  if(last<0||!DOC)return;
   await flushAll();
-  const r=await api('/api/move',{name:DOC.name,id,to:first,into:g});
+  // the bar means "in here" — and new arrivals go to the BOTTOM, where a
+  // thing you just added to a list belongs
+  const r=await api('/api/move',{name:DOC.name,id,to:last+1,into:g});
   if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
   HEIGHT={}; CUR=null; SEL.clear();
   await open_(DOC.name,true);
@@ -1965,13 +1980,13 @@ async function minAll(){
   await open_(DOC.name,true);
 }
 const insBar=at=>`<div class="ins">
-    <button class="pb" onclick="pasteCard(${at})">+ paste</button>
-    <button onclick="insertCard(${at},'speech')" title="insert an empty text card here">+ text</button>
-    <button onclick="insertCard(${at},'voiced')" title="insert a card spoken by you, in a character's voice">+ ◎ voiced</button>
-    <button onclick="insertCard(${at},'audio')" title="insert a music / sound-effect card here">+ ♪ audio</button>
-    <button onclick="insertCard(${at},'visual')" title="insert a picture or film — the stage shows it from here until the next visual">+ ⛶ visual</button>
-    <button onclick="insertCard(${at},'choice')" title="insert a choice — the stage stops here and asks; the audiobook walks straight past">+ ⑂ choice</button>
-    <button onclick="insertCard(${at},'silence')" title="insert a timed pause here">+ silence</button>
+    <button class="pb" onclick="pasteCard(${at},event)">+ paste</button>
+    <button onclick="insertCard(${at},'speech',event)" title="insert an empty text card here">+ text</button>
+    <button onclick="insertCard(${at},'voiced',event)" title="insert a card spoken by you, in a character's voice">+ ◎ voiced</button>
+    <button onclick="insertCard(${at},'audio',event)" title="insert a music / sound-effect card here">+ ♪ audio</button>
+    <button onclick="insertCard(${at},'visual',event)" title="insert a picture or film — the stage shows it from here until the next visual">+ ⛶ visual</button>
+    <button onclick="insertCard(${at},'choice',event)" title="insert a choice — the stage stops here and asks; the audiobook walks straight past">+ ⑂ choice</button>
+    <button onclick="insertCard(${at},'silence',event)" title="insert a timed pause here">+ silence</button>
   </div>`;
 const grip=id=>`<span class="grip" draggable="true" ondragstart="dragStart(event,${id})"
   ondragend="dragEnd()" title="drag to move this card">⠿</span>`;
@@ -3096,9 +3111,11 @@ function playClip(id){
 // Both renumber every card, so the per-id caches (dragged heights, previews)
 // would land on the wrong cards — throw them away and let the server's copy,
 // which travels with the card, repopulate.
-async function insertCard(at,kind){
+async function insertCard(at,kind,ev){
   await flushAll();
-  await api('/api/insert',{name:DOC.name,at,kind});
+  const wrap=ev&&ev.target.closest('.gmem');
+  await api('/api/insert',{name:DOC.name,at,kind,
+    group:wrap?wrap.dataset.g:''});
   HEIGHT={}; CUR=null;
   // Hold the card *above* the gap: it keeps its id through the renumber, so
   // everything already on screen stays where it is and the new card simply
@@ -3165,10 +3182,12 @@ async function copyCard(id){
   if(b){ b.textContent='copied'; setTimeout(()=>{ if($('cp'+id)===b)b.textContent='⧉'; },1200); }
   $('status').textContent=`copied ${clipLabel(CLIP)} — “+ paste” in any gap puts it back`;
 }
-async function pasteCard(at){
+async function pasteCard(at,ev){
   if(!CLIP||!DOC)return void($('status').textContent='nothing copied yet — press ⧉ on a card first');
   await flushAll();
-  const r=await api('/api/paste',{name:DOC.name,at,card:CLIP});
+  const wrap=ev&&ev.target.closest('.gmem');
+  const r=await api('/api/paste',{name:DOC.name,at,card:CLIP,
+    group:wrap?wrap.dataset.g:''});
   if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
   HEIGHT={}; CUR=null;               // as insertCard: every card is renumbered
   await open_(DOC.name,true, at>0?at-1:{from:0,to:1});
@@ -3212,10 +3231,11 @@ function bindDrag(){
       if(!dragging())return; e.preventDefault();
       const r=el.getBoundingClientRect(), before=e.clientY<r.top+r.height/2;
       const at=(+el.id.slice(1))+(before?0:1);
-      if(DRAGCLIP)return dropClipAt(at);
-      if(DRAGMEDIA)return dropMediaAt(at);
+      const wrap=el.closest('.gmem'), grp=wrap?wrap.dataset.g:null;
+      if(DRAGCLIP)return dropClipAt(at,grp);
+      if(DRAGMEDIA)return dropMediaAt(at,grp);
       if(DRAGGROUP)return dropGroupAt(at);
-      moveCard(DRAGID,at);
+      moveCard(DRAGID,at,grp);
     });
   });
   // a card dropped on a group's BAR joins the group as its first member —
@@ -3241,18 +3261,22 @@ function bindDrag(){
     });
     el.addEventListener('drop',e=>{
       if(!dragging())return; e.preventDefault();
-      if(DRAGCLIP)return dropClipAt(at);
-      if(DRAGMEDIA)return dropMediaAt(at);
+      const wrap=el.closest('.gmem'), grp=wrap?wrap.dataset.g:null;
+      if(DRAGCLIP)return dropClipAt(at,grp);
+      if(DRAGMEDIA)return dropMediaAt(at,grp);
       if(DRAGGROUP)return dropGroupAt(at);
-      moveCard(DRAGID,at);
+      moveCard(DRAGID,at,grp);
     });
   });
 }
-async function moveCard(id,to){
+async function moveCard(id,to,grp){
   DRAGID=null; clearMarks();
   if(to===id||to===id+1)return;      // dropped back where it already was
   await flushAll();
-  await api('/api/move',{name:DOC.name,id,to});
+  // geometry outranks inference: a drop inside a group's indent means "in
+  // here", one outside means "in the open" — which is what finally makes
+  // the slot immediately beneath a group reachable for its own members
+  await api('/api/move',{name:DOC.name,id,to,...(grp?{into:grp}:{out:true})});
   HEIGHT={}; CUR=null;
   SEL.clear();     // ids renumbered under the selection; same count, so say so here
   // Follow the card you dragged to wherever it landed — closing the gap it
