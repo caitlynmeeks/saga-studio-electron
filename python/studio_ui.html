@@ -790,6 +790,15 @@ function renderProfiles(){
   }
 }
 
+async function kokoroHear(){
+  const pr=DRAFT||((STATE.profiles||{})[EDITING])||{};
+  const b=$('khear'); if(b){ b.disabled=true; b.textContent='rendering…'; }
+  const r=await api('/api/kokoro_preview',{kvoice:pr.kvoice||'af_heart',speed:pr.speed||0});
+  if(b){ b.disabled=false; b.textContent='▶ hear it'; }
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  if(AUDIO)AUDIO.pause();
+  AUDIO=new Audio('/api/audio?h='+r.hash); AUDIO.play();
+}
 function profEditor(n){
   const saved=(STATE.profiles||{})[n]||{}, pr=DRAFT||saved;
   const vs=pr.voices||[], VS=STATE.voices||[];
@@ -860,6 +869,10 @@ function profEditor(n){
         is her/him. ef_dora for the Spanish editions.</div>
     </div>
     ${sl('speed','speed',0,2,'0 leaves it to the model; 1 is its normal pace')}
+    <div style="display:flex;gap:5px;margin:2px 0 6px">
+      <button id="khear" onclick="kokoroHear()"
+        title="a sample line in this preset at this pace — rendered fresh the first time, cached after. Unsaved changes included.">▶ hear it</button>
+    </div>
     `:ov?`
     <div class="psec">delivery
       <span class="mut" style="font-weight:400"> — OmniVoice has no pace or feeling controls</span></div>

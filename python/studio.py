@@ -101,6 +101,20 @@ KOKORO_DIR = Path(os.environ.get("SAGA_KOKORO_DIR")
 # a voice's first letter names its language — af_heart is American, ef_dora es
 KOKORO_LANGS = {"a": "en-us", "b": "en-gb", "e": "es", "f": "fr-fr",
                 "h": "hi", "i": "it", "j": "ja", "p": "pt-br", "z": "cmn"}
+# one line per language for the profile editor's preview button. No sample
+# clips ship with the model; at faster-than-realtime on CPU, rendering one
+# IS the sample.
+KOKORO_SAMPLE = {
+    "a": "The fog remembers everything it has ever touched.",
+    "b": "The fog remembers everything it has ever touched.",
+    "e": "La niebla recuerda todo lo que ha tocado.",
+    "f": "La brume se souvient de tout ce qu'elle a touché.",
+    "h": "कोहरा वह सब कुछ याद रखता है जिसे उसने छुआ है।",
+    "i": "La nebbia ricorda tutto ciò che ha toccato.",
+    "j": "霧は触れたものすべてを覚えています。",
+    "p": "A névoa lembra-se de tudo o que já tocou.",
+    "z": "雾记得它触碰过的一切。",
+}
 
 
 def _kokoro_model_file():
@@ -3590,6 +3604,31 @@ class H(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "select some text in the card first"})
                 return self._send(200, {"ok": True,
                                         "job": enqueue("preview", d["name"], d["id"], sel)})
+
+            if u.path == "/api/kokoro_preview":
+                # synchronous, not queued: a couple of seconds at worst, and
+                # the button that asked is sitting there waiting to play it.
+                # Cached by (preset, pace) so replays are instant.
+                if not kokoro_available():
+                    return self._send(400, {"error": "kokoro is not installed "
+                                            "on this machine"})
+                v = re.sub(r"[^a-z0-9_]", "",
+                           str(d.get("kvoice") or "af_heart"))[:24] or "af_heart"
+                spd = _num(d.get("speed"), 0.0, 0.0, 3.0)
+                line = KOKORO_SAMPLE.get(v[:1], KOKORO_SAMPLE["a"])
+                key = ["kprev", v, float(spd or 0), line]
+                h = "p" + hashlib.sha256(json.dumps(
+                    key, sort_keys=True).encode()).hexdigest()[:19]
+                dest = AUDIO / f"{h}.wav"
+                if not dest.exists():
+                    tmp = dest.with_name(dest.stem + ".tmp.wav")
+                    try:
+                        _kokoro_gen(line, {"kvoice": v, "speed": spd}, tmp)
+                        tmp.rename(dest)
+                    except BaseException as ex:
+                        tmp.unlink(missing_ok=True)
+                        return self._send(500, {"error": f"kokoro: {ex}"})
+                return self._send(200, {"ok": True, "hash": h})
 
             if u.path == "/api/bake":
                 if _bake["running"]:
