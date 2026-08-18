@@ -86,10 +86,37 @@ PORT = int(os.environ.get("PORT", "5010"))
 # safetensors==0.5.3 as exact equalities, and OmniVoice needs transformers 5.3+.
 # So OmniVoice runs in its own interpreter as a warm worker process and is
 # spoken to over localhost. See omnivoice_server.py.
-ENGINES = ("chatterbox", "omnivoice")
+ENGINES = ("chatterbox", "omnivoice", "kokoro")
 OV_PYTHON = Path(os.environ.get("SAGA_OV_PYTHON")
                  or (Path.home() / "git/voice-studio/.venv-omnivoice/bin/python")).expanduser()
 OV_PORT = int(os.environ.get("SAGA_OV_PORT", "5021"))
+# Kokoro is the third voice: 82M parameters, Apache-2.0, ~50 preset voices in
+# nine languages, quick enough on plain CPU to need no GPU and no separate
+# worker. Presets only — it cannot clone — which is exactly what lets it ship
+# in the desktop app, and someday run in a browser, without dragging the
+# cloning liability along. Model files sit in the library so each machine
+# fetches its own once: https://github.com/thewh1teagle/kokoro-onnx/releases
+KOKORO_DIR = Path(os.environ.get("SAGA_KOKORO_DIR")
+                  or (ROOT / "models" / "kokoro")).expanduser()
+# a voice's first letter names its language — af_heart is American, ef_dora es
+KOKORO_LANGS = {"a": "en-us", "b": "en-gb", "e": "es", "f": "fr-fr",
+                "h": "hi", "i": "it", "j": "ja", "p": "pt-br", "z": "cmn"}
+
+
+def _kokoro_model_file():
+    """Whichever precision is on disk — int8 is a third the download of fp32
+    and all three speak; anyone who fetched a bigger one meant to use it."""
+    for n in ("kokoro-v1.0.onnx", "kokoro-v1.0.fp16.onnx", "kokoro-v1.0.int8.onnx"):
+        if (KOKORO_DIR / n).exists():
+            return KOKORO_DIR / n
+    return None
+
+
+def kokoro_available():
+    import importlib.util
+    return (_kokoro_model_file() is not None
+            and (KOKORO_DIR / "voices-v1.0.bin").exists()
+            and importlib.util.find_spec("kokoro_onnx") is not None)
 # Localhost by default. SAGA_HOST=0.0.0.0 exposes it to the LAN — see the
 # README: there is no login, and the discuss window shells out to Claude, so
 # anyone who can reach the port can read the manuscript and spend tokens.
@@ -127,6 +154,8 @@ def build_stale():
 
 _model = None
 _vc = None
+_kokoro = None
+_kvoices = None
 _vc_voice = [None]                # which voice the VC model is currently holding
 _lock = threading.Lock()          # MPS: one generate() at a time
 _bake = {"running": False, "done": 0, "total": 0, "project": "", "label": "",
@@ -210,10 +239,12 @@ PROFILES = ROOT / "profiles.json"
 # `engine` defaults to chatterbox so that adding a second engine changes nothing
 # until a profile is deliberately moved across — every wav already on disk keeps
 # its name and stays valid. `lang` and `speed` mean nothing to chatterbox and are
-# only read when the engine is omnivoice.
+# only read when the engine is omnivoice; `kvoice` names a Kokoro preset and is
+# only read when the engine is kokoro (`speed` serves both).
 BASE_PROFILE = {"voices": ["caitlyn2"], "active": 0, "exag": 0.4, "cfg": 0.35,
                 "temp": 0.7, "rep": 1.2, "note": "", "gain": 100, "fx": {},
-                "engine": "chatterbox", "lang": "en", "speed": 0}
+                "engine": "chatterbox", "lang": "en", "speed": 0,
+                "kvoice": "af_heart"}
 
 
 def profiles():
@@ -246,6 +277,7 @@ def profile_params(name, profs=None):
             "engine": eng if eng in ENGINES else "chatterbox",
             "lang": prof.get("lang", "en") or "en",
             "speed": prof.get("speed", 0) or 0,
+            "kvoice": prof.get("kvoice", "af_heart") or "af_heart",
             # Level is applied when the timeline is mixed, never when the card
             # is rendered — so it is not in any hash, and evening out a
             # character who reads louder than the rest costs nothing and
@@ -362,6 +394,12 @@ def chunk_hash(c, doc, profs=None):
         key = ["voiced", c.get("perf") or "", p["voice"]]
     elif p["engine"] == "chatterbox":
         key = [c["text"], p["voice"], p["exag"], p["cfg"], p["temp"], p["rep"]]
+    elif p["engine"] == "kokoro":
+        # Only what Kokoro reads: a preset name and a pace. The chatterbox
+        # reference voice and its four dials mean nothing to it, so none of
+        # them may turn a rendered kokoro card amber.
+        key = [c["text"], {"engine": "kokoro", "voice": p["kvoice"],
+                           "speed": float(p["speed"] or 0)}]
     else:
         # Which engine spoke it has to be in the name, or the same words in the
         # same voice collide on one filename whichever model made them, and a
@@ -969,7 +1007,7 @@ def _same_profile(a, b):
     single character sounds, so it is not grounds for forking a second copy."""
     return all(a.get(k, BASE_PROFILE.get(k)) == b.get(k, BASE_PROFILE.get(k))
                for k in ("voices", "active", "exag", "cfg", "temp", "rep",
-                         "engine", "lang", "speed", "gain", "fx"))
+                         "engine", "lang", "speed", "kvoice", "gain", "fx"))
 
 
 def import_archive(path, mode="skip"):
@@ -1637,6 +1675,71 @@ def _ov_gen(spoken, p, dest):
         raise RuntimeError(f"omnivoice: {msg}") from None
 
 
+def get_kokoro():
+    """Lazy, like get_model(): a library that never speaks through Kokoro
+    should never pay its load time. It is small enough (~100MB, CPU) that
+    sharing the process with chatterbox costs nothing."""
+    global _kokoro
+    if _kokoro is None:
+        mf = _kokoro_model_file()
+        if mf is None:
+            raise RuntimeError(
+                f"Kokoro model files are missing — put kokoro-v1.0.int8.onnx and "
+                f"voices-v1.0.bin in {KOKORO_DIR} (from "
+                f"github.com/thewh1teagle/kokoro-onnx/releases), or keep this "
+                f"profile on chatterbox.")
+        from kokoro_onnx import Kokoro
+        _kokoro = Kokoro(str(mf), str(KOKORO_DIR / "voices-v1.0.bin"))
+    return _kokoro
+
+
+def kokoro_voices():
+    """The preset list without paying the model load: the voices file is a
+    numpy archive whose keys are the names."""
+    global _kvoices
+    if _kvoices is None:
+        try:
+            import numpy as np
+            z = np.load(str(KOKORO_DIR / "voices-v1.0.bin"))
+            _kvoices = sorted(z.files)
+        except Exception:
+            return []                 # not cached: it may be mid-download
+    return _kvoices
+
+
+def _kokoro_gen(spoken, p, dest):
+    """One line through Kokoro, onto disk. Under the model lock — espeak's
+    phonemizer is not certainly reentrant, and serialising with the other
+    engine's renders is the behaviour everything here already assumes."""
+    import soundfile as sf
+    k = get_kokoro()
+    v = p["kvoice"]
+    speed = min(max(float(p["speed"] or 0) or 1.0, 0.5), 2.0)
+    with _lock:
+        samples, sr = k.create(spoken, voice=v, speed=speed,
+                               lang=KOKORO_LANGS.get(v[:1], "en-us"))
+    sf.write(str(dest), samples, sr)
+
+
+def render_kokoro(c, doc, force=False):
+    """Speak one card with Kokoro. Deterministic — no sampling to seed — so
+    re-rendering a take reproduces it exactly."""
+    h = chunk_hash(c, doc)
+    dest = AUDIO / f"{h}.wav"
+    if dest.exists() and not force:
+        return h, True
+    p = params_for(c, doc)
+    spoken = c["text"].replace("❦", " ").strip()      # scene mark: silent
+    tmp = dest.with_name(dest.stem + ".tmp.wav")
+    try:
+        _kokoro_gen(spoken, p, tmp)
+        tmp.rename(dest)                   # atomic, as everywhere else here
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return h, False
+
+
 def render_omnivoice(c, doc, force=False):
     """Speak one card with OmniVoice.
 
@@ -1666,8 +1769,11 @@ def render_any(c, doc, force=False):
     one thing OmniVoice cannot do."""
     if c.get("type") == "voiced":
         return render_voiced(c, doc, force)
-    if params_for(c, doc)["engine"] == "omnivoice":
+    eng = params_for(c, doc)["engine"]
+    if eng == "omnivoice":
         return render_omnivoice(c, doc, force)
+    if eng == "kokoro":
+        return render_kokoro(c, doc, force)
     return render(c, doc, force)
 
 
@@ -1707,6 +1813,10 @@ def render_preview(c, doc, force=False, text=None):
     if p["engine"] == "chatterbox":         # as chunk_hash: default stays unmarked
         k = [spoken, p["voice"], p["exag"], p["cfg"], p["temp"], p["rep"],
              "prev", int(c.get("seed") or 0)]
+    elif p["engine"] == "kokoro":
+        k = [spoken, "prev", int(c.get("seed") or 0),
+             {"engine": "kokoro", "voice": p["kvoice"],
+              "speed": float(p["speed"] or 0)}]
     else:
         k = [spoken, p["voice"], "prev", int(c.get("seed") or 0),
              {"engine": p["engine"], "lang": p["lang"],
@@ -1715,6 +1825,15 @@ def render_preview(c, doc, force=False, text=None):
     dest = AUDIO / f"{h}.wav"
     if dest.exists() and not force:
         return h, True, spoken
+    if p["engine"] == "kokoro":
+        tmp = dest.with_name(dest.stem + ".tmp.wav")
+        try:
+            _kokoro_gen(spoken, p, tmp)
+            tmp.rename(dest)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        return h, False, spoken
     if p["engine"] == "omnivoice":
         tmp = dest.with_name(dest.stem + ".tmp.wav")
         try:
@@ -2396,6 +2515,7 @@ class H(BaseHTTPRequestHandler):
                 "clip_counts": ccounts, "media_counts": mcounts,
                 "defaults": DEFAULTS, "bake": _bake,
                 "engines": list(ENGINES), "omnivoice": ov_available(),
+                "kokoro": kokoro_available(), "kvoices": kokoro_voices(),
                 "stale_build": build_stale(),
                 "model": "warm" if _model else "cold"})
         if u.path == "/api/plugins":
@@ -3204,6 +3324,8 @@ class H(BaseHTTPRequestHandler):
                     new["engine"] = "chatterbox"
                 new["lang"] = re.sub(r"[^a-zA-Z_-]", "", str(new.get("lang") or "en"))[:12] or "en"
                 new["speed"] = _num(new.get("speed"), 0.0, 0.0, 3.0)
+                new["kvoice"] = re.sub(r"[^a-z0-9_]", "",
+                                       str(new.get("kvoice") or "af_heart"))[:24] or "af_heart"
                 new["gain"] = _num(new.get("gain"), 100.0, 0.0, 200.0)
                 f = new.get("fx")
                 if not isinstance(f, dict) or not f.get("plugin"):

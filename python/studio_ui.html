@@ -719,7 +719,7 @@ async function open_(name,quiet,anchor){
 // changing a setting back restores exactly what changing it took away. That is
 // worth saying out loud in the dialog: the mistake feels fatal and is not.
 let EDITING=null, DRAFT=null, IMPACT=null, IMPACTT=null;
-const SOUNDKEYS=['voices','active','cfg','exag','temp','rep','engine','lang','speed','gain','fx'];
+const SOUNDKEYS=['voices','active','cfg','exag','temp','rep','engine','lang','speed','kvoice','gain','fx'];
 const sameSound=(a,b)=>SOUNDKEYS.every(k=>JSON.stringify(a[k])===JSON.stringify(b[k]));
 // 646 languages is too many for a menu and too many to remember the codes of,
 // so the box is a plain input backed by a datalist: the browser does the
@@ -767,14 +767,15 @@ function draftData(){
 function renderProfileList(){
   const P=STATE.profiles||{}, N=STATE.profile_counts||{};
   $('profiles').innerHTML=profNames().map((n,i)=>{
-    const pr=P[n], v=(pr.voices||[])[pr.active||0]||'—', c=N[n]||0;
-    const ov=(pr.engine||'chatterbox')==='omnivoice';
+    const pr=P[n], c=N[n]||0;
+    const ov=(pr.engine||'chatterbox')==='omnivoice', ko=(pr.engine||'chatterbox')==='kokoro';
+    const v=ko?(pr.kvoice||'af_heart'):(pr.voices||[])[pr.active||0]||'—';
     return `<div class="proj ${EDITING===n?'sel':''}" onclick="editProfileAt(${i})"
       oncontextmenu="profMenu(event,${i})">
       <div>${esc(n)}${n==='Default'?' <span class="pill">always</span>':''}${
         ov?` <span class="pill">${esc(pr.lang||'en')}</span>`:''}</div>
       <div class="meta">${esc(v)} · ${c?c+' card'+(c===1?'':'s'):'not used yet'}${
-        ov?' · OmniVoice':''}</div></div>`;
+        ov?' · OmniVoice':ko?' · Kokoro':''}</div></div>`;
   }).join('');
 }
 function renderProfiles(){
@@ -794,6 +795,7 @@ function profEditor(n){
   const vs=pr.voices||[], VS=STATE.voices||[];
   const cnt=(STATE.profile_counts||{})[n]||0;
   const ov=(pr.engine||'chatterbox')==='omnivoice';
+  const ko=(pr.engine||'chatterbox')==='kokoro';
   const hist=(saved._history||[]);
   const last=hist.length?hist[hist.length-1]:null;
   // range, not a bare number box: the useful span of each of these is narrow
@@ -836,15 +838,29 @@ function profEditor(n){
 
     <div class="psec">engine</div>
     <select onchange="draftSet('engine',this.value)" style="width:100%"
-      ${STATE.omnivoice?'':'disabled'}>
-      <option value="chatterbox" ${!ov?'selected':''}>Chatterbox — English, four delivery controls, seeded takes</option>
-      <option value="omnivoice" ${ov?'selected':''}>OmniVoice — 600+ languages, about 3× faster</option>
+      ${(STATE.omnivoice||STATE.kokoro)?'':'disabled'}>
+      <option value="chatterbox" ${(!ov&&!ko)?'selected':''}>Chatterbox — English, four delivery controls, seeded takes</option>
+      <option value="omnivoice" ${ov?'selected':''} ${STATE.omnivoice?'':'disabled'}>OmniVoice — 600+ languages, about 3× faster</option>
+      <option value="kokoro" ${ko?'selected':''} ${STATE.kokoro?'':'disabled'}>Kokoro — ${(STATE.kvoices||[]).length||54} preset voices, fast on CPU, no cloning</option>
     </select>
-    <div class="phelp">${STATE.omnivoice
+    <div class="phelp">${(STATE.omnivoice||STATE.kokoro)
       ? '◎ voiced cards always use Chatterbox — it is the only one that can re-speak a recording.'
-      : '<span class="warn">OmniVoice is not installed on this machine.</span>'}</div>
+      : '<span class="warn">Only Chatterbox is installed on this machine.</span>'}</div>
 
-    ${ov?`
+    ${ko?`
+    <div class="psec">delivery
+      <span class="mut" style="font-weight:400"> — Kokoro speaks fixed presets, not the voice clips above</span></div>
+    <div class="prow">
+      <div class="plab">preset<span class="pv">${esc(pr.kvoice||'af_heart')}</span></div>
+      <select style="width:100%" onchange="draftSet('kvoice',this.value)">
+        ${(STATE.kvoices||[]).map(v=>`<option ${v===(pr.kvoice||'af_heart')?'selected':''}>${esc(v)}</option>`).join('')}
+      </select>
+      <div class="phelp">the first letter is the language — a American · b British · e Spanish ·
+        f French · h Hindi · i Italian · j Japanese · p Portuguese · z Chinese — and f/m after it
+        is her/him. ef_dora for the Spanish editions.</div>
+    </div>
+    ${sl('speed','speed',0,2,'0 leaves it to the model; 1 is its normal pace')}
+    `:ov?`
     <div class="psec">delivery
       <span class="mut" style="font-weight:400"> — OmniVoice has no pace or feeling controls</span></div>
     <div class="prow">
@@ -2773,7 +2789,7 @@ function paintSubBtn(id){
   }
   b.classList.toggle('dirty',!!has);
 }
-const ENGLABEL={chatterbox:'Chatterbox', omnivoice:'OmniVoice'};
+const ENGLABEL={chatterbox:'Chatterbox', omnivoice:'OmniVoice', kokoro:'Kokoro'};
 function enginePill(c){
   const e=(c.effective||{}).engine||'chatterbox', own=c.params||{};
   const custom=Object.keys(own).filter(k=>k!=='engine').length;
@@ -2829,6 +2845,8 @@ function delivRow(c){
   const knobs = (eng==='omnivoice'
     ? k('speed','speed',0,2,'0 leaves the pace to the model')+
       k('duration','length',0,30,'aim for this many seconds — 0 for no target')
+    : eng==='kokoro'
+    ? k('speed','speed',0,2,'0 leaves the pace to the model')
     : k('cfg','pace',0,1,'lower is slower and more deliberate')+
       k('exag','feeling',0,1.5,'how much colour goes into the reading')+
       k('temp','steadiness',0.05,1.5,'higher wanders more; lower stays flat')+
@@ -2837,10 +2855,11 @@ function delivRow(c){
   return `<div class="deliv" id="dl${c.id}">
     <span class="lbl">engine</span>
     <select onchange="setParam(${c.id},'engine',this.value)"
-      ${STATE.omnivoice?'':'disabled'}>
+      ${(STATE.omnivoice||STATE.kokoro)?'':'disabled'}>
       <option value="" ${!p.engine?'selected':''}>as profile — ${esc(ENGLABEL[e.engine]||'Chatterbox')}</option>
       <option value="chatterbox" ${p.engine==='chatterbox'?'selected':''}>Chatterbox</option>
-      <option value="omnivoice" ${p.engine==='omnivoice'?'selected':''}>OmniVoice</option>
+      <option value="omnivoice" ${p.engine==='omnivoice'?'selected':''} ${STATE.omnivoice?'':'disabled'}>OmniVoice</option>
+      <option value="kokoro" ${p.engine==='kokoro'?'selected':''} ${STATE.kokoro?'':'disabled'}>Kokoro</option>
     </select>
     ${knobs}
     <span style="flex:1"></span>

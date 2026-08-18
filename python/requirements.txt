@@ -1,3 +1,6 @@
 chatterbox-tts
 torch>=2.6
 torchaudio>=2.6
+# the light engine: preset voices, CPU-only, ~100MB of model files fetched
+# separately into <library>/models/kokoro/ — see studio.py KOKORO_DIR
+kokoro-onnx
