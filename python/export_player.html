@@ -152,7 +152,7 @@ try{
   $('ccb').classList.toggle('lit',CC); $('twb').classList.toggle('lit',TW);
 }catch(e){}
 
-let CAPST={txt:'',chain:false};
+let CAPST={txt:'',chain:false}, CAPQ=[], CAPI=-1;
 function caption(t,secs,from){ const el=$('caption');
   if(TYPER){ TYPER(); TYPER=null; }
   if(!t||!CC)return void el.classList.remove('on');
@@ -168,7 +168,7 @@ function begin(){ $('gate').style.display='none'; story(); }
 async function story(){
   const tok=++TOKEN;
   hideChooser();
-  CAPST={txt:'',chain:false};             // a fresh ride starts a fresh block
+  CAPST={txt:'',chain:false}; CAPQ=[]; CAPI=-1;   // a fresh ride, a fresh block
   await SagaPlay.walk(CH,{
     playRun:(from,upto)=>playChain(tok,from,upto),
     ask:opts=>ask(tok,opts),
@@ -198,6 +198,7 @@ function playOne(tok,seg){
   return new Promise(res=>{
     if(tok!==TOKEN)return res(false);
     MARKS=seg.marks||[]; MARKI=-1;
+    CAPQ=[]; CAPI=-1;                 // a new stretch, a new page plan
     RUNOFF=()=>res(false);
     AUDIO.onended=()=>{ RUNOFF=null; res(tok===TOKEN); };
     AUDIO.onerror=()=>{ RUNOFF=null; res(tok===TOKEN); };
@@ -240,7 +241,8 @@ function tick(){
   $('clock').textContent=fmt(t);
   let i=MARKI<0?0:MARKI;
   while(i+1<MARKS.length&&MARKS[i+1].at<=t)i++;
-  if(!MARKS.length||i===MARKI)return;
+  if(!MARKS.length)return;
+  if(i===MARKI)return void pageTick(t);   // no new card: pages still turn
   MARKI=i;
   const c=BYID.get(MARKS[i].id);
   if(c){
@@ -253,9 +255,20 @@ function tick(){
     if((kind==='audio'||kind==='silence')&&c.sub){
       fxcap(c.sub);       // the sound's line; pushed aside by the next words
     }else{
-      const r=SagaPlay.chainStep(CAPST,c,c.sub||(kind==='speech'?c.text:''));
-      if(!r.hold){ caption(r.full,dur,r.from); if(r.full)fxcap(''); }
+      CAPQ=SagaPlay.captions(CAPST,c,c.sub||(kind==='speech'?c.text:''),MARKS[i].at,dur);
+      CAPI=-1;
+      if(CAPQ.length&&CAPQ[0].text)fxcap('');
     }
+  }
+  pageTick(t);
+}
+// turn the caption's pages against the audio clock — pause freezes them,
+// and only the page whose moment has come is shown
+function pageTick(t){
+  while(CAPI+1<CAPQ.length&&CAPQ[CAPI+1].at<=t){
+    CAPI++;
+    const ev=CAPQ[CAPI];
+    caption(ev.text,ev.secs,ev.from);
   }
 }
 const fmt=s=>{ s=Math.floor(s||0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };

@@ -144,27 +144,76 @@ const SagaPlay = (() => {
     return () => clearInterval(t)
   }
 
-  // Chained captions. A card marked `chain` leaves its words standing when it
-  // ends, and the next caption-bearing card appends to them — one growing
-  // block across cards that were split for delivery, not for meaning. `st` is
-  // the player's caption state ({txt, chain}), mutated in place. Returns what
-  // to show and where the fresh text begins; `hold` means a wordless card sat
-  // down inside a chain and the caption (and any typewriter mid-word) should
-  // simply be left alone.
-  function chainStep (st, card, text) {
-    if (!text) {
-      if (st.chain) return { full: st.txt, from: st.txt.length, hold: true }
-      st.txt = ''
-      return { full: '', from: 0 }
+  // ── caption paging ──────────────────────────────────────────────────
+  // A caption is at most a couple of lines. A card carrying a paragraph gets
+  // its text split into sentence-packed pages, and each page gets a slice of
+  // the card's audio in proportion to its share of the characters — spoken
+  // narration is steady enough that characters are a fair clock. The hosts
+  // drive the flips from the audio's own currentTime, so pausing freezes the
+  // page and nothing ever drifts.
+  const PAGE = 110                     // target characters — about two lines
+
+  function sentences (t) {
+    const rough = t.match(/[^.!?…]+[.!?…]+["'”’)]*\s*|\S[^.!?…]*$/g) || [t]
+    const fine = []
+    for (let s of rough) {
+      s = s.trim()
+      if (!s) continue
+      // a sentence that outgrows a page splits at a clause, then a word
+      while (s.length > PAGE * 1.3) {
+        let cut = s.lastIndexOf(', ', PAGE)
+        if (cut < PAGE * 0.4) cut = s.lastIndexOf(' ', PAGE)
+        if (cut < 1) cut = PAGE
+        fine.push(s.slice(0, cut + 1).trim())
+        s = s.slice(cut + 1).trim()
+      }
+      if (s) fine.push(s)
     }
-    const joined = st.chain && st.txt
-    const full = joined ? st.txt + ' ' + text : text
-    const from = joined ? st.txt.length + 1 : 0
-    st.txt = card.chain ? full : ''
-    st.chain = !!card.chain
-    return { full, from }
+    return fine
   }
 
-  return { applySet, passes, findTag, runEnd, walk, segments, typeCaption, chainStep }
+  function pages (t) {
+    const out = []
+    let cur = ''
+    for (const s of sentences(t)) {
+      if (cur && cur.length + s.length + 1 > PAGE) { out.push(cur); cur = s } else cur = cur ? cur + ' ' + s : s
+    }
+    if (cur) out.push(cur)
+    return out
+  }
+
+  // The caption plan for one card: timed events the host replays against the
+  // audio clock — [{at, secs, text, from}], `from` being where fresh text
+  // starts (the typewriter's cue). Chaining lives here too: a card marked
+  // `chain` leaves its last page standing, a chained continuation flows into
+  // that page while there is room (the join reads as growth, not
+  // replacement) and rolls to a fresh page when there is not. A wordless
+  // card inside a chain returns no events at all: the standing page, and any
+  // typewriter mid-word, are simply left alone.
+  function captions (st, card, text, at, dur) {
+    if (!text) {
+      if (st.chain) return []
+      st.txt = ''
+      return [{ at, secs: dur, text: '', from: 0 }]
+    }
+    const ps = pages(text)
+    const total = text.length || 1
+    const evs = []
+    let cum = 0
+    for (const p of ps) {
+      const start = at + dur * (cum / total)
+      cum += p.length
+      evs.push({ at: start, secs: at + dur * (cum / total) - start, text: p, from: 0 })
+    }
+    if (st.chain && st.txt &&
+        st.txt.length + 1 + evs[0].text.length <= PAGE * 1.25) {
+      evs[0] = { ...evs[0], text: st.txt + ' ' + evs[0].text, from: st.txt.length + 1 }
+    }
+    st.txt = card.chain ? evs[evs.length - 1].text : ''
+    st.chain = !!card.chain
+    return evs
+  }
+
+  return { applySet, passes, findTag, runEnd, walk, segments, typeCaption, captions }
 })()
 if (typeof module !== 'undefined') module.exports = SagaPlay

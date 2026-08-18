@@ -153,7 +153,7 @@ function show(c){
   room.insertBefore(el,$('caption'));
 }
 
-let TYPER=null, CAPST={txt:'',chain:false};
+let TYPER=null, CAPST={txt:'',chain:false}, CAPQ=[], CAPI=-1;
 function caption(text,secs,from){
   const el=$('caption');
   if(TYPER){ TYPER(); TYPER=null; }
@@ -192,7 +192,7 @@ async function story(fromId){
   // ride carry over — which is what testing wants: play through making
   // choices, fix the thing, replay from right there with the state you had.
   if(fromId==null)VARS={};
-  CAPST={txt:'',chain:false};             // a fresh ride starts a fresh block
+  CAPST={txt:'',chain:false}; CAPQ=[]; CAPI=-1;   // a fresh ride, a fresh block
   paintVars();
   let start=0;
   if(fromId!=null){ const k=DOC.chunks.findIndex(c=>c.id===fromId); if(k>=0)start=k; }
@@ -213,6 +213,7 @@ function playRun(tok,from,upto){
       // reason to halt the story; the walk simply continues past it
       if(!r.ok)return res(true);
       MARKS=r.marks||[]; MARKI=-1;
+      CAPQ=[]; CAPI=-1;               // a new stretch, a new page plan
       RUNOFF=()=>res(false);
       AUDIO.onended=()=>{ RUNOFF=null; res(tok===TOKEN); };
       AUDIO.src='/api/book_audio?name='+encodeURIComponent(NAME)+'&t='+Date.now();
@@ -286,7 +287,8 @@ function tick(){
   $('clock').textContent=fmt(t)+(AUDIO.duration?' / '+fmt(AUDIO.duration):'');
   let i=MARKI<0?0:MARKI;
   while(i+1<MARKS.length&&MARKS[i+1].at<=t)i++;
-  if(!MARKS.length||i===MARKI)return;
+  if(!MARKS.length)return;
+  if(i===MARKI)return void pageTick(t);   // no new card: pages still turn
   MARKI=i;
   const c=card(MARKS[i].id);
   if(c){
@@ -298,9 +300,6 @@ function tick(){
     if(vis)show(vis);
     // the subtitle wins over the spoken text — "Teide" on screen while the
     // booth was fed "tay-dee" — and it is the only words a voiced card has.
-    // chainStep decides whether these words replace the caption, append to a
-    // standing chain, or (a wordless card inside a chain) leave it alone —
-    // so a silence or a music bed between chained cards holds the block.
     const dur=(i+1<MARKS.length?MARKS[i+1].at:(AUDIO.duration||t))-MARKS[i].at;
     const kind=c.type||'speech';
     if((kind==='audio'||kind==='silence')&&c.sub){
@@ -308,12 +307,25 @@ function tick(){
       // standing chain, and the next real words push it aside
       fxcap(c.sub);
     }else{
-      const r=SagaPlay.chainStep(CAPST,c,c.sub||(kind==='speech'?c.text:''));
-      if(!r.hold){ caption(r.full,dur,r.from); if(r.full)fxcap(''); }
+      // the card's caption plan: a paragraph becomes pages, each with its
+      // slice of the card's audio — replayed below against the clock
+      CAPQ=SagaPlay.captions(CAPST,c,c.sub||(kind==='speech'?c.text:''),MARKS[i].at,dur);
+      CAPI=-1;
+      if(CAPQ.length&&CAPQ[0].text)fxcap('');
     }
   }
+  pageTick(t);
   paintVars();          // sets applied at the last choice are visible by now
   say({type:'playing',card:MARKS[i].id});
+}
+// turn the caption's pages against the audio clock — pause freezes them,
+// and only the page whose moment has come is shown
+function pageTick(t){
+  while(CAPI+1<CAPQ.length&&CAPQ[CAPI+1].at<=t){
+    CAPI++;
+    const ev=CAPQ[CAPI];
+    caption(ev.text,ev.secs,ev.from);
+  }
 }
 const fmt=s=>{ s=Math.floor(s||0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
 
