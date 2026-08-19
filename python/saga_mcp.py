@@ -189,6 +189,8 @@ def t_insert_card(a):
     body = {"name": name, "at": int(a.get("at", 0))}
     if kind != "text":
         body["kind"] = kind
+    if kind == "group" and a.get("gname"):
+        body["gname"] = a["gname"]
     if a.get("group"):
         body["group"] = a["group"]
     r = api("/api/insert", body)
@@ -203,6 +205,10 @@ def t_insert_card(a):
 def t_edit_card(a):
     name = a.get("story")
     require_draft(name)
+    extra = a.get("fields") if isinstance(a.get("fields"), dict) else {}
+    if a.get("gname") is not None or extra.get("gname") is not None:
+        raise ToolError("a group's name is renamed with rename_group, "
+                        "not edit_card — the members follow it there")
     fields = _fields(a)
     if not fields:
         raise ToolError("nothing to change — pass the fields to set")
@@ -223,6 +229,16 @@ def t_move_card(a):
     api("/api/move", {"name": name, "id": int(a.get("id", -1)),
                       "to": int(a.get("to", 0))})
     return {"ok": True, "note": "ids renumbered"}
+
+
+def t_rename_group(a):
+    name = a.get("story")
+    require_draft(name)
+    r = api("/api/group_rename", {"name": name, "gname": a.get("gname"),
+                                  "to": a.get("to")})
+    return {"ok": True, "gname": r.get("gname"), "cards": r.get("cards"),
+            "note": "the bar and its member cards all follow the new name; "
+                    "tags (and the choices that jump to them) are untouched"}
 
 
 def t_create_profile(a):
@@ -345,10 +361,12 @@ TOOLS = [
      _schema({"title": STR, "text": STR}, ["title", "text"]), t_create_story),
     ("insert_card", "Insert a card at position `at` (0 = top) in a DRAFT. "
      "kind: text, audio, silence, visual, choice, or group. Any card fields "
-     "may be set in the same call.",
+     "may be set in the same call; a group takes its name via `gname`.",
      _schema({"story": STR, "at": INT,
               "kind": {**STR, "enum": ["text", "audio", "silence", "visual",
                                        "choice", "group"]},
+              "gname": {**STR, "description": "the group's name (kind group "
+                        "only); errors if a group of that name exists"},
               "group": {**STR, "description":
                         "make it a member of this named group"},
               **CARD_FIELD_PROPS}, ["story", "at"]), t_insert_card),
@@ -363,6 +381,11 @@ TOOLS = [
      "lifted out) in a DRAFT.",
      _schema({"story": STR, "id": INT, "to": INT},
              ["story", "id", "to"]), t_move_card),
+    ("rename_group", "Rename group `gname` to `to` in a DRAFT — the bar and "
+     "every member card follow. Tags are untouched, so choices that jump to "
+     "the group's tags still land.",
+     _schema({"story": STR, "gname": STR, "to": STR},
+             ["story", "gname", "to"]), t_rename_group),
     ("create_profile", "Create a NEW voice profile (existing ones are shared "
      "by every story and cannot be changed from here). engine: chatterbox "
      "(clones `voice`, dials exag/cfg/temp/rep), omnivoice (lang, speed), or "

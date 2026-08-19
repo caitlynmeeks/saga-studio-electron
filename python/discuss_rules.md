@@ -35,7 +35,9 @@ the story rather than trusting remembered ids.**
   fails. `runon: true` removes the rest before the card, for a sentence
   split across two cards.
 - **group** — a named bar (`gname`); the cards after it that belong to it
-  form a scene. A tagged group is a jump destination. Groups do not nest.
+  form a scene. Name it when inserting (pass `gname`) or later with
+  `rename_group` — never via edit_card. A tagged group is a jump
+  destination. Groups do not nest.
 - **choice** — playback stops and asks. Each option: `label`, `goto` (a tag
   to jump to; empty ends the story), `set` (a list like
   `["brave", "!met_gertie", "coins+1", "coins=5"]`), and `when` (offered

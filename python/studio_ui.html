@@ -3898,7 +3898,8 @@ async function assemble(){
 // where the author applies or discards what it made.
 let CHAT={running:false,fresh:false,t:null};
 const CHAT_MUT=new Set(['insert_card','edit_card','remove_card','move_card',
-  'create_profile','draft_story','create_story','render_card','render_story']);
+  'rename_group','create_profile','draft_story','create_story','render_card',
+  'render_story']);
 async function send(){
   if(CHAT.running){ api('/api/chat_stop',{name:DOC?DOC.name:null}); return; }
   const q=$('ask').value.trim(); if(!q)return;

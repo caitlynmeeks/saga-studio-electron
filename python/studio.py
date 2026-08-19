@@ -3466,7 +3466,15 @@ class H(BaseHTTPRequestHandler):
                              if x.get("type") == "group"}
                     taken |= {x.get("group") for x in doc["chunks"]
                               if x.get("group")}
-                    g, k = "New Group", 2
+                    # a caller may name the bar at birth — the discuss agent
+                    # does — and a taken name is an error, not a quiet suffix:
+                    # the caller believes in the name it asked for
+                    want = re.sub(r"[\"'`\\<>&]", "",
+                                  str(d.get("gname") or "")).strip()[:60]
+                    if want and want in taken:
+                        return self._send(400, {"error":
+                                                f"“{want}” is already a group here"})
+                    g, k = want or "New Group", 2
                     while g in taken:
                         g, k = f"New Group ({k})", k + 1
                     c = {"id": 0, "type": "group", "gname": g, "note": ""}
