@@ -63,10 +63,15 @@ border-radius:5px;padding:3px 11px;font:12px var(--mono);cursor:pointer}
 .mut{color:var(--dim)}.warn{color:var(--amber)}
 #dot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none}
 #dot.on{background:var(--green)}
-/* embedded in the editor (the Game view) or mirroring another stage: pure
-   picture — the editor carries the transport, so the bar has no business here */
-body.embed,body.mirror{grid-template-rows:1fr}
-body.embed #bar,body.mirror #bar{display:none}
+/* embedded in the editor (the Game view): pure picture — the dock's own bar
+   carries the chrome. A popped-out mirror keeps a sliver of bar for the one
+   thing only it can offer: the way back in. */
+body.embed{grid-template-rows:1fr}
+body.embed #bar{display:none}
+#popin{display:none}
+body.mirror #bar>*{display:none}
+body.mirror #bar #popin{display:inline-block}
+body.mirror #bar #dot{display:inline-block}
 </style>
 </head>
 <body>
@@ -82,6 +87,8 @@ body.embed #bar,body.mirror #bar{display:none}
   <span id="clock" class="mut"></span>
   <button id="playb" onclick="toggle()">▶ Play</button>
   <button onclick="playFrom(null)" title="back to the top">⟲ From Start</button>
+  <button id="popin" onclick="popIn()"
+    title="Return the stage to its dock in the editor">⇲ Pop Back In</button>
   <span id="dot" title="editor connection"></span>
 </div>
 <script src="/player.js"></script>
@@ -102,6 +109,9 @@ const qs=new URLSearchParams(location.search);
 const EMBED=qs.has('embed');
 if(EMBED)document.body.classList.add('embed');
 let MIRROR=false;
+// a window the editor popped out is a mirror from birth — it never guesses
+if(qs.has('pop')){ MIRROR=true; document.body.classList.add('mirror'); }
+function popIn(){ say({type:'popin'}); window.close(); }
 let NAME=qs.get('name')||'';
 let DOC=null;              // the open episode, as /api/doc tells it
 let MARKS=[], MARKI=-1;    // card start times of the playing stretch
@@ -115,16 +125,22 @@ AUDIO.addEventListener('timeupdate',tick);
 
 const BC='BroadcastChannel' in window?new BroadcastChannel('saga-stage'):null;
 const say=m=>{ if(BC)BC.postMessage({...m,name:NAME}); };
+// what is on the wall right now — kept whole so a mirror that arrives late
+// (or pops out mid-scene) gets the full picture, not just the next change
+let LASTF={media:null,kind:'',cap:'',fx:'',opts:null};
+const sayFrame=patch=>{ if(!EMBED)return;
+  Object.assign(LASTF,patch||{}); say({type:'frame',...LASTF}); };
 if(BC)BC.onmessage=e=>{
   const m=e.data||{};
   $('dot').classList.add('on');
-  if(m.type==='hello')return;
+  if(m.type==='hello'){ if(EMBED)sayFrame(); return; }  // a late mirror gets the wall
   if(m.type==='frame'&&!EMBED)return void mirror(m);   // an owner is painting
   if(m.type==='choose')return void(CHOOSE&&CHOOSE(m.i));
   if(MIRROR)return;                    // a mirror obeys no transport of its own
   if(m.type==='open'&&m.name){ if(m.name!==NAME)stop(); NAME=m.name; load(); }
   if(!EMBED&&m.to==='embed')return;    // addressed transport is the embed's alone
   if(m.type==='cur')idleShow(m.card);
+  if(m.type==='stop')stop();
   if(m.type==='play'){ if(m.name)NAME=m.name; story(m.from==null?null:m.from); }
   if(m.type==='toggle'){
     if(m.name)NAME=m.name;
@@ -136,19 +152,25 @@ if(BC)BC.onmessage=e=>{
   if(m.type==='pause'&&!AUDIO.paused)pause();
 };
 say({type:'hello'});
-// what a mirror does: paint whatever the owner says is on its wall
+// what a mirror does: paint whatever the owner says is on its wall. Frames
+// arrive whole, so each part repaints only when it actually changed — or a
+// caption tick elsewhere would restart the picture and the typewriter here
+let MMEDIA=' ', MCAP=' ', MFX=' ', MOPTS=' ';
 function mirror(m){
   if(!MIRROR){ MIRROR=true; document.body.classList.add('mirror'); stop(); }
-  if('media'in m)showMedia(m.media,m.kind);
-  if('cap'in m)caption(m.cap,m.secs,m.from,m.tw,false);
-  if('fx'in m)fxcap(m.fx);
-  if('opts'in m){
-    const ch=$('chooser');
-    if(!m.opts){ ch.classList.remove('on'); ch.onclick=null; $('room').classList.remove('choosing'); }
-    else{
-      ch.innerHTML=m.opts.map((o,i)=>`<button data-i="${i}">${esc(o)||'…'}</button>`).join('');
-      ch.classList.add('on'); $('room').classList.add('choosing');
-      ch.onclick=ev=>{ const b=ev.target.closest('button'); if(b)say({type:'choose',i:+b.dataset.i}); };
+  if('media'in m&&m.media!==MMEDIA){ MMEDIA=m.media; showMedia(m.media,m.kind); }
+  if('cap'in m){ const k=(m.cap||'')+'|'+(m.from||0);
+    if(k!==MCAP){ MCAP=k; caption(m.cap,m.secs,m.from,m.tw,false); } }
+  if('fx'in m&&(m.fx||'')!==MFX){ MFX=m.fx||''; fxcap(m.fx); }
+  if('opts'in m){ const k=JSON.stringify(m.opts||null);
+    if(k!==MOPTS){ MOPTS=k;
+      const ch=$('chooser');
+      if(!m.opts){ ch.classList.remove('on'); ch.onclick=null; $('room').classList.remove('choosing'); }
+      else{
+        ch.innerHTML=m.opts.map((o,i)=>`<button data-i="${i}">${esc(o)||'…'}</button>`).join('');
+        ch.classList.add('on'); $('room').classList.add('choosing');
+        ch.onclick=ev=>{ const b=ev.target.closest('button'); if(b)say({type:'choose',i:+b.dataset.i}); };
+      }
     }
   }
 }
@@ -173,7 +195,7 @@ function show(c){
   if(SHOWN&&c&&SHOWN.id===c.id)return;
   SHOWN=c||null;
   showMedia(c&&c.media,c&&c.mediakind);
-  if(EMBED)say({type:'frame',media:c?c.media:null,kind:c?c.mediakind:''});
+  sayFrame({media:c?c.media:null,kind:c?c.mediakind:''});
 }
 function showMedia(media,kind){
   const room=$('room');
@@ -218,7 +240,7 @@ let TYPER=null, CAPST={txt:'',chain:false}, CAPQ=[], CAPI=-1;
 function caption(text,secs,from,tw,sfx){
   const el=$('caption');
   if(TYPER){ TYPER(); TYPER=null; }
-  if(EMBED)say({type:'frame',cap:text||'',secs,from,tw:!!tw});
+  sayFrame({cap:text||'',secs,from,tw:!!tw});
   if(!text)return void el.classList.remove('on');
   el.classList.add('on');
   if(tw&&secs>0)TYPER=SagaPlay.typeCaption(el,text,secs,from||0,sfx?keyclick:null);
@@ -226,7 +248,7 @@ function caption(text,secs,from,tw,sfx){
 }
 function fxcap(t){
   const el=$('fxcap');
-  if(EMBED)say({type:'frame',fx:t||''});
+  sayFrame({fx:t||''});
   if(!t)return void el.classList.remove('on');
   el.textContent=t; el.classList.add('on');
 }
@@ -305,7 +327,7 @@ function ask(tok,opts,c){
     ch.innerHTML=opts.map((o,i)=>`<button data-i="${i}">${esc(o.label)||'…'}</button>`).join('');
     ch.classList.add('on'); $('room').classList.add('choosing');
     say({type:'choices',opts:labels});
-    if(EMBED)say({type:'frame',opts:labels});
+    sayFrame({opts:labels});
     const pick=i=>{ hideChooser(); res(tok===TOKEN?opts[i]:null); };
     ch.onclick=e=>{ const b=e.target.closest('button'); if(b)pick(+b.dataset.i); };
     CHOOSE=pick;                          // the editor and the mirrors choose too
@@ -316,7 +338,7 @@ function hideChooser(){ const ch=$('chooser');
   ch.classList.remove('on'); ch.onclick=null; $('room').classList.remove('choosing');
   ASKOFF=null; CHOOSE=null; paintVars();
   say({type:'choices',opts:null});
-  if(EMBED)say({type:'frame',opts:null}); }
+  sayFrame({opts:null}); }
 // The story's flags right now — the walk mutates VARS as choices apply their
 // sets, and seeing them is half of testing a branch.
 function paintVars(){

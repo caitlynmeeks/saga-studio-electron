@@ -108,9 +108,14 @@ font-size:11.5px;color:var(--faint)}
 .chunk textarea{width:100%;background:transparent;border:0;color:var(--fg);font:13.5px/1.6 var(--mono);
 padding:9px;resize:vertical;min-height:62px;outline:none}
 .chunk .act{display:flex;gap:5px;padding:0 9px 8px;flex-wrap:wrap;align-items:center}
-button{background:#131a17;border:1px solid var(--line);color:var(--fg);border-radius:5px;
-padding:3px 9px;font:11.5px var(--mono);cursor:pointer}
+/* buttons that look pressable, not labels that happen to click: a faint
+   raise, a visible edge, and a press that actually goes down */
+button{background:linear-gradient(180deg,#1d2522,#141b18);border:1px solid #2e3b35;
+color:var(--fg);border-radius:6px;padding:4px 12px;font:11.5px var(--mono);cursor:pointer;
+box-shadow:0 1px 2px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.05)}
 button:hover{border-color:var(--green);color:var(--green)}
+button:active:not(:disabled){transform:translateY(1px);
+box-shadow:inset 0 1px 3px rgba(0,0,0,.45)}
 button.pri{border-color:var(--green);color:var(--green)}
 button:disabled{opacity:.4;cursor:default}
 button.busy{border-color:var(--green);color:var(--green);animation:pulse 1s ease-in-out infinite}
@@ -314,8 +319,12 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
 .take button{border:0;padding:0 4px;line-height:17px;font-size:12px;color:var(--faint);background:none}
 .take button:hover:not(:disabled){color:var(--green)}
 /* the Game view: the stage docked beneath the cards, always live */
-#stagedock{flex:none;position:relative;border-top:1px solid var(--line);background:#000}
-#stagedock iframe{width:100%;height:100%;border:0;display:block}
+#stagedock{flex:none;position:relative;border-top:1px solid var(--line);background:#000;
+display:flex;flex-direction:column}
+#sbar{flex:none;display:flex;align-items:center;gap:8px;padding:2px 10px;
+background:var(--chrome);border-bottom:1px solid var(--line);font-size:10px;
+letter-spacing:.08em;color:var(--faint)}
+#stagedock iframe{width:100%;flex:1;min-height:0;border:0;display:block}
 #sgrip{position:absolute;top:-4px;left:0;right:0;height:8px;cursor:ns-resize;z-index:6}
 body.nostage #stagedock{display:none}
 #dockb.on{border-color:var(--green);color:var(--green)}
@@ -338,13 +347,13 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
   <span style="flex:1"></span>
   <span class="pill warn" id="busy"></span>
   <span class="pill" id="model">model: cold</span>
+  <button class="pri" id="bakeb" onclick="bake()">Render Stale Cards</button>
+  <button id="stopb" onclick="stopBake()" style="color:var(--red);border-color:var(--red)" hidden>Stop Rendering</button>
   <button id="minall" onclick="minAll()" disabled
     title="collapse every card to its bar">−</button>
   <button id="frb" onclick="toggleFind()" disabled
     title="find and replace across this episode — ⌘F">Find</button>
   <button id="dockb" onclick="toggleDock()" title="show or hide the stage — the story, live under the cards">Stage</button>
-  <button onclick="openStage()"
-    title="pop the stage out — a window for the second screen; it mirrors the one below">⧉</button>
   <button id="chatb" onclick="togglePanel()" title="show or hide the side panel">Inspector</button>
 </header>
 
@@ -449,6 +458,10 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
   <main id="main"><p class="mut">Drop a markdown file on the left to begin.</p></main>
   <div id="stagedock" style="height:230px">
     <div id="sgrip" title="drag to resize the stage"></div>
+    <div id="sbar"><span>STAGE</span><span style="flex:1"></span>
+      <button class="tiny" onclick="popOut()"
+        title="Pop the stage out to its own window — this panel steps aside until it returns">⇱ Pop Out</button>
+    </div>
     <iframe id="stagefr" allow="autoplay" src="/stage?embed=1"></iframe>
   </div>
 </div>
@@ -481,9 +494,7 @@ Selected chunks are sent as context.</div></div>
 
 <footer>
   <button id="undob" onclick="undo()" title="⌘Z">Undo</button>
-  <button class="pri" id="bakeb" onclick="bake()">Bake All Stale</button>
-  <button id="stopb" onclick="stopBake()" style="color:var(--red);border-color:var(--red)" hidden>Stop Baking</button>
-  <button onclick="stageFromTop()" title="Play the story from the top, on a clean slate">⏮</button>
+  <button onclick="rewind()" title="Jump to the top card — the next ▶ starts there">⏮</button>
   <button id="stgplay" onclick="stageToggle()"
     title="Play the story — from the selected card, with its last ride’s flags; pauses and resumes">▶ Story</button>
   <span id="stgask"></span>
@@ -595,7 +606,7 @@ async function revealOut(){
   const r=await reveal(DOC.name,'out');
   if(r.ok&&!r.assembled)
     $('status').innerHTML='<span class="warn">nothing assembled yet</span> — '+
-      'showing the document folder; press <b>assemble audiobook</b> to make the mp3';
+      'showing the document folder; <b>Assemble</b> in the Publish tab makes the file';
 }
 
 // ── backup ────────────────────────────────────────────────
@@ -689,7 +700,7 @@ async function refresh(){
   $('stopb').hidden=!b.running;
   if(b.running){
     WASBAKING=true;
-    $('status').innerHTML=`<span class="warn">baking ${b.done}/${b.total}</span> — `+
+    $('status').innerHTML=`<span class="warn">rendering ${b.done}/${b.total}</span> — `+
       (b.cancel?'stopping after this card…':esc(b.label));
     // One timer, not one per refresh() — stopBake and open_ both call refresh,
     // and stacked timers would poll faster and faster until the bake ended.
@@ -699,11 +710,11 @@ async function refresh(){
     BAKETIMER=setTimeout(()=>{refresh();if(DOC)syncCards()},2500);
   } else {
     clearTimeout(BAKETIMER); BAKETIMER=null;
-    $('stopb').disabled=false; $('stopb').textContent='stop baking';
+    $('stopb').disabled=false; $('stopb').textContent='Stop Rendering';
     if(WASBAKING){ WASBAKING=false;
       $('status').innerHTML = b.stopped
-        ? `<span class="warn">bake stopped at ${b.done}/${b.total}</span> — bake again to resume`
-        : `<span class="ok">bake complete — ${b.done}/${b.total}</span>`;
+        ? `<span class="warn">rendering stopped at ${b.done}/${b.total}</span> — press it again to resume`
+        : `<span class="ok">rendering complete — ${b.done}/${b.total}</span>`;
     }
   }
 }
@@ -2230,7 +2241,7 @@ function speechCard(c){return `
       <select onchange="setProfile(${c.id},this.value)" style="font-size:11px;padding:1px 4px"
         onmousedown="if(event.altKey){event.preventDefault();inspectProfile(this.value)}"
         title="⌥-click opens this profile in the inspector">
-        ${Object.keys(STATE.profiles||{}).map(p=>
+        ${profNames().map(p=>
           `<option ${ (c.profile||'Default')===p?'selected':''}>${p}</option>`).join('')}
       </select>
       <span class="engpill">${enginePill(c)}</span>
@@ -2352,7 +2363,7 @@ function voicedCard(c){
       <select onchange="setProfile(${c.id},this.value)" style="font-size:11px;padding:1px 4px"
         onmousedown="if(event.altKey){event.preventDefault();inspectProfile(this.value)}"
         title="the character this performance is spoken as — only the voice is used. ⌥-click opens it in the inspector.">
-        ${Object.keys(STATE.profiles||{}).map(p=>
+        ${profNames().map(p=>
           `<option ${(c.profile||'Default')===p?'selected':''}>${p}</option>`).join('')}
       </select>
       ${c.mute?'<span class="pill warn">muted</span>':''}
@@ -3226,6 +3237,14 @@ async function setProfile(id,p){
   await api('/api/chunk',patch);
   await syncCards();
   repaintDeliv(id); paintCardHead(id);   // the row shows the new profile's values
+  // a new voice usually means a stale card — offer the render while the
+  // change is still the thing you are thinking about
+  const cc=DOC&&DOC.chunks.find(x=>x.id===id);
+  if(cc&&!cc.ready&&!cc.mute&&confirm(
+      `Card #${id} now speaks with “${p}” and needs a render.\n\nRender it now?`)){
+    await api('/api/render',{name:DOC.name,id});
+    $('status').textContent=`rendering card #${id} with “${p}”…`;
+  }
 }
 
 // ── audio & silence cards ─────────────────────────────────
@@ -3591,10 +3610,25 @@ function stageToggle(){
     ?'the story plays from the top'
     :'the story plays from card #'+CUR+' — its last ride’s flags carry over';
 }
-function stageFromTop(){
-  if(!DOC||!STAGE)return;
-  toggleDock(true);
-  STAGE.postMessage({type:'play',to:'embed',from:null,name:DOC.name});
+// ⏮ rewinds without playing: stop the ride, stand on the first card, and the
+// next ▶ starts from the top
+function rewind(){
+  if(!DOC)return;
+  if(STAGE)STAGE.postMessage({type:'stop',to:'embed',name:DOC.name});
+  const first=DOC.chunks[0];
+  if(first){ setCur(first.id); const el=$('c'+first.id);
+    if(el)el.scrollIntoView({block:'start'}); }
+  $('main').scrollTop=0;
+}
+// pop the stage out to its own window; the dock steps aside so the story is
+// not on screen twice, and returns when the window closes or pops back in
+let POPUP=null, POPWATCH=null;
+function popOut(){
+  POPUP=window.open('/stage?pop=1'+(DOC?'&name='+encodeURIComponent(DOC.name):''),'saga-stage');
+  toggleDock(false);
+  clearInterval(POPWATCH);
+  POPWATCH=setInterval(()=>{ if(POPUP&&POPUP.closed){
+    clearInterval(POPWATCH); POPWATCH=null; POPUP=null; toggleDock(true); } },800);
 }
 // when the stage stops and asks, the question is answerable from here too
 function paintStageChoices(opts){
@@ -3615,6 +3649,8 @@ if(STAGE)STAGE.onmessage=e=>{
   if(!DOC||m.name!==DOC.name)return;
   if(m.type==='state'){ const b=$('stgplay');
     if(b)b.textContent=m.playing?'⏸ Story':'▶ Story'; }
+  if(m.type==='popin'){ if(POPUP){ try{POPUP.close()}catch(_){} POPUP=null; }
+    clearInterval(POPWATCH); POPWATCH=null; toggleDock(true); }
   if(m.type==='choices')paintStageChoices(m.opts);
   if(m.type==='playing'&&m.card!=null)followCard(m.card);
   if(m.type==='stopped'){ clearPlaying();
@@ -3794,7 +3830,7 @@ async function assemble(){
     if(!confirm(
       `${miss.length} live card${miss.length>1?'s have':' has'} not been rendered:\n\n${list}\n\n`+
       `They will be missing from the audiobook.\n\n`+
-      `OK to assemble without them — or Cancel and press "bake all stale" first.`))
+      `OK to assemble without them — or Cancel and press Render Stale Cards first.`))
       return void($('status').innerHTML=
         `<span class="warn">assemble cancelled</span> · `+missChip(miss.length));
   }
