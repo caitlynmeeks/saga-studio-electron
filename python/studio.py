@@ -859,6 +859,10 @@ def projects():
                         # which is the question "show me recent" is really asking
                         "created": doc.get("created", ""),
                         "edited": round(f.stat().st_mtime),
+                        # the sidebar badges drafts and the discuss agent's
+                        # overview marks them; both read it from here
+                        "draft": bool(doc.get("draft")),
+                        "draft_of": doc.get("draft_of") or "",
                         "words": sum(len(c["text"].split())
                                      for c in doc["chunks"] if is_speech(c))})
     return out
@@ -2539,31 +2543,77 @@ def publish_html(name):
     return Path(made), len(segs), missing_total
 
 
-# ── the discuss window ──────────────────────────────────────────────────
-def ask_claude(project, question, chunk_ids=None):
-    """Shell out to Claude Code headless, with the relevant text as context."""
+# ── the discuss agent ───────────────────────────────────────────────────
+# This used to be three lines: shell out, wait three minutes, print whatever
+# came back. Now the agent has hands and a memory. It runs headless Claude
+# Code with exactly one MCP server — saga_mcp.py, which speaks this studio's
+# own API over loopback — so every change it can make goes through the same
+# door the editor uses: undo, locks and validation hold for it exactly as
+# they hold for the author. The sandbox law (read anywhere, write only in a
+# draft) is enforced in saga_mcp.py and taught in discuss_rules.md.
+#
+# The reply streams to the panel as it happens — text deltas and tool calls
+# both, because watching the cards land is the point — and the conversation
+# resumes across asks: the session id comes back in the event stream and is
+# kept per project, so "now make Juan grumpier" means something.
+SESSIONS_FILE = ROOT / "chat_sessions.json"
+_chats = {}                     # project -> Popen, so the stop button can aim
+_chats_lock = threading.Lock()
+CHAT_IDLE_S = 300               # silence this long means wedged, not thinking
+CHAT_MAX_S = 1800               # and no single ask runs past half an hour
+
+
+def _sessions():
+    try:
+        return json.loads(SESSIONS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _remember_session(project, sid):
+    s = _sessions()
+    s[project or ""] = sid
+    try:
+        SESSIONS_FILE.write_text(json.dumps(s, indent=1))
+    except OSError:
+        pass
+
+
+def _chat_cmd(project, question, chunk_ids, fresh):
     doc = load(project) if project else None
     ctx = ""
     if doc:
         sel = [c for c in doc["chunks"]
                if is_speech(c) and (not chunk_ids or c["id"] in chunk_ids)]
         sel = sel[:40]
-        ctx = (f"Working on an audiobook of \"{doc['title']}\".\n"
-               f"{len(doc['chunks'])} chunks total. "
-               f"{'Selected' if chunk_ids else 'First'} passages:\n\n"
-               + "\n\n".join(f"[chunk {c['id']}] {c['text']}" for c in sel)
-               + "\n\n")
-    prompt = (ctx + "Question from the author: " + question +
-              "\n\nAnswer briefly and concretely. If suggesting a text change, "
-              "give the exact replacement text and the chunk number.")
-    try:
-        r = subprocess.run([CLAUDE, "-p", prompt], capture_output=True,
-                           text=True, timeout=180, cwd=str(HERE))
-        return (r.stdout or r.stderr or "no reply").strip()
-    except FileNotFoundError:
-        return "Claude Code CLI not found — set CLAUDE or install `claude`."
-    except subprocess.TimeoutExpired:
-        return "Timed out after 3 minutes."
+        where = (f"Open in the editor: \"{doc['title']}\" — "
+                 f"story name `{doc['name']}`")
+        if doc.get("draft"):
+            where += (f", a draft of `{doc['draft_of']}`"
+                      if doc.get("draft_of") else ", a draft not yet kept")
+        ctx = where + f". {len(doc['chunks'])} cards.\n"
+        if sel:
+            ctx += (("Selected" if chunk_ids else "First") + " passages:\n\n"
+                    + "\n\n".join(f"[card {c['id']}] {c['text']}" for c in sel)
+                    + "\n\n")
+    cfg = {"mcpServers": {"saga": {
+        "type": "stdio", "command": sys.executable,
+        "args": [str(HERE / "saga_mcp.py")],
+        # the same secret the editor holds — the agent itself never sees it,
+        # having no shell to read the environment with
+        "env": {"SAGA_API": f"http://127.0.0.1:{PORT}",
+                "SAGA_TOKEN": TOKEN}}}}
+    rules = (HERE / "discuss_rules.md").read_text(encoding="utf-8")
+    cmd = [CLAUDE, "-p", ctx + "The author says: " + question,
+           "--output-format", "stream-json", "--verbose",
+           "--include-partial-messages",
+           "--mcp-config", json.dumps(cfg),
+           "--allowedTools", "mcp__saga__*",
+           "--append-system-prompt", rules]
+    sid = None if fresh else _sessions().get(project or "")
+    if sid:
+        cmd += ["--resume", sid]
+    return cmd
 
 
 # ── http ────────────────────────────────────────────────────────────────
@@ -2599,6 +2649,132 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         with open(path, "rb") as f:
             shutil.copyfileobj(f, self.wfile, 1 << 20)
+
+    # ── the discuss stream ──────────────────────────────────────────────
+    def _sse(self, ev):
+        self.wfile.write(f"data: {json.dumps(ev)}\n\n".encode())
+        self.wfile.flush()
+
+    def _chat(self, d):
+        """Run one ask as a server-sent event stream.
+
+        The panel reads it with a fetch reader, so the connection doubles as
+        the stop signal: close the tab or press stop and the write fails,
+        which kills the agent rather than letting it spend on nobody."""
+        project = d.get("name") or ""
+        with _chats_lock:
+            if project in _chats and _chats[project].poll() is None:
+                return self._send(409, {"error": "already thinking — "
+                                        "stop that first"})
+        try:
+            cmd = _chat_cmd(d.get("name"), d["question"], d.get("chunks"),
+                            bool(d.get("fresh")))
+        except FileNotFoundError as ex:
+            return self._send(500, {"error": f"missing file: {ex}"})
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True,
+                                    cwd=str(HERE))
+        except FileNotFoundError:
+            return self._send(500, {"error": "Claude Code is not installed "
+                                    "— install `claude` or set CLAUDE"})
+        with _chats_lock:
+            _chats[project] = proc
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        # A watchdog instead of a deadline: research takes as long as it
+        # takes, but silence past CHAT_IDLE_S means wedged, not thinking.
+        last = [time.time()]
+        t0 = time.time()
+
+        def watchdog():
+            while proc.poll() is None:
+                if (time.time() - last[0] > CHAT_IDLE_S
+                        or time.time() - t0 > CHAT_MAX_S):
+                    proc.kill()
+                    return
+                time.sleep(2)
+
+        threading.Thread(target=watchdog, daemon=True).start()
+        errtail = []
+
+        def drain_err():
+            for ln in proc.stderr:
+                errtail.append(ln.strip())
+                del errtail[:-4]
+
+        threading.Thread(target=drain_err, daemon=True).start()
+
+        streamed = 0            # deltas sent; the fallback for CLIs without
+        done = False            # partial messages only fires when none came
+        try:
+            for line in proc.stdout:
+                last[0] = time.time()
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                t = ev.get("type")
+                if t == "system" and ev.get("subtype") == "init":
+                    if ev.get("session_id"):
+                        _remember_session(project, ev["session_id"])
+                    self._sse({"e": "start"})
+                elif t == "stream_event":
+                    e2 = ev.get("event") or {}
+                    if e2.get("type") == "content_block_delta":
+                        dl = e2.get("delta") or {}
+                        if dl.get("type") == "text_delta" and dl.get("text"):
+                            streamed += len(dl["text"])
+                            self._sse({"e": "t", "t": dl["text"]})
+                    elif e2.get("type") == "content_block_start":
+                        cb = e2.get("content_block") or {}
+                        if cb.get("type") == "tool_use":
+                            self._sse({"e": "tool", "name":
+                                       (cb.get("name") or "").split("__")[-1]})
+                elif t == "assistant":
+                    for cb in ((ev.get("message") or {}).get("content") or []):
+                        if cb.get("type") == "tool_use":
+                            self._sse({"e": "tooldone",
+                                       "name": (cb.get("name") or ""
+                                                ).split("__")[-1],
+                                       "brief": json.dumps(
+                                           cb.get("input") or {})[:160]})
+                        elif (cb.get("type") == "text" and cb.get("text")
+                              and not streamed):
+                            self._sse({"e": "t", "t": cb["text"]})
+                elif t == "user":
+                    for cb in ((ev.get("message") or {}).get("content") or []):
+                        if (isinstance(cb, dict)
+                                and cb.get("type") == "tool_result"
+                                and cb.get("is_error")):
+                            txt = cb.get("content")
+                            if isinstance(txt, list):
+                                txt = " ".join(x.get("text", "") for x in txt
+                                               if isinstance(x, dict))
+                            self._sse({"e": "toolerr", "t": str(txt)[:200]})
+                elif t == "result":
+                    done = True
+                    if ev.get("session_id"):
+                        _remember_session(project, ev["session_id"])
+                    self._sse({"e": "done"})
+        except (BrokenPipeError, ConnectionResetError):
+            proc.kill()         # the panel went away; stop spending
+        finally:
+            proc.wait()
+            with _chats_lock:
+                if _chats.get(project) is proc:
+                    del _chats[project]
+        if not done:
+            try:
+                tail = " · ".join(x for x in errtail if x)[-300:]
+                self._sse({"e": "err", "t": "the agent stopped early"
+                           + (f" — {tail}" if tail else "")})
+            except OSError:
+                pass
 
     def do_GET(self):
         u = urlparse(self.path)
@@ -3106,6 +3282,11 @@ class H(BaseHTTPRequestHandler):
         try:
             if u.path == "/api/import":
                 doc = import_md(d["title"], d["markdown"])
+                if d.get("draft"):
+                    # the discuss agent's new stories are born as drafts:
+                    # real once the author keeps them, gone if discarded
+                    doc["draft"] = True
+                    save(doc)
                 return self._send(200, {"ok": True, "name": doc["name"],
                                         "chunks": len(doc["chunks"])})
             if u.path == "/api/chunk":
@@ -3511,6 +3692,37 @@ class H(BaseHTTPRequestHandler):
 
             if u.path == "/api/remove":
                 doc = load(d["name"])
+                if d.get("scope") in ("above", "below"):
+                    # Trimming an import: everything on one side of this card
+                    # goes, in one undo step. Locked cards stay — the lock
+                    # means "finished", and a sweep is exactly the careless
+                    # hand it exists to guard against. A swept group bar whose
+                    # members survive grows back on save, which is right: the
+                    # survivors keep their scene.
+                    scope = d["scope"]
+                    pos = next((i for i, c in enumerate(doc["chunks"])
+                                if c["id"] == d["id"]), None)
+                    if pos is None:
+                        return self._send(404, {"error": "no such card"})
+                    snapshot(doc, f"remove all {scope}")
+                    keep, removed, kept = [], 0, 0
+                    for i, c in enumerate(doc["chunks"]):
+                        inside = i < pos if scope == "above" else i > pos
+                        if inside and not c.get("locked"):
+                            removed += 1
+                            continue
+                        if inside:
+                            kept += 1
+                        keep.append(c)
+                    doc["chunks"] = keep
+                    for i, c in enumerate(doc["chunks"]):
+                        c["id"] = i
+                    save(doc)
+                    # after renumbering, the card's id is its index: unmoved
+                    # for a below-sweep, shifted up by what left for an above
+                    new_id = pos if scope == "below" else pos - removed
+                    return self._send(200, {"ok": True, "removed": removed,
+                                            "kept": kept, "id": new_id})
                 gone = next((c for c in doc["chunks"] if c["id"] == d["id"]), None)
                 if gone is not None and gone.get("locked"):
                     return self._send(400, {"error": "that card is locked — "
@@ -3864,8 +4076,14 @@ class H(BaseHTTPRequestHandler):
                                         "missing": missing, "from": frm,
                                         "marks": marks})
             if u.path == "/api/chat":
-                return self._send(200, {"reply": ask_claude(
-                    d.get("name"), d["question"], d.get("chunks"))})
+                return self._chat(d)
+            if u.path == "/api/chat_stop":
+                with _chats_lock:
+                    pr = _chats.get(d.get("name") or "")
+                if pr is None or pr.poll() is not None:
+                    return self._send(200, {"ok": False})
+                pr.terminate()
+                return self._send(200, {"ok": True})
             if u.path == "/api/reveal":
                 # The path is built from pdir(), never from the request, so
                 # there is no way to point this at something outside the data
@@ -3889,6 +4107,92 @@ class H(BaseHTTPRequestHandler):
                 doc["title"] = t[:120]
                 save(doc)
                 return self._send(200, {"ok": True, "title": doc["title"]})
+
+            # ── drafts ── the discuss agent's sandbox. A draft is an
+            # ordinary project with two extra fields: `draft: true`, which is
+            # the only licence saga_mcp.py accepts for a write, and
+            # `draft_of`, naming the story it shadows. Like any duplicate it
+            # is born fully rendered — the content-addressed cache serves
+            # both — so trying the agent's work costs nothing, and applying
+            # it re-renders nothing. Apply and discard are the author's
+            # buttons; the agent has no tool that reaches either.
+            if u.path == "/api/draft":
+                doc = load(d["name"])
+                if doc is None:
+                    return self._send(404, {"error": "no such story"})
+                if doc.get("draft"):
+                    # already a sandbox — hand it straight back
+                    return self._send(200, {"ok": True, "name": doc["name"],
+                                            "title": doc.get("title",
+                                                             doc["name"]),
+                                            "existing": True})
+                for p in sorted(ROOT.iterdir()):
+                    f = p / "doc.json"
+                    if not f.exists():
+                        continue
+                    try:
+                        dd = json.loads(f.read_text())
+                    except json.JSONDecodeError:
+                        continue
+                    if dd.get("draft_of") == doc["name"]:
+                        # one draft per story: two agents' work interleaving
+                        # in two copies would be nobody's story
+                        return self._send(200, {"ok": True, "name": dd["name"],
+                                                "title": dd.get("title",
+                                                                dd["name"]),
+                                                "existing": True})
+                taken = {p.name for p in ROOT.iterdir()
+                         if (p / "doc.json").exists()}
+                new = _free_name(taken, doc["name"], "draft")
+                src = pdir(doc["name"])
+                nd = json.loads(json.dumps(doc))
+                nd["name"] = new
+                nd["title"] = f"{doc.get('title', new)} (draft)"[:120]
+                nd["draft"] = True
+                nd["draft_of"] = doc["name"]
+                nd.pop("_undo", None)
+                pdir(new).mkdir(parents=True, exist_ok=True)
+                if (src / "source.md").exists():
+                    shutil.copy2(src / "source.md", pdir(new) / "source.md")
+                save(nd)
+                return self._send(200, {"ok": True, "name": new,
+                                        "title": nd["title"]})
+
+            if u.path == "/api/draft_apply":
+                dr = load(d["name"])
+                if dr is None or not dr.get("draft"):
+                    return self._send(400, {"error": "that is not a draft"})
+                orig = load(dr["draft_of"]) if dr.get("draft_of") else None
+                if orig is None:
+                    # born new — or the original has gone. Keeping it IS the
+                    # apply: the flags come off and it is simply a story.
+                    dr.pop("draft", None)
+                    dr.pop("draft_of", None)
+                    dr["title"] = re.sub(r"\s*\(draft\)$", "",
+                                         dr.get("title") or dr["name"]
+                                         ) or dr["name"]
+                    save(dr)
+                    return self._send(200, {"ok": True, "name": dr["name"],
+                                            "kept": True})
+                snapshot(orig, "apply the draft")
+                for k, v in dr.items():
+                    if k in ("name", "title", "created", "_undo",
+                             "draft", "draft_of"):
+                        continue
+                    orig[k] = json.loads(json.dumps(v))
+                save(orig)
+                # the draft is spent; its renders are global and stay
+                shutil.rmtree(pdir(dr["name"]), ignore_errors=True)
+                return self._send(200, {"ok": True, "name": orig["name"],
+                                        "applied": True})
+
+            if u.path == "/api/draft_discard":
+                dr = load(d["name"])
+                if dr is None or not dr.get("draft"):
+                    return self._send(400, {"error": "that is not a draft"})
+                shutil.rmtree(pdir(dr["name"]), ignore_errors=True)
+                return self._send(200, {"ok": True,
+                                        "was": dr.get("draft_of") or ""})
 
             if u.path == "/api/project/duplicate":
                 # Free, near enough: the copy's cards hash to exactly what the
