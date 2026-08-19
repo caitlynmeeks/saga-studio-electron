@@ -376,7 +376,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
     title="collapse every card to its bar">−</button>
   <button id="frb" onclick="toggleFind()" disabled
     title="find and replace across this episode — ⌘F">Find</button>
-  <button id="dockb" onclick="toggleDock()" title="show or hide the stage — the story, live under the cards">Stage</button>
+  <button id="dockb" onclick="stageBtn(event)" title="show or hide the stage — the story, live under the cards. ⌘-click opens it straight into its own window">Stage</button>
   <button id="chatb" onclick="togglePanel()" title="show or hide the side panel">Inspector</button>
 </header>
 
@@ -3247,7 +3247,18 @@ async function makeProfileFromCard(id,nm){
     `, still rendered. Any card can pick it from its profile menu.`;
 }
 
+// Rendering while the open profile holds unsaved changes is the trap that
+// caught the developer herself: the panel says kokoro, the render speaks
+// chatterbox. The render uses what is saved — so say so, and offer the save.
+// Either answer renders; the dialog only decides with which settings.
+async function ensureProfSaved(){
+  if(!EDITING||!DRAFT||!profDirty().any)return;
+  if(confirm(`“${EDITING}” has unsaved changes, and rendering uses what is saved — not what the panel shows.\n\nSave the profile first?`))
+    await saveProf();
+}
+
 async function one(id){
+  await ensureProfSaved();
   const b=$('rb'+id); b.classList.add('busy'); b.textContent='rendering…';
   $('s'+id).textContent='';
   // speak what is on screen, not what the server last heard about
@@ -3296,6 +3307,7 @@ async function prev(id){
   const keep=()=>{ try{ ta.focus({preventScroll:true}); ta.setSelectionRange(a,z);}catch(e){} };
   if(!sel){ $('s'+id).textContent='select some text in the card, then press preview selection';
             keep(); return; }
+  await ensureProfSaved(); keep();      // the confirm steals the selection
   const b=$('pv'+id); b.classList.add('busy'); b.textContent='previewing…';
   $('s'+id).textContent=''; keep();
   try{
@@ -3694,7 +3706,7 @@ async function moveCard(id,to,grp){
 }
 
 // ── bake / assemble ───────────────────────────────────────
-async function bake(){ if(!DOC)return; await api('/api/bake',{name:DOC.name}); refresh(); }
+async function bake(){ if(!DOC)return; await ensureProfSaved(); await api('/api/bake',{name:DOC.name}); refresh(); }
 async function stopBake(){
   const b=$('stopb'); b.disabled=true; b.textContent='stopping…';
   await api('/api/bake_stop',{});
@@ -3812,6 +3824,13 @@ if(STAGE)STAGE.onmessage=e=>{
     if(m.card!=null){ CUR=m.card; paintCur(); } }   // stop, fix that one — as the local preview
 };
 // ── the game view dock ────────────────────────────────────
+// The header button: a plain click shows or hides the dock; ⌘-click skips
+// the dock and opens the stage straight into its own window — or focuses
+// the one already out there, since the story is never on screen twice.
+function stageBtn(e){
+  if(e.metaKey){ if(popAlive())toggleDock(true); else popOut(); return; }
+  toggleDock();
+}
 function toggleDock(on){
   if(on===undefined)on=document.body.classList.contains('nostage');
   // while a pop-out lives, the dock stays away — the story must never be on
@@ -3822,10 +3841,14 @@ function toggleDock(on){
     return;
   }
   document.body.classList.toggle('nostage',!on);
-  try{ localStorage.setItem('saga.dock',on?'1':'0'); }catch(e){}
+  try{ localStorage.setItem('saga.stage',on?'1':'0'); }catch(e){}
   const b=$('dockb'); if(b)b.classList.toggle('on',on);
 }
-toggleDock(localStorage.getItem('saga.dock')!=='0');
+// Hidden until asked for: an audiobook session may never need the stage at
+// all, and the Stage button up top is one click away. Remembered per machine
+// — under a fresh key, because the old one was stamped "shown" on every
+// machine by the old default and would keep the dock up for ever.
+toggleDock(localStorage.getItem('saga.stage')==='1');
 (function(){
   const g=$('sgrip'), d=$('stagedock'); if(!g||!d)return;
   try{ const h=+localStorage.getItem('saga.dock.h'); if(h)d.style.height=h+'px'; }catch(e){}

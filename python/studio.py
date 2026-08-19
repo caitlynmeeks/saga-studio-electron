@@ -303,6 +303,11 @@ def profiles():
         p = {}
     if "Default" not in p:
         p["Default"] = dict(BASE_PROFILE)
+        # A machine with no Chatterbox must not be born pointing at it —
+        # Kokoro ships in the box and speaks immediately. Only at this
+        # moment of birth: an existing library keeps whatever it chose.
+        if not cb_available():
+            p["Default"]["engine"] = "kokoro"
         PROFILES.write_text(json.dumps(p, indent=1))
     return p
 
@@ -1441,7 +1446,11 @@ def _cb_call(route, body):
 
 
 def _cb_gen(spoken, p, seed, dest):
-    """One line through the worker, onto disk at dest."""
+    """One line through the worker, onto disk at dest. The engine's absence
+    is checked before the voice clip's: on a machine with neither, "install
+    Chatterbox or switch to Kokoro" is the message that actually helps."""
+    if not cb_available():
+        get_cb()                      # raises the how-to-install message
     return _cb_call("/gen", {"text": spoken,
                              "ref_audio": str(voice_file(p["voice"])),
                              "exag": p["exag"], "cfg": p["cfg"],
@@ -1451,6 +1460,8 @@ def _cb_gen(spoken, p, seed, dest):
 
 def _cb_vc(src, voice, seed, dest):
     """One performance through the worker's voice conversion, onto dest."""
+    if not cb_available():
+        get_cb()                      # raises the how-to-install message
     return _cb_call("/vc", {"src": str(src), "ref_audio": str(voice),
                             "seed": int(seed or 0), "out": str(dest)})
 
