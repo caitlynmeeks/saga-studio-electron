@@ -10,6 +10,32 @@ npm install
 npm start
 ```
 
+## Build it yourself
+
+```sh
+git clone https://github.com/caitlynmeeks/saga-studio-electron.git
+cd saga-studio-electron
+./build.sh
+```
+
+One prerequisite: [Node.js](https://nodejs.org) (`brew install node`). The
+script fetches Electron, a self-contained Python 3.11 and the Kokoro voice
+model — about 500 MB, all from GitHub, PyPI and npm — builds
+`Saga Studio.app` for your Mac, Apple Silicon or Intel, and opens it. Drag
+it into /Applications to keep it.
+
+Building it yourself is also the trust story: an app your own machine built
+carries no quarantine flag, so macOS never shows the "damaged app" dialog
+that greets unsigned downloads — and every script that ran is short enough
+to read first.
+
+Kokoro speaks out of the box. Chatterbox (recommended — MIT, free for any
+use) and OmniVoice (CC-BY-NC: research and personal use only) are installed
+from inside the app: **Voices tab → Voice Engines**. `brew install ffmpeg`
+if you want clip import and mp3/video export.
+
+`npm run dist` builds a shareable dmg instead.
+
 ## How it works
 
 Electron does not reimplement the studio. It starts **the same `studio.py`**

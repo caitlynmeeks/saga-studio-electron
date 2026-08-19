@@ -12,7 +12,11 @@ cd "$(dirname "$0")/.."
 
 PBS_TAG=20260814
 PBS_PY=3.11.16          # 3.11: the version the torch engines are proven on
-ARCH=aarch64-apple-darwin
+case "$(uname -m)" in
+  arm64) ARCH=aarch64-apple-darwin ;;
+  x86_64) ARCH=x86_64-apple-darwin ;;
+  *) echo "unknown architecture $(uname -m) — this builds Mac apps"; exit 1 ;;
+esac
 PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/cpython-${PBS_PY}+${PBS_TAG}-${ARCH}-install_only_stripped.tar.gz"
 UV_URL="https://github.com/astral-sh/uv/releases/latest/download/uv-${ARCH}.tar.gz"
 
