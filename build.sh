@@ -37,7 +37,18 @@ APP=$(find dist -maxdepth 2 -name "Saga Studio.app" -print -quit)
 
 echo
 echo "Built: $APP"
-echo "Opening it now. To keep it, drag it into /Applications — it runs"
-echo "from anywhere. Voices beyond the built-in Kokoro are downloaded"
+# offer a real install — but only when someone is at the keyboard to answer
+if [ -t 0 ]; then
+  printf "Move it into /Applications? [Y/n] "
+  read -r yn
+  case "${yn:-Y}" in
+    n|N) ;;
+    *) rm -rf "/Applications/Saga Studio.app"
+       ditto "$APP" "/Applications/Saga Studio.app"
+       APP="/Applications/Saga Studio.app"
+       echo "Installed: $APP" ;;
+  esac
+fi
+echo "Opening it now. Voices beyond the built-in Kokoro are downloaded"
 echo "from inside the app: Voices tab → Voice Engines."
 open "$APP"

@@ -418,7 +418,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
   <div id="projsort" style="margin-top:12px"></div>
   <div id="projects"></div>
 
-  <h2 style="margin-top:18px">Backup</h2>
+  <h2 style="margin-top:18px">Backup &amp; Transfer</h2>
   <label class="mut" style="font-size:11px;display:block">
     <input type="checkbox" id="bkaudio" checked> include rendered audio</label>
   <label class="mut" style="font-size:11px;display:flex;gap:5px;align-items:center;margin-top:5px">
@@ -1016,11 +1016,11 @@ function profEditor(n){
       <span class="mut">${cnt?cnt+' card'+(cnt===1?'':'s'):'not used yet'}</span>
     </div>
 
-    <div class="psec">engine${qm('◎ voiced cards always use Chatterbox — it is the only one that can re-speak a recording.')}</div>
+    <div class="psec">engine${qm('Chatterbox clones your reference clips; OmniVoice speaks 600+ languages; Kokoro is fast preset voices. ◎ voiced cards always use Chatterbox — it is the only one that can re-speak a recording.')}</div>
     <select onchange="draftSet('engine',this.value)" style="width:100%">
-      <option value="chatterbox" ${(!ov&&!ko)?'selected':''} ${STATE.chatterbox?'':'disabled'}>Chatterbox — clones a clip, four delivery dials, seeded takes</option>
-      <option value="omnivoice" ${ov?'selected':''} ${STATE.omnivoice?'':'disabled'}>OmniVoice — 600+ languages, about 3× faster</option>
-      <option value="kokoro" ${ko?'selected':''} ${STATE.kokoro?'':'disabled'}>Kokoro — ${(STATE.kvoices||[]).length||54} preset voices, fast on CPU, no cloning</option>
+      <option value="chatterbox" ${(!ov&&!ko)?'selected':''} ${STATE.chatterbox?'':'disabled'}>Chatterbox</option>
+      <option value="omnivoice" ${ov?'selected':''} ${STATE.omnivoice?'':'disabled'}>OmniVoice</option>
+      <option value="kokoro" ${ko?'selected':''} ${STATE.kokoro?'':'disabled'}>Kokoro</option>
     </select>
     ${(!ov&&!ko&&!STATE.chatterbox)?'<div class="phelp"><span class="warn">Chatterbox is not installed on this machine — the Voices tab has a Voice Engines section that can fetch it.</span></div>':''}
 

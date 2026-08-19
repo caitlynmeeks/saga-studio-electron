@@ -211,7 +211,7 @@ _bake = {"running": False, "done": 0, "total": 0, "project": "", "label": "",
          "cancel": False, "stopped": False}
 _docmut = threading.Lock()        # one doc.json read-modify-write at a time
 
-DEFAULTS = {"voice": "caitlyn2", "exag": 0.4, "cfg": 0.35,
+DEFAULTS = {"voice": "", "exag": 0.4, "cfg": 0.35,
             "temp": 0.7, "rep": 1.2}
 
 # What a single card may override for itself, on top of its profile. The four
@@ -290,7 +290,9 @@ PROFILES = ROOT / "profiles.json"
 # its name and stays valid. `lang` and `speed` mean nothing to chatterbox and are
 # only read when the engine is omnivoice; `kvoice` names a Kokoro preset and is
 # only read when the engine is kokoro (`speed` serves both).
-BASE_PROFILE = {"voices": ["caitlyn2"], "active": 0, "exag": 0.4, "cfg": 0.35,
+# voices starts empty: a new profile owns no reference clip until its author
+# gives it one — no name may be baked in here, it would be somebody's voice
+BASE_PROFILE = {"voices": [], "active": 0, "exag": 0.4, "cfg": 0.35,
                 "temp": 0.7, "rep": 1.2, "note": "", "gain": 100, "fx": {},
                 "engine": "chatterbox", "lang": "en", "speed": 0,
                 "kvoice": "af_heart"}
@@ -303,11 +305,12 @@ def profiles():
         p = {}
     if "Default" not in p:
         p["Default"] = dict(BASE_PROFILE)
-        # A machine with no Chatterbox must not be born pointing at it —
-        # Kokoro ships in the box and speaks immediately. Only at this
-        # moment of birth: an existing library keeps whatever it chose.
-        if not cb_available():
-            p["Default"]["engine"] = "kokoro"
+        # Born speaking. No voice clip ships with the app, so a chatterbox
+        # default could only greet its author with "add a voice first" —
+        # Kokoro has its presets and answers immediately, and the cloning
+        # engines are one flip away once a clip exists. Only at this moment
+        # of birth: an existing library keeps whatever it chose.
+        p["Default"]["engine"] = "kokoro"
         PROFILES.write_text(json.dumps(p, indent=1))
     return p
 
@@ -322,7 +325,7 @@ def profile_params(name, profs=None):
     hashed to under the *archive's* profiles, which are not this machine's."""
     p = profiles() if profs is None else profs
     prof = p.get(name) or p.get("Default") or BASE_PROFILE
-    voices = prof.get("voices") or ["caitlyn2"]
+    voices = prof.get("voices") or [""]
     idx = min(prof.get("active", 0), len(voices) - 1)
     eng = prof.get("engine", "chatterbox")
     return {"voice": voices[idx],
@@ -1467,6 +1470,9 @@ def _cb_vc(src, voice, seed, dest):
 
 
 def voice_file(name):
+    if not name:
+        raise FileNotFoundError("this profile has no voice clip yet — add one "
+                                "in the profile editor, or switch it to Kokoro")
     for ext in (".wav", ".mp3", ".flac", ".m4a"):
         p = VOICES / f"{name}{ext}"
         if p.exists():
