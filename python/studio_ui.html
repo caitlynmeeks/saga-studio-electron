@@ -359,6 +359,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 #storypanel .srow{display:flex;align-items:center;gap:7px;margin-bottom:7px;font-size:12px}
 #storypanel .srow label{flex:0 0 38%;color:var(--dim);font-size:11px}
 #storypanel .srow input,#storypanel .srow select{flex:1;min-width:0}
+.engcard{border:1px solid var(--line);border-radius:7px;padding:9px 10px;margin-top:7px}
 </style>
 </head>
 <body data-panel="off" data-tab="inspect">
@@ -445,6 +446,12 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
     <input id="newprof" placeholder="new profile name" style="flex:1">
     <button onclick="addProfile()">+</button>
   </div>
+
+  <h2 style="margin-top:18px">Voice Engines</h2>
+  <div class="mut" style="font-size:11px">Who can speak. Kokoro comes with the
+    app; the cloning engines are a download.</div>
+  <div id="engines"></div>
+  <div id="engmsg" class="mut" style="font-size:11px;margin-top:6px"></div>
  </div>
 
  <div class="pane" id="sideClips">
@@ -692,12 +699,96 @@ async function importArchive(f){
   if(DOC) open_(DOC.name,true);
 }
 
+// ── voice engines ─────────────────────────────────────────
+// Kokoro ships with the app; the torch engines are a download away. The
+// server does the installing (/api/engines); this panel is only its face,
+// polled while anything runs so the numbers move.
+let ENG=null,ENGTIMER=0,WASINSTALLING=false;
+async function loadEngines(){
+  ENG=await api('/api/engines');
+  renderEngines();
+  clearTimeout(ENGTIMER);
+  if(ENG.installing){WASINSTALLING=true;ENGTIMER=setTimeout(loadEngines,3000);}
+  else if(WASINSTALLING){WASINSTALLING=false;refresh();}   // the dropdowns wake up
+}
+async function engInstall(n){
+  const r=await api('/api/engines/install',{engine:n});
+  if(r.error)return void($('engmsg').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  $('engmsg').textContent='';
+  loadEngines();
+}
+async function engCancel(){ await api('/api/engines/cancel',{}); loadEngines(); }
+async function engRemove(n){
+  if(!confirm(`Remove ${ENGLABEL[n]||n}? Its download is deleted and would have to be fetched again.`))return;
+  const r=await api('/api/engines/remove',{engine:n});
+  if(r.error)return void($('engmsg').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  $('engmsg').textContent='';
+  await refresh();
+  loadEngines();
+}
+function engCard(title,status,lines,buttons){
+  return `<div class="engcard">
+    <div style="display:flex;align-items:baseline;gap:6px"><b>${title}</b>
+      <span style="flex:1"></span>${status}</div>
+    <div class="mut" style="font-size:11px;margin-top:3px;line-height:1.5">${lines}</div>
+    ${buttons?`<div style="display:flex;gap:5px;margin-top:6px">${buttons}</div>`:''}
+  </div>`;
+}
+function renderEngines(){
+  const el=$('engines'); if(!el)return;
+  if(!ENG)return void(el.innerHTML='');
+  const inst=ENG.installing;
+  const busy=n=>!!inst&&inst.engine===n;
+  // no percentage bar: the honest number is what is on disk, so that is what
+  // is shown — beside the estimate the card already states
+  const prog=n=>busy(n)?`<div style="font-size:11px;margin-top:5px">
+      <span class="warn">${esc(inst.stage)}</span>
+      <span class="mut"> — ${(inst.mb/1000).toFixed(1)} GB on disk so far</span></div>
+    <div class="mut" style="font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+      title="${esc((inst.log||[]).join('\n'))}">${esc((inst.log||[]).slice(-1)[0]||'')}</div>`:'';
+  const st=(avail,n)=>busy(n)?'<span class="warn">installing…</span>'
+      :avail?'<span class="ok">installed</span>'
+      :'<span class="mut">not installed</span>';
+  const cb=ENG.chatterbox||{}, ov=ENG.omnivoice||{};
+  el.innerHTML=
+    engCard('Kokoro',
+      ENG.kokoro.available?'<span class="ok">built in</span>'
+        :'<span class="warn">model files missing</span>',
+      `${ENG.kokoro.voices||54} preset voices in 9 languages, faster than
+       realtime on plain CPU. Apache-2.0 — fine to use in work you sell.
+       No cloning, which is rather the point.`,'')
+    +engCard('Chatterbox',st(cb.available,'chatterbox'),
+      `<b>Recommended</b> — the best voices: clones a character from a
+       ten-second clip, four delivery dials, seeded takes, and it alone can
+       re-speak a voiced card. MIT licence — free for any use — and it
+       watermarks what it makes. About ${cb.est_gb} GB
+       ${cb.gb?`(${cb.gb} GB here now)`:''}.`+prog('chatterbox'),
+      busy('chatterbox')?'<button onclick="engCancel()">Cancel</button>'
+        :cb.managed?'<button onclick="engRemove(\'chatterbox\')">Remove…</button>'
+        :cb.available?''
+        :`<button class="pri" onclick="engInstall('chatterbox')" ${inst?'disabled':''}>Install Chatterbox</button>`)
+    +engCard('OmniVoice',st(ov.available,'omnivoice'),
+      `600+ languages, about 3× faster. <span class="warn">CC-BY-NC licence:
+       research and personal use only — not for work you sell.</span>
+       About ${ov.est_gb} GB more ${ov.gb?`(${ov.gb} GB here now)`:''}— it
+       shares PyTorch with Chatterbox, and installs Chatterbox first if it
+       has to.`+prog('omnivoice'),
+      busy('omnivoice')?'<button onclick="engCancel()">Cancel</button>'
+        :ov.managed?'<button onclick="engRemove(\'omnivoice\')">Remove…</button>'
+        :ov.available?''
+        :`<button onclick="engInstall('omnivoice')" ${inst?'disabled':''}>Install OmniVoice</button>`)
+    +(ENG.failed?`<div class="warn" style="font-size:11px;margin-top:6px">the last
+       install failed: ${esc(ENG.failed)} — installing again picks up where it
+       left off</div>`:'');
+}
+
 // ── state ─────────────────────────────────────────────────
 async function refresh(){
   STATE=await api('/api/state');
   $('model').textContent='model: '+STATE.model;
   paintDiscuss();
   renderProfileList();       // counts move as cards do; the editor is left alone
+  if(!ENG||document.body.dataset.side==='voices')loadEngines();
   if(document.body.dataset.side==='clips'){ renderClips(); renderMedia(); }
   if(document.body.dataset.side==='publish')renderPublish();
   paintStale();
@@ -926,13 +1017,12 @@ function profEditor(n){
     </div>
 
     <div class="psec">engine${qm('◎ voiced cards always use Chatterbox — it is the only one that can re-speak a recording.')}</div>
-    <select onchange="draftSet('engine',this.value)" style="width:100%"
-      ${(STATE.omnivoice||STATE.kokoro)?'':'disabled'}>
-      <option value="chatterbox" ${(!ov&&!ko)?'selected':''}>Chatterbox — clones a clip, four delivery dials, seeded takes</option>
+    <select onchange="draftSet('engine',this.value)" style="width:100%">
+      <option value="chatterbox" ${(!ov&&!ko)?'selected':''} ${STATE.chatterbox?'':'disabled'}>Chatterbox — clones a clip, four delivery dials, seeded takes</option>
       <option value="omnivoice" ${ov?'selected':''} ${STATE.omnivoice?'':'disabled'}>OmniVoice — 600+ languages, about 3× faster</option>
       <option value="kokoro" ${ko?'selected':''} ${STATE.kokoro?'':'disabled'}>Kokoro — ${(STATE.kvoices||[]).length||54} preset voices, fast on CPU, no cloning</option>
     </select>
-    ${(STATE.omnivoice||STATE.kokoro)?'':'<div class="phelp"><span class="warn">Only Chatterbox is installed on this machine.</span></div>'}
+    ${(!ov&&!ko&&!STATE.chatterbox)?'<div class="phelp"><span class="warn">Chatterbox is not installed on this machine — the Voices tab has a Voice Engines section that can fetch it.</span></div>':''}
 
     ${ko?'':`
     <div class="psec">voice${qm('the reference clip this engine clones — only the first 10 seconds are ever used')}</div>
@@ -1328,6 +1418,7 @@ function setSide(t){
   // Guarded on STATE: this runs once at parse time to restore the last tab,
   // and renderClips leans on helpers declared further down the file.
   if(t==='clips'&&STATE.clips){ renderClips(); renderMedia(); }
+  if(t==='voices')loadEngines();
   if(t==='publish'&&STATE.projects)renderPublish();
   try{ localStorage.setItem('saga.side',t); }catch(e){}
 }
@@ -3073,10 +3164,9 @@ function delivRow(c){
     + kp('gain','loudness',0,200,'mixed in rather than rendered in — costs no re-bake');
   return `<div class="deliv" id="dl${c.id}">
     <span class="lbl">engine</span>
-    <select onchange="setParam(${c.id},'engine',this.value)"
-      ${(STATE.omnivoice||STATE.kokoro)?'':'disabled'}>
+    <select onchange="setParam(${c.id},'engine',this.value)">
       <option value="" ${!p.engine?'selected':''}>as profile — ${esc(ENGLABEL[e.engine]||'Chatterbox')}</option>
-      <option value="chatterbox" ${p.engine==='chatterbox'?'selected':''}>Chatterbox</option>
+      <option value="chatterbox" ${p.engine==='chatterbox'?'selected':''} ${STATE.chatterbox?'':'disabled'}>Chatterbox</option>
       <option value="omnivoice" ${p.engine==='omnivoice'?'selected':''} ${STATE.omnivoice?'':'disabled'}>OmniVoice</option>
       <option value="kokoro" ${p.engine==='kokoro'?'selected':''} ${STATE.kokoro?'':'disabled'}>Kokoro</option>
     </select>

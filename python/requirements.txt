@@ -1,6 +1,11 @@
-chatterbox-tts
-torch>=2.6
-torchaudio>=2.6
-# the light engine: preset voices, CPU-only, ~100MB of model files fetched
-# separately into <library>/models/kokoro/ — see studio.py KOKORO_DIR
-kokoro-onnx
+# What studio.py itself needs — a small venv, no torch anywhere.
+numpy
+soundfile
+soxr
+kokoro-onnx        # the built-in engine
+pedalboard         # optional: the VST/AU plugin host
+
+# The torch engines are NOT listed here on purpose. Chatterbox and OmniVoice
+# run as worker processes from their own venvs, which the engine manager
+# (Voice Engines, on the home screen) builds on demand — or point
+# SAGA_CB_PYTHON / SAGA_OV_PYTHON at venvs of your own.

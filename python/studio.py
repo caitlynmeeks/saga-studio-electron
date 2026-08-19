@@ -87,8 +87,39 @@ PORT = int(os.environ.get("PORT", "5010"))
 # So OmniVoice runs in its own interpreter as a warm worker process and is
 # spoken to over localhost. See omnivoice_server.py.
 ENGINES = ("chatterbox", "omnivoice", "kokoro")
-OV_PYTHON = Path(os.environ.get("SAGA_OV_PYTHON")
-                 or (Path.home() / "git/voice-studio/.venv-omnivoice/bin/python")).expanduser()
+# Downloaded engines live in one per-machine folder, never in the library: a
+# venv is built for this machine's Python and this machine's silicon, and a
+# library that travels between machines must not carry one machine's torch.
+# The engine manager (see "installing engines") builds venvs here on demand.
+ENGINES_DIR = Path(os.environ.get("SAGA_ENGINES")
+                   or (Path.home() / "Library/Application Support/Saga Studio/engines"
+                       if sys.platform == "darwin"
+                       else Path.home() / ".saga-studio/engines")).expanduser()
+
+
+def _engine_python(env, managed, classic):
+    """The interpreter an engine worker runs on: the env var wins, then the
+    engine manager's venv, then the classic dev install. The managed path
+    comes back even when nothing is there yet — it is where an install will
+    land, and *_available() is what says whether it exists."""
+    p = os.environ.get(env)
+    if p:
+        return Path(p).expanduser()
+    m = ENGINES_DIR / managed / "bin" / "python"
+    if m.exists():
+        return m
+    c = (Path.home() / classic).expanduser()
+    return c if c.exists() else m
+
+
+# Chatterbox needs torch and studio.py no longer has it: like OmniVoice it
+# runs in its own interpreter as a warm worker process, spoken to over
+# localhost. See chatterbox_server.py for why.
+CB_PYTHON = _engine_python("SAGA_CB_PYTHON", "chatterbox",
+                           "git/voice-studio/.venv/bin/python")
+CB_PORT = int(os.environ.get("SAGA_CB_PORT", "5022"))
+OV_PYTHON = _engine_python("SAGA_OV_PYTHON", "omnivoice",
+                           "git/voice-studio/.venv-omnivoice/bin/python")
 OV_PORT = int(os.environ.get("SAGA_OV_PORT", "5021"))
 # Kokoro is the third voice: 82M parameters, Apache-2.0, ~50 preset voices in
 # nine languages, quick enough on plain CPU to need no GPU and no separate
@@ -160,7 +191,7 @@ MEDIA.mkdir(parents=True, exist_ok=True)
 # the process started. A new front end talking to an old route fails in ways
 # that look like bugs in the new code, and twice now that has cost an evening.
 # So the program watches its own source and says when it is out of date.
-_SRC = [Path(__file__), HERE / "omnivoice_server.py"]
+_SRC = [Path(__file__), HERE / "omnivoice_server.py", HERE / "chatterbox_server.py"]
 BUILD_MTIME = max((p.stat().st_mtime for p in _SRC if p.exists()), default=0.0)
 
 
@@ -173,12 +204,9 @@ def build_stale():
     return now > BUILD_MTIME + 1        # a second of slack for copy timestamps
 
 
-_model = None
-_vc = None
 _kokoro = None
 _kvoices = None
-_vc_voice = [None]                # which voice the VC model is currently holding
-_lock = threading.Lock()          # MPS: one generate() at a time
+_lock = threading.Lock()          # espeak's phonemizer: one kokoro render at a time
 _bake = {"running": False, "done": 0, "total": 0, "project": "", "label": "",
          "cancel": False, "stopped": False}
 _docmut = threading.Lock()        # one doc.json read-modify-write at a time
@@ -1319,16 +1347,112 @@ def import_archive(path, mode="skip"):
 
 
 # ── audio ───────────────────────────────────────────────────────────────
-def get_model():
-    global _model
-    if _model is None:
-        from chatterbox.tts import ChatterboxTTS
-        import torch
-        dev = "mps" if torch.backends.mps.is_available() else "cpu"
-        print(f"loading Chatterbox on {dev} …", flush=True)
-        _model = ChatterboxTTS.from_pretrained(device=dev)
-        print("model warm", flush=True)
-    return _model
+# The chatterbox worker — the twin of the omnivoice worker below, and for the
+# same reason seen from the other side: studio.py itself runs on a small
+# interpreter with no torch in it, so the engine that needs torch lives
+# behind a process boundary. See chatterbox_server.py.
+_cb = {"proc": None, "warm": False}
+CB_LOG = ROOT / "chatterbox.log"
+
+
+def _managed_ready(py):
+    """A managed venv counts only once its install finished — the interpreter
+    file appears seconds into a forty-minute download, and an engine that is
+    two-thirds of a torch must not look installed."""
+    if not str(py).startswith(str(ENGINES_DIR)):
+        return True
+    return (Path(py).parent.parent / ".ready").exists()
+
+
+def cb_available():
+    return (CB_PYTHON.exists() and _managed_ready(CB_PYTHON)
+            and (HERE / "chatterbox_server.py").exists())
+
+
+def _cb_health(timeout=1.0):
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{CB_PORT}/health",
+                                    timeout=timeout) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
+def get_cb(wait=300):
+    """Start the Chatterbox worker if it is not up, and wait until it is warm.
+
+    Lazy, like get_ov(): a library that speaks only Kokoro should never pay
+    torch's load time or its memory. The child's output goes to a log file
+    rather than a pipe — nobody drains a pipe here, and a full one would
+    wedge the worker mid-render."""
+    if not cb_available():
+        raise RuntimeError("Chatterbox is not installed on this machine — "
+                           "install it under Voice Engines on the home "
+                           "screen, or switch this profile to Kokoro.")
+    h = _cb_health()
+    if h and h.get("ready"):
+        _cb["warm"] = True
+        return CB_PORT
+    if h is None and (_cb["proc"] is None or _cb["proc"].poll() is not None):
+        print("starting the Chatterbox worker …", flush=True)
+        log = open(CB_LOG, "ab", buffering=0)
+        _cb["proc"] = subprocess.Popen(
+            [str(CB_PYTHON), str(HERE / "chatterbox_server.py"),
+             "--port", str(CB_PORT)],
+            stdout=log, stderr=log, env=_worker_env(CB_PYTHON))
+    t0 = time.time()
+    while time.time() - t0 < wait:
+        h = _cb_health()
+        if h and h.get("ready"):
+            print("Chatterbox worker warm", flush=True)
+            _cb["warm"] = True
+            return CB_PORT
+        if h and h.get("error"):
+            raise RuntimeError(f"Chatterbox failed to load: {h['error']}")
+        pr = _cb["proc"]
+        if pr is not None and pr.poll() is not None:
+            tail = ""
+            if CB_LOG.exists():
+                tail = CB_LOG.read_text(errors="replace").strip()[-300:]
+            raise RuntimeError(f"the Chatterbox worker exited. {tail}")
+        time.sleep(0.5)
+    raise RuntimeError("the Chatterbox worker did not come up in time")
+
+
+def _cb_call(route, body):
+    """One request to the worker. It writes the wav itself — both processes
+    are on this machine, so there is nothing to gain by copying the audio
+    back over a socket."""
+    import urllib.request, urllib.error
+    port = get_cb()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{route}",
+                                 data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=1800) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as ex:
+        try:
+            msg = json.loads(ex.read()).get("error") or str(ex)
+        except Exception:
+            msg = str(ex)
+        raise RuntimeError(f"chatterbox: {msg}") from None
+
+
+def _cb_gen(spoken, p, seed, dest):
+    """One line through the worker, onto disk at dest."""
+    return _cb_call("/gen", {"text": spoken,
+                             "ref_audio": str(voice_file(p["voice"])),
+                             "exag": p["exag"], "cfg": p["cfg"],
+                             "temp": p["temp"], "rep": p["rep"],
+                             "seed": int(seed or 0), "out": str(dest)})
+
+
+def _cb_vc(src, voice, seed, dest):
+    """One performance through the worker's voice conversion, onto dest."""
+    return _cb_call("/vc", {"src": str(src), "ref_audio": str(voice),
+                            "seed": int(seed or 0), "out": str(dest)})
 
 
 def voice_file(name):
@@ -1541,80 +1665,11 @@ def rename_voice(old, new):
             "profiles": nprof, "overrides": overrides}
 
 
-def seed_take(n):
-    """Pin the sampler for take n, or leave it running free for take 0.
-
-    Chatterbox samples with temperature and never seeds, so two generate()
-    calls on the same words come out differently — that is what makes re-render
-    a fresh reading, and it is why take 0 stays unseeded and keeps behaving as
-    it always has. A numbered take pins the global RNG so the same take is the
-    same performance every time, which is what makes stepping back to an
-    earlier one mean anything. Reproducible on this machine and this build of
-    torch — a seed is not a portable description of a voice."""
-    if n:
-        import torch
-        torch.manual_seed(int(n))
-
-
 # ── voice conversion ────────────────────────────────────────────────────
-VC_SR = 16000             # chatterbox VC consumes 16k mono, whatever you give it
-VC_CHUNK_SECS = 25        # convert at most this much performance per model call
-VC_TOP_DB = 40            # silence threshold when splitting a long take
-
-
-def get_vc():
-    """The voice-conversion model — which is s3gen, and nothing else.
-
-    VC renders speech tokens through the same decoder the TTS model already
-    holds, so when that model is warm this borrows its s3gen rather than
-    loading a second gigabyte of identical weights. Cold, it loads only s3gen
-    (~1 GB) and never the ~2 GB language model, which has no part in converting
-    a recording: the tokens come from your performance, not from text."""
-    global _vc
-    if _vc is None:
-        from chatterbox.vc import ChatterboxVC
-        import torch
-        dev = "mps" if torch.backends.mps.is_available() else "cpu"
-        if _model is not None:
-            print("voice conversion: borrowing the warm s3gen", flush=True)
-            _vc = ChatterboxVC(s3gen=_model.s3gen, device=dev)
-        else:
-            print(f"loading Chatterbox VC on {dev} …", flush=True)
-            _vc = ChatterboxVC.from_pretrained(device=dev)
-        _vc_voice[0] = None
-        print("voice conversion warm", flush=True)
-    return _vc
-
-
-def speech_spans(y):
-    """(start, end) sample spans of at most VC_CHUNK_SECS, cut only inside
-    silences so a word is never bisected.
-
-    Chatterbox VC has no length cap and no chunking of its own, but a long take
-    costs memory linearly and drifts, so a whole scene is converted a breath at
-    a time and laid back onto the original timeline — which is also what keeps
-    your pauses yours."""
-    max_len = VC_CHUNK_SECS * VC_SR
-    if len(y) <= max_len:
-        return [(0, len(y))]
-    import librosa
-    iv = librosa.effects.split(y, top_db=VC_TOP_DB)
-    if len(iv) == 0:
-        return [(0, len(y))]
-    spans, start, prev_end = [], iv[0][0], iv[0][1]
-    for s, e in iv[1:]:
-        if e - start > max_len:
-            spans.append((start, prev_end))
-            start = s
-        prev_end = e
-    spans.append((start, prev_end))
-    out = []
-    for s, e in spans:            # continuous speech with no silence to cut at
-        while e - s > max_len:
-            out.append((s, s + max_len))
-            s += max_len
-        out.append((s, e))
-    return out
+# Takes are stored as 16k mono because that is exactly what Chatterbox VC
+# consumes — the conversion itself happens in the worker, but the format of
+# what is on disk is this file's business: _take_upload writes it.
+VC_SR = 16000
 
 
 def render_voiced(c, doc, force=False):
@@ -1623,49 +1678,28 @@ def render_voiced(c, doc, force=False):
     VC tokenises the take into speech tokens — which carry the words, the
     timing and the delivery — then renders those through the decoder
     conditioned on the target voice. The performance stays yours; the timbre
-    becomes the character's. That is the whole card.
+    becomes the character's. That is the whole card. The conversion itself —
+    the chunking, the seeding, the timeline reassembly — lives in the
+    chatterbox worker now, beside the model that does it.
 
     There are no parameters, because VC has none: it takes two audio files and
     nothing else. A profile contributes its voice here and only its voice —
     exaggeration, cfg, temperature and repetition penalty have no meaning for
     conversion, which is why chunk_hash leaves them out."""
-    import torch, torchaudio as ta, librosa
     h = chunk_hash(c, doc)
     dest = AUDIO / f"{h}.wav"
     if dest.exists() and not force:
         return h, True
     p = params_for(c, doc)
     src = take_file(c.get("perf"))
-    voice = str(voice_file(p["voice"]))
-    m = get_vc()
-    y, _ = librosa.load(str(src), sr=VC_SR, mono=True)
-    if not len(y):
-        raise ValueError("that performance has no audio in it")
-    spans = speech_spans(y)
-    ratio = m.sr / VC_SR
-    pieces = []
-    with _lock:
-        # embed_ref is the costly half and the voice rarely changes from one
-        # card to the next, so hold it and re-embed only when it actually moves
-        if _vc_voice[0] != voice:
-            m.set_target_voice(voice)
-            _vc_voice[0] = voice
-        seed_take(c.get("seed"))
-        with tempfile.TemporaryDirectory(dir=ROOT, prefix=".vc-") as tmpd:
-            piece = Path(tmpd) / "piece.wav"
-            for s, e in spans:
-                ta.save(str(piece), torch.from_numpy(y[s:e]).unsqueeze(0), VC_SR)
-                pieces.append((int(s * ratio), m.generate(str(piece)).cpu()))
-    # Size to whichever is longer, the original timeline or the last converted
-    # span — a conversion can run past its source, and clipping it would eat
-    # the end of the final word.
-    total = max(int(len(y) * ratio), max(pos + w.shape[-1] for pos, w in pieces))
-    out = torch.zeros(1, total)
-    for pos, w in pieces:
-        out[:, pos:pos + w.shape[-1]] = w
+    voice = voice_file(p["voice"])
     tmp = dest.with_name(dest.stem + ".tmp.wav")
-    ta.save(str(tmp), out, m.sr)
-    tmp.rename(dest)                       # atomic, as render()
+    try:
+        _cb_vc(src, voice, c.get("seed"), tmp)
+        tmp.rename(dest)                   # atomic, as render()
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return h, False
 
 
@@ -1709,7 +1743,8 @@ def languages():
 
 
 def ov_available():
-    return OV_PYTHON.exists() and (HERE / "omnivoice_server.py").exists()
+    return (OV_PYTHON.exists() and _managed_ready(OV_PYTHON)
+            and (HERE / "omnivoice_server.py").exists())
 
 
 def _ov_health(timeout=1.0):
@@ -1725,7 +1760,7 @@ def _ov_health(timeout=1.0):
 def get_ov(wait=300):
     """Start the OmniVoice worker if it is not up, and wait until it is warm.
 
-    Lazy, like get_model(): a library that never uses the second engine should
+    Lazy, like get_cb(): a library that never uses the second engine should
     never pay its load time or its memory. The child's output goes to a log
     file rather than a pipe — nobody drains a pipe here, and a full one would
     wedge the worker mid-render."""
@@ -1741,7 +1776,7 @@ def get_ov(wait=300):
         log = open(OV_LOG, "ab", buffering=0)
         _ov["proc"] = subprocess.Popen(
             [str(OV_PYTHON), str(HERE / "omnivoice_server.py"), "--port", str(OV_PORT)],
-            stdout=log, stderr=log)
+            stdout=log, stderr=log, env=_worker_env(OV_PYTHON))
     t0 = time.time()
     while time.time() - t0 < wait:
         h = _ov_health()
@@ -1783,8 +1818,274 @@ def _ov_gen(spoken, p, dest):
         raise RuntimeError(f"omnivoice: {msg}") from None
 
 
+# ── installing engines ──────────────────────────────────────────────────
+# Kokoro ships with the app; the torch engines are fetched on demand, one
+# venv each under ENGINES_DIR, built by whatever interpreter runs this file.
+# OmniVoice borrows Chatterbox's torch through a .pth file rather than
+# downloading its own copy — they cannot share one venv (transformers pins),
+# but they can share the 340 MB that never differs. Installs run in a thread
+# and report through /api/engines; one at a time, they would only fight for
+# bandwidth. Model weights land in HF_HOME if the user set one, otherwise in
+# ENGINES_DIR/hf — never inside the app, never inside the library.
+ENGINE_INFO = {
+    # `only` names the files from_pretrained actually loads — the repo also
+    # carries .pt duplicates and multilingual variants, another ~10 GB that
+    # an unfiltered snapshot would pull down for nothing
+    "chatterbox": {"weights": "ResembleAI/chatterbox",
+                   "only": ["ve.safetensors", "t3_cfg.safetensors",
+                            "s3gen.safetensors", "tokenizer.json", "conds.pt"],
+                   "packages": ["chatterbox-tts"], "est_gb": 4.5},
+    "omnivoice": {"weights": "k2-fsa/OmniVoice", "only": None,
+                  "packages": ["omnivoice", "accelerate", "tensorboardx",
+                               "webdataset", "psutil"], "est_gb": 3.2},
+}
+_eng = {"name": None, "stage": "", "log": [], "error": None, "proc": None,
+        "cancel": False, "thread": None}
+
+
+def _hf_home():
+    return Path(os.environ.get("HF_HOME") or (ENGINES_DIR / "hf")).expanduser()
+
+
+def _worker_env(py):
+    """What an engine worker is spawned with. A managed install put its
+    weights in the managed HF_HOME, so a worker from a managed venv must look
+    there too; a classic install keeps whatever the shell had — pointing it
+    at the managed cache would quietly re-download gigabytes it already has."""
+    env = os.environ.copy()
+    if str(py).startswith(str(ENGINES_DIR)):
+        env.setdefault("HF_HOME", str(_hf_home()))
+    return env
+
+
+def _uv():
+    p = os.environ.get("SAGA_UV") or shutil.which("uv")
+    return p if p and Path(p).exists() else None
+
+
+def _du(path):
+    """Bytes under a directory, by walking it — no subprocess, no du.
+    Symlinks are counted as links, not as their targets: the HF cache is a
+    blobs/ directory plus a snapshots/ tree of symlinks into it, and
+    following them would count every model twice."""
+    total = 0
+    for base, _dirs, files in os.walk(path, onerror=lambda e: None):
+        for f in files:
+            try:
+                total += os.stat(os.path.join(base, f),
+                                 follow_symlinks=False).st_size
+            except OSError:
+                pass
+    return total
+
+
+def _snapshot_dir(repo):
+    return _hf_home() / "hub" / ("models--" + repo.replace("/", "--"))
+
+
+def _eng_log(line):
+    _eng["log"].append(str(line)[-240:])
+    del _eng["log"][:-30]
+
+
+def _eng_step(cmd, env=None):
+    """One subprocess of an install: output into the log ring, failure raised.
+    The command is what a curious user would have typed themselves — uv, pip,
+    python -m venv — never anything a request names."""
+    _eng_log("$ " + " ".join(Path(str(c)).name if os.sep in str(c) else str(c)
+                             for c in cmd))
+    proc = subprocess.Popen([str(c) for c in cmd], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True,
+                            errors="replace", env=env)
+    _eng["proc"] = proc
+    for line in proc.stdout:
+        line = line.rstrip()
+        if line:
+            _eng_log(line)
+    proc.wait()
+    _eng["proc"] = None
+    if _eng["cancel"]:
+        raise RuntimeError("cancelled")
+    if proc.returncode:
+        raise RuntimeError(f"{Path(str(cmd[0])).name} failed "
+                           f"(exit {proc.returncode}) — see the log")
+
+
+def _venv_site(vpy):
+    r = subprocess.run([str(vpy), "-c",
+                        "import site;print(site.getsitepackages()[0])"],
+                       capture_output=True, text=True)
+    return Path(r.stdout.strip())
+
+
+def _pip_env():
+    return dict(os.environ, UV_CACHE_DIR=str(ENGINES_DIR / "cache"),
+                PIP_DISABLE_PIP_VERSION_CHECK="1")
+
+
+def _pip_install(vpy, packages, no_deps=False):
+    uv = _uv()
+    cmd = ([uv, "pip", "install", "--python", str(vpy)] if uv
+           else [str(vpy), "-m", "pip", "install"])
+    if no_deps:
+        cmd.append("--no-deps")
+    _eng_step(cmd + list(packages), env=_pip_env())
+
+
+def _make_venv(name, parent=None):
+    """A venv under ENGINES_DIR, --copies so it survives the app moving.
+    With `parent`, a .pth file makes the parent's site-packages visible —
+    the child's own packages shadow them, which is the whole trick: shared
+    torch, private transformers."""
+    vdir = ENGINES_DIR / name
+    vpy = vdir / "bin" / "python"
+    if not vpy.exists():
+        ENGINES_DIR.mkdir(parents=True, exist_ok=True)
+        _eng_step([sys.executable, "-m", "venv", "--copies", str(vdir)])
+    if parent is not None:
+        psite = _venv_site(ENGINES_DIR / parent / "bin" / "python")
+        (_venv_site(vpy) / "_parent_venv.pth").write_text(str(psite) + "\n")
+    return vpy
+
+
+def _fetch_weights(vpy, repo, label, only=None):
+    _eng["stage"] = f"downloading the {label} voice model — the big one"
+    env = dict(os.environ, HF_HOME=str(_hf_home()),
+               HF_HUB_DISABLE_PROGRESS_BARS="1")
+    kw = f", allow_patterns={only!r}" if only else ""
+    _eng_step([str(vpy), "-c",
+               "from huggingface_hub import snapshot_download; "
+               f"snapshot_download({repo!r}{kw})"], env=env)
+
+
+def _install_chatterbox():
+    _eng["stage"] = "building the Chatterbox environment"
+    vpy = _make_venv("chatterbox")
+    _eng["stage"] = "installing Chatterbox and PyTorch"
+    _pip_install(vpy, ENGINE_INFO["chatterbox"]["packages"])
+    _fetch_weights(vpy, ENGINE_INFO["chatterbox"]["weights"], "Chatterbox",
+                   ENGINE_INFO["chatterbox"]["only"])
+    _eng["stage"] = "checking the install"
+    _eng_step([str(vpy), "-c", "import chatterbox.tts"])
+    (ENGINES_DIR / "chatterbox" / ".ready").write_text(
+        time.strftime("%Y-%m-%d %H:%M") + "\n")
+
+
+def _install_omnivoice():
+    # OmniVoice leans on Chatterbox's venv for torch, so that goes in first —
+    # which also happens to be the engine most people want anyway.
+    if not (ENGINES_DIR / "chatterbox" / ".ready").exists():
+        _install_chatterbox()
+    _eng["stage"] = "building the OmniVoice environment"
+    vpy = _make_venv("omnivoice", parent="chatterbox")
+    _eng["stage"] = "installing OmniVoice"
+    _pip_install(vpy, ENGINE_INFO["omnivoice"]["packages"], no_deps=True)
+    # newer transformers than the parent's pin, shadowing it from the child
+    _pip_install(vpy, ["transformers>=5.3"])
+    _fetch_weights(vpy, ENGINE_INFO["omnivoice"]["weights"], "OmniVoice")
+    _eng["stage"] = "checking the install"
+    _eng_step([str(vpy), "-c", "import omnivoice"])
+    (ENGINES_DIR / "omnivoice" / ".ready").write_text(
+        time.strftime("%Y-%m-%d %H:%M") + "\n")
+
+
+def install_engine(name):
+    if name not in ENGINE_INFO:
+        raise ValueError(f"no such engine {name!r}")
+    if _eng["thread"] and _eng["thread"].is_alive():
+        raise RuntimeError("an engine is already installing — one at a time")
+
+    def run():
+        try:
+            (_install_chatterbox if name == "chatterbox"
+             else _install_omnivoice)()
+            _eng.update(stage="done", error=None)
+        except Exception as ex:
+            _eng["error"] = f"{type(ex).__name__}: {ex}"
+            _eng["stage"] = "failed"
+
+    _eng.update(name=name, stage="starting", log=[], error=None, cancel=False)
+    _eng["thread"] = threading.Thread(target=run, daemon=True)
+    _eng["thread"].start()
+
+
+def cancel_install():
+    _eng["cancel"] = True
+    p = _eng["proc"]
+    if p is not None:
+        try:
+            p.terminate()
+        except OSError:
+            pass
+
+
+def remove_engine(name):
+    """Take a managed engine out again — the venv, and the weights when they
+    live in the managed HF_HOME. A user's own HF cache is never touched: the
+    manager deletes only what the manager put there."""
+    if name not in ENGINE_INFO:
+        raise ValueError(f"no such engine {name!r}")
+    if _eng["thread"] and _eng["thread"].is_alive():
+        raise RuntimeError("an install is running — cancel it first")
+    if name == "chatterbox" and (ENGINES_DIR / "omnivoice").exists():
+        raise RuntimeError("OmniVoice borrows Chatterbox's torch — "
+                           "remove OmniVoice first")
+    for proc_state in (_cb, _ov):
+        pr = proc_state.get("proc")
+        if pr is not None and pr.poll() is None:
+            pr.terminate()
+    _cb["warm"] = False
+    shutil.rmtree(ENGINES_DIR / name, ignore_errors=True)
+    if "HF_HOME" not in os.environ:
+        shutil.rmtree(_snapshot_dir(ENGINE_INFO[name]["weights"]),
+                      ignore_errors=True)
+
+
+_esize = {}                        # path -> (when, bytes): du is not free
+
+
+def _sized(path):
+    now = time.time()
+    hit = _esize.get(str(path))
+    if hit and now - hit[0] < 10:
+        return hit[1]
+    b = _du(path) if Path(path).exists() else 0
+    _esize[str(path)] = (now, b)
+    return b
+
+
+def engines_status():
+    installing = None
+    if _eng["thread"] and _eng["thread"].is_alive():
+        # a set of paths, not a list: an omnivoice install may be mid-way
+        # through the chatterbox install it depends on, and the chatterbox
+        # venv must not be counted twice
+        grow = {ENGINES_DIR / _eng["name"], ENGINES_DIR / "chatterbox",
+                _snapshot_dir(ENGINE_INFO[_eng["name"]]["weights"])}
+        if _eng["name"] == "omnivoice":
+            grow.add(_snapshot_dir(ENGINE_INFO["chatterbox"]["weights"]))
+        installing = {"engine": _eng["name"], "stage": _eng["stage"],
+                      "log": _eng["log"][-8:],
+                      "mb": round(sum(_sized(p) for p in grow) / 1e6)}
+    out = {"dir": str(ENGINES_DIR), "uv": bool(_uv()),
+           "installing": installing,
+           "failed": None if installing else _eng["error"],
+           "kokoro": {"available": kokoro_available(),
+                      "voices": len(kokoro_voices())}}
+    for name, info in ENGINE_INFO.items():
+        managed = (ENGINES_DIR / name / ".ready").exists()
+        avail = cb_available() if name == "chatterbox" else ov_available()
+        d = {"available": avail, "managed": managed, "est_gb": info["est_gb"]}
+        if managed:
+            d["gb"] = round((_sized(ENGINES_DIR / name)
+                             + (_sized(_snapshot_dir(info["weights"]))
+                                if "HF_HOME" not in os.environ else 0)) / 1e9, 1)
+        out[name] = d
+    return out
+
+
 def get_kokoro():
-    """Lazy, like get_model(): a library that never speaks through Kokoro
+    """Lazy, like get_cb(): a library that never speaks through Kokoro
     should never pay its load time. It is small enough (~100MB, CPU) that
     sharing the process with chatterbox costs nothing."""
     global _kokoro
@@ -1909,24 +2210,19 @@ def render_any(c, doc, force=False):
 def render(c, doc, force=False):
     """Render one chunk. With force=True the cache is bypassed and overwritten —
     the render/preview buttons always generate, so a press always means work."""
-    import torchaudio as ta
     h = chunk_hash(c, doc)
     dest = AUDIO / f"{h}.wav"
     if dest.exists() and not force:
         return h, True
     p = params_for(c, doc)
-    m = get_model()
     spoken = c["text"].replace("❦", " ").strip()      # scene mark: silent
-    with _lock:
-        seed_take(c.get("seed"))
-        wav = m.generate(spoken, audio_prompt_path=str(voice_file(p["voice"])),
-                         exaggeration=p["exag"], cfg_weight=p["cfg"],
-                         temperature=p["temp"], repetition_penalty=p["rep"])
-    # keep the .wav extension: torchaudio picks the encoder from it, and a
-    # ".part" suffix raises "Unsupported format".
     tmp = dest.with_name(dest.stem + ".tmp.wav")
-    ta.save(str(tmp), wav, m.sr)
-    tmp.rename(dest)                       # atomic: no half-written cache entries
+    try:
+        _cb_gen(spoken, p, c.get("seed"), tmp)
+        tmp.rename(dest)                   # atomic: no half-written cache entries
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return h, False
 
 
@@ -1936,7 +2232,6 @@ def render_preview(c, doc, force=False, text=None):
     Chatterbox has no low-quality mode — sampling cost is per token, so the
     only real speedup is less text. Same voice and parameters as the full
     render, so what you hear is exactly what the bake will say."""
-    import torchaudio as ta
     p = params_for(c, doc)
     spoken = (text if text is not None else c["text"]).replace("❦", " ").strip()
     if p["engine"] == "chatterbox":         # as chunk_hash: default stays unmarked
@@ -1972,15 +2267,13 @@ def render_preview(c, doc, force=False, text=None):
             tmp.unlink(missing_ok=True)
             raise
         return h, False, spoken
-    m = get_model()
-    with _lock:
-        seed_take(c.get("seed"))
-        wav = m.generate(spoken, audio_prompt_path=str(voice_file(p["voice"])),
-                         exaggeration=p["exag"], cfg_weight=p["cfg"],
-                         temperature=p["temp"], repetition_penalty=p["rep"])
     tmp = dest.with_name(dest.stem + ".tmp.wav")
-    ta.save(str(tmp), wav, m.sr)
-    tmp.rename(dest)
+    try:
+        _cb_gen(spoken, p, c.get("seed"), tmp)
+        tmp.rename(dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return h, False, spoken
 
 
@@ -2072,16 +2365,33 @@ CHIME_SECS = 0.45
 def chime_wave(sr):
     """A brief two-note bell — a fifth, decaying fast. Quiet enough to sit under
     narration without startling, distinct enough not to be mistaken for it."""
-    import torch, math
+    import numpy as np, math
     n = int(sr * CHIME_SECS)
-    t = torch.arange(n, dtype=torch.float32) / sr
-    env = torch.exp(-t * 7.0)
+    t = np.arange(n, dtype=np.float32) / sr
+    env = np.exp(-t * 7.0)
     a = int(sr * 0.006)                    # a few ms of attack, or it clicks
     if a:
-        env[:a] = env[:a] * torch.linspace(0.0, 1.0, a)
-    tone = (torch.sin(2 * math.pi * 784.0 * t)
-            + 0.45 * torch.sin(2 * math.pi * 1176.0 * t))
-    return (tone * env * 0.13).unsqueeze(0)
+        env[:a] = env[:a] * np.linspace(0.0, 1.0, a, dtype=np.float32)
+    tone = (np.sin(2 * math.pi * 784.0 * t)
+            + 0.45 * np.sin(2 * math.pi * 1176.0 * t))
+    return (tone * env * 0.13).astype(np.float32)
+
+
+def _read_wav(path):
+    """A file off disk as mono float32 — (samples, sample_rate). The book is
+    mono, so everything entering the mix comes through here and beds follow
+    the narration down to one channel."""
+    import numpy as np
+    import soundfile as sf
+    w, wsr = sf.read(str(path), dtype="float32", always_2d=True)
+    return np.ascontiguousarray(w.mean(axis=1)), wsr
+
+
+def _resample(w, wsr, sr):
+    """Only clips ever need this — every speech chunk is at the model's rate."""
+    import numpy as np
+    import soxr
+    return soxr.resample(w, wsr, sr).astype(np.float32)
 
 
 def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
@@ -2100,6 +2410,10 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
     A music bed opened earlier is simply not in that mix — the cards before the
     start are not on the timeline at all, so there is nothing to carry over.
 
+    Plain numpy throughout: the mix is adds and multiplies on one array, and
+    keeping torch out of it is what lets the studio itself run on a small
+    interpreter — the engines that need torch live behind worker processes.
+
     A cursor walks the cards in order. Speech is placed at the cursor and
     advances it by its own length plus a rest (scene breaks get a longer one,
     as before); a voiced card behaves identically, since it is rendered into
@@ -2116,7 +2430,7 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
     (they are all rendered at the model's rate), so mixing never costs a
     ten-second model load. Both assemble() and the in-browser preview sit on
     this one function, so what you hear is what ships, by construction."""
-    import torch, torchaudio as ta
+    import numpy as np
     profs = profiles()          # once for the whole mix, not once per card
     cards = doc["chunks"]
     if frm is not None:
@@ -2181,7 +2495,7 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
             if not c.get("clip") or not f.exists():
                 unready(c)
                 continue
-            w, wsr = ta.load(str(f))
+            w, wsr = _read_wav(f)
             note(c)
             events.append((cursor, kind, w, wsr, c))
             cursor += (max(0.0, float(c.get("after", 0.0)))
@@ -2201,7 +2515,7 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
                 # it; the card is still there, just dry
                 print(f"plugin failed on card {c['id']}: "
                       f"{type(ex).__name__}: {ex}", flush=True)
-        w, wsr = ta.load(str(f))
+        w, wsr = _read_wav(f)
         note(c)
         events.append((cursor, kind, w, wsr, c))
         # a voiced card lands here too — rendered and content-addressed exactly
@@ -2221,18 +2535,16 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
         if kind == "chime":
             pieces.append((int(start * sr), chime_wave(sr)))
             continue
-        if w.shape[0] > 1:                    # the book is mono; beds follow it
-            w = w.mean(0, keepdim=True)
-        if wsr != sr:
-            w = ta.functional.resample(w, wsr, sr)
+        if wsr != sr:                         # mono already: _read_wav saw to it
+            w = _resample(w, wsr, sr)
         if kind == "audio":
             n = w.shape[-1]
             lo, hi = (list(c.get("fade") or []) + [0, 100])[:2]
             fi, fo = int(n * lo / 100), int(n * (100 - hi) / 100)
             if fi > 0:
-                w[..., :fi] = w[..., :fi] * torch.linspace(0.0, 1.0, fi)
+                w[:fi] = w[:fi] * np.linspace(0.0, 1.0, fi, dtype=np.float32)
             if fo > 0:
-                w[..., n - fo:] = w[..., n - fo:] * torch.linspace(1.0, 0.0, fo)
+                w[n - fo:] = w[n - fo:] * np.linspace(1.0, 0.0, fo, dtype=np.float32)
             w = w * (float(c.get("gain", 100)) / 100.0)
         else:
             # a spoken card's level comes from its profile, so a character who
@@ -2244,10 +2556,10 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
         pieces.append((int(start * sr), w))
     # a trailing silence card pads the end, so the total honours the cursor too
     total = max(int(cursor * sr), max(s + w.shape[-1] for s, w in pieces))
-    full = torch.zeros(1, total)
+    full = np.zeros(total, dtype=np.float32)
     for s, w in pieces:
-        full[..., s:s + w.shape[-1]] += w
-    full.clamp_(-1.0, 1.0)
+        full[s:s + w.shape[-1]] += w
+    np.clip(full, -1.0, 1.0, out=full)
     return full, sr, missing, marks
 
 
@@ -2261,14 +2573,15 @@ ASSEMBLE_FMTS = {"mp3": ["-codec:a", "libmp3lame", "-b:a", "64k", "-ac", "1"],
 
 def assemble(name, gap=0.35, fmt="mp3"):
     """Mixdown to out/<name>.<fmt> — the deliverable."""
-    import torchaudio as ta
+    import soundfile as sf
     full, sr, missing, _ = mixdown(load(name), gap)
     if full is None:
         return None, missing
     out = pdir(name) / "out"
     out.mkdir(exist_ok=True)
     wav = out / f"{name}.wav"
-    ta.save(str(wav), full, sr)
+    # float32, like every render in audio/ — soundfile's wav default is 16-bit
+    sf.write(str(wav), full, sr, subtype="FLOAT")
     codec = ASSEMBLE_FMTS.get(fmt if fmt in ASSEMBLE_FMTS else "mp3")
     if codec is None or not shutil.which("ffmpeg"):
         return wav, missing
@@ -2288,14 +2601,14 @@ def preview_book(name, frm=None, upto=None):
     `frm` starts the mix at a card instead of at the top, so an edit in chapter
     nine costs nine seconds to hear rather than the eight minutes before it.
     `upto` stops it before a card — the stage plays choice-to-choice with it."""
-    import torchaudio as ta
+    import soundfile as sf
     full, sr, missing, marks = mixdown(load(name), frm=frm, upto=upto, chime=True)
     if full is None:
         return None, 0, missing, []
     out = pdir(name) / "out"
     out.mkdir(exist_ok=True)
     f = out / ".preview.wav"
-    ta.save(str(f), full, sr, encoding="PCM_S", bits_per_sample=16)
+    sf.write(str(f), full, sr, subtype="PCM_16")
     return f, round(full.shape[-1] / sr, 1), missing, marks
 
 
@@ -2414,7 +2727,7 @@ def publish_video(name, height=1080):
     """The animatic: every still held from its mark to the next, under the
     exact audio assemble ships. Total length comes from the audio, never
     -shortest — that flag would eat the final reverb tail."""
-    import torchaudio as ta
+    import soundfile as sf
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg is needed to export video")
     doc = load(name)
@@ -2425,7 +2738,7 @@ def publish_video(name, height=1080):
     out = pdir(name) / "out"
     out.mkdir(exist_ok=True)
     wav = out / ".animatic.wav"
-    ta.save(str(wav), full, sr)
+    sf.write(str(wav), full, sr, subtype="FLOAT")
     byid = {c["id"]: c for c in doc["chunks"]}
     frames = []
     for m in marks:
@@ -2489,7 +2802,7 @@ def publish_html(name):
     segment_spans premixed through the same mixdown assemble uses, so what the
     export says is what the studio said. Hard-fails on story_problems: a
     broken jump is worth a message now, not a dead end in someone's browser."""
-    import torchaudio as ta
+    import soundfile as sf
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg is needed to export the web player")
     doc = load(name)
@@ -2513,7 +2826,7 @@ def publish_html(name):
             fn = f"s{frm:04d}.mp3"
             with _tf.TemporaryDirectory(dir=ROOT) as td:
                 wav = Path(td) / "seg.wav"
-                ta.save(str(wav), full, sr)
+                sf.write(str(wav), full, sr, subtype="FLOAT")
                 r = subprocess.run(
                     ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
                      "-i", str(wav), "-codec:a", "libmp3lame", "-b:a", "64k",
@@ -2838,6 +3151,7 @@ class H(BaseHTTPRequestHandler):
                 "clip_counts": ccounts, "media_counts": mcounts,
                 "defaults": DEFAULTS, "bake": _bake,
                 "engines": list(ENGINES), "omnivoice": ov_available(),
+                "chatterbox": cb_available(),
                 "kokoro": kokoro_available(), "kvoices": kokoro_voices(),
                 "stale_build": build_stale(),
                 # whether the discuss agent has a Claude to speak with —
@@ -2845,7 +3159,7 @@ class H(BaseHTTPRequestHandler):
                 # noticed on the next refresh. Whether that Claude is signed
                 # in is only knowable by asking, so the panel learns it then.
                 "claude": Path(claude_path()).exists(),
-                "model": "warm" if _model else "cold"})
+                "model": "warm" if _cb["warm"] else "cold"})
         if u.path == "/api/plugins":
             try:
                 import pedalboard          # noqa: F401
@@ -2912,6 +3226,8 @@ class H(BaseHTTPRequestHandler):
                 else:                          # silence has nothing to render
                     c["ready"] = True
             return self._send(200, doc)
+        if u.path == "/api/engines":
+            return self._send(200, engines_status())
         if u.path == "/api/jobs":
             nm = q.get("name", [""])[0]
             js = [j for j in _jobs.values() if not nm or j["project"] == nm]
@@ -3279,6 +3595,24 @@ class H(BaseHTTPRequestHandler):
             # route still expected base64 in JSON, and the silence cost more
             # than the mismatch did.
             return self._send(400, {"error": f"this route expects JSON: {ex}"})
+        # The engine manager: no project and no doc lock — an install runs in
+        # its own thread, and these requests only start it, stop it or take
+        # an engine out again.
+        if u.path == "/api/engines/install":
+            try:
+                install_engine(str(d.get("engine") or ""))
+            except (ValueError, RuntimeError) as ex:
+                return self._send(400, {"error": str(ex)})
+            return self._send(200, {"ok": True, **engines_status()})
+        if u.path == "/api/engines/cancel":
+            cancel_install()
+            return self._send(200, {"ok": True})
+        if u.path == "/api/engines/remove":
+            try:
+                remove_engine(str(d.get("engine") or ""))
+            except (ValueError, RuntimeError) as ex:
+                return self._send(400, {"error": str(ex)})
+            return self._send(200, {"ok": True, **engines_status()})
         # Every mutating route needs a real project; without this a bad name
         # surfaces as an opaque 500 from subscripting None.
         if u.path not in ("/api/import", "/api/chat") and d.get("name") is not None:
@@ -4374,19 +4708,24 @@ class H(BaseHTTPRequestHandler):
 
 
 @__import__("atexit").register
-def _stop_ov():
-    """Take the worker down with us. It holds three gigabytes and has no reason
-    to outlive the studio that started it."""
-    pr = _ov.get("proc")
-    if pr is not None and pr.poll() is None:
-        pr.terminate()
-        try:
-            pr.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pr.kill()
+def _stop_workers():
+    """Take the workers down with us. Each holds gigabytes of warm model and
+    has no reason to outlive the studio that started it."""
+    for w in (_cb, _ov):
+        pr = w.get("proc")
+        if pr is not None and pr.poll() is None:
+            pr.terminate()
+            try:
+                pr.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pr.kill()
 
 
 if __name__ == "__main__":
+    # SIGTERM must reach atexit — it is how the desktop app stops this
+    # server, and the workers would otherwise be orphaned, warm, and unpaid.
+    __import__("signal").signal(__import__("signal").SIGTERM,
+                                lambda *_: sys.exit(0))
     where = "127.0.0.1" if HOST in ("127.0.0.1", "localhost") else HOST
     print(f"Saga Studio  ->  http://{where}:{PORT}" + ("?k=<token>" if TOKEN else ""))
     if HOST == "0.0.0.0":
