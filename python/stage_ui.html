@@ -29,6 +29,13 @@ object-fit:contain;background:#000}
 /* the words, the sound line, the chooser and the gate all ride above
    whatever picture is on the wall, whatever order it arrived in */
 #caption,#fxcap,#chooser,#gate{z-index:1}
+/* the dark room says it is dark on purpose — and steps aside the moment
+   anything at all is on: a picture, a caption, a sound line, a chooser */
+#empty{position:absolute;inset:0;display:flex;align-items:center;
+justify-content:center;color:var(--dim);font-size:13px;text-align:center;
+padding:0 10vw;line-height:1.7}
+#room:has(img,video) #empty,#room:has(#caption.on) #empty,
+#room:has(#fxcap.on) #empty,#room:has(#chooser.on) #empty{display:none}
 #caption{position:absolute;left:0;right:0;bottom:26px;text-align:center;
 padding:0 8vw;font-size:clamp(14px,2.2vw,21px);line-height:1.6;
 color:var(--bright);text-shadow:0 1px 3px #000,0 0 14px #000;
@@ -76,6 +83,7 @@ body.mirror #bar #popin{display:inline-block;margin-left:auto}
 </head>
 <body>
 <div id="room">
+  <div id="empty"></div>
   <div id="fxcap"></div>
   <div id="caption"></div>
   <div id="chooser"></div>
@@ -111,6 +119,12 @@ let MIRROR=false;
 // a window the editor popped out is a mirror from birth — it never guesses
 if(qs.has('pop')){ MIRROR=true; document.body.classList.add('mirror'); }
 function popIn(){ say({type:'popin'}); window.close(); }
+// what the dark room means depends on whose room it is
+$('empty').textContent=EMBED
+  ?'Nothing on stage yet — ▶ Story plays the episode, and clicking a card shows its moment here'
+  :MIRROR
+    ?'Nothing on stage yet — this window mirrors the editor’s stage'
+    :'Nothing on stage yet — ▶ Play starts the episode';
 let NAME=qs.get('name')||'';
 let DOC=null;              // the open episode, as /api/doc tells it
 let MARKS=[], MARKI=-1;    // card start times of the playing stretch
@@ -150,12 +164,19 @@ if(BC)BC.onmessage=e=>{
   if(m.type==='pause'&&!AUDIO.paused)pause();
 };
 say({type:'hello'});
+// A mirror announces itself every couple of seconds, so an editor that
+// reloaded — and so forgot the window it opened — still keeps its dock
+// away. The embed never beats: it IS the dock.
+const popbeat=()=>{ if(MIRROR&&!EMBED)say({type:'popped'}); };
+setInterval(popbeat,2000); popbeat();
+addEventListener('pagehide',()=>{ if(MIRROR&&!EMBED)say({type:'popped-bye'}); });
 // what a mirror does: paint whatever the owner says is on its wall. Frames
 // arrive whole, so each part repaints only when it actually changed — or a
 // caption tick elsewhere would restart the picture and the typewriter here
 let MMEDIA=' ', MCAP=' ', MFX=' ', MOPTS=' ';
 function mirror(m){
-  if(!MIRROR){ MIRROR=true; document.body.classList.add('mirror'); stop(); }
+  if(!MIRROR){ MIRROR=true; document.body.classList.add('mirror'); stop();
+    $('empty').textContent='Nothing on stage yet — this window mirrors the editor’s stage'; }
   if('media'in m&&m.media!==MMEDIA){ MMEDIA=m.media; showMedia(m.media,m.kind); }
   if('cap'in m){ const k=(m.cap||'')+'|'+(m.from||0);
     if(k!==MCAP){ MCAP=k; caption(m.cap,m.secs,m.from,m.tw,false); } }

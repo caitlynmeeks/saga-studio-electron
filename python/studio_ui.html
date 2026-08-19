@@ -484,6 +484,8 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
     <div id="sbar"><span>STAGE</span><span style="flex:1"></span>
       <button class="tiny" onclick="popOut()"
         title="Pop the stage out to its own window — this panel steps aside until it returns">⧉</button>
+      <button class="tiny" style="color:var(--red)" onclick="toggleDock(false)"
+        title="Hide the stage — the Stage button up top brings it back">×</button>
     </div>
     <iframe id="stagefr" allow="autoplay" src="/stage?embed=1"></iframe>
   </div>
@@ -3645,9 +3647,6 @@ function clearPlaying(){
 // fullscreen on the second monitor, so nothing time-critical may live here.
 const STAGE='BroadcastChannel' in window?new BroadcastChannel('saga-stage'):null;
 let STAGESEEN=false, STAGEPLAY=null;
-function openStage(){
-  window.open('/stage'+(DOC?'?name='+encodeURIComponent(DOC.name):''),'saga-stage');
-}
 // The transport. The embedded stage — the Game view under the cards — is the
 // one true player, and these address it by name; a pop-out only mirrors it.
 function stageToggle(){
@@ -3669,14 +3668,21 @@ function rewind(){
   $('main').scrollTop=0;
 }
 // pop the stage out to its own window; the dock steps aside so the story is
-// not on screen twice, and returns when the window closes or pops back in
-let POPUP=null, POPWATCH=null;
+// never on screen twice, and returns when the window closes or pops back in.
+// Aliveness is belt and braces: the window handle when we hold one, and the
+// mirror's own heartbeat when we do not — a ⌘R here forgets the handle, but
+// the heartbeat keeps the orphaned pop-out known and the dock away.
+let POPUP=null, POPWATCH=null, POPSEEN=0;
+const popAlive=()=>(POPUP&&!POPUP.closed)||Date.now()-POPSEEN<5000;
+function popWatch(){
+  if(POPWATCH)return;
+  POPWATCH=setInterval(()=>{ if(!popAlive()){
+    clearInterval(POPWATCH); POPWATCH=null; POPUP=null; toggleDock(true); } },1200);
+}
 function popOut(){
   POPUP=window.open('/stage?pop=1'+(DOC?'&name='+encodeURIComponent(DOC.name):''),'saga-stage');
-  toggleDock(false);
-  clearInterval(POPWATCH);
-  POPWATCH=setInterval(()=>{ if(POPUP&&POPUP.closed){
-    clearInterval(POPWATCH); POPWATCH=null; POPUP=null; toggleDock(true); } },800);
+  POPSEEN=Date.now();
+  toggleDock(false); popWatch();
 }
 // when the stage stops and asks, the question is answerable from here too
 function paintStageChoices(opts){
@@ -3694,11 +3700,22 @@ if(STAGE)STAGE.onmessage=e=>{
     STAGEPLAY=null;
     return;
   }
+  // a pop-out announcing itself — perhaps one this editor never opened,
+  // because a ⌘R forgot it. Grab the named window's handle without
+  // navigating it, keep the dock away, and watch for its end.
+  if(m.type==='popped'){
+    POPSEEN=Date.now();
+    if(!POPUP||POPUP.closed){ try{POPUP=window.open('','saga-stage')}catch(_){} }
+    if(!document.body.classList.contains('nostage'))toggleDock(false);
+    popWatch();
+    return;
+  }
+  if(m.type==='popped-bye'){ POPSEEN=0; return; }   // the watcher restores
   if(!DOC||m.name!==DOC.name)return;
   if(m.type==='state'){ const b=$('stgplay');
     if(b)b.textContent=m.playing?'⏸ Story':'▶ Story'; }
   if(m.type==='popin'){ if(POPUP){ try{POPUP.close()}catch(_){} POPUP=null; }
-    clearInterval(POPWATCH); POPWATCH=null; toggleDock(true); }
+    POPSEEN=0; clearInterval(POPWATCH); POPWATCH=null; toggleDock(true); }
   if(m.type==='choices')paintStageChoices(m.opts);
   if(m.type==='playing'&&m.card!=null)followCard(m.card);
   if(m.type==='stopped'){ clearPlaying();
@@ -3707,6 +3724,13 @@ if(STAGE)STAGE.onmessage=e=>{
 // ── the game view dock ────────────────────────────────────
 function toggleDock(on){
   if(on===undefined)on=document.body.classList.contains('nostage');
+  // while a pop-out lives, the dock stays away — the story must never be on
+  // screen twice. "Show me the stage" is answered by the window itself.
+  if(on&&popAlive()){
+    try{ (POPUP&&!POPUP.closed?POPUP:window.open('','saga-stage')).focus(); }catch(_){}
+    $('status').textContent='the stage is popped out — ⧉ in its bar brings it home';
+    return;
+  }
   document.body.classList.toggle('nostage',!on);
   try{ localStorage.setItem('saga.dock',on?'1':'0'); }catch(e){}
   const b=$('dockb'); if(b)b.classList.toggle('on',on);
