@@ -157,7 +157,7 @@ async function launch () {
 function onBackendDied () {
   if (!win || win.isDestroyed()) return
   showShell('error', {
-    message: 'The backend stopped unexpectedly.',
+    message: 'It closed on its own — the log below may say why.',
     kind: 'crashed',
     python: paths.python().path,
     library: paths.library(),
@@ -170,27 +170,34 @@ async function restart () {
   await launch()
 }
 
-// The classic server keeps no lock, so two processes can open one library and
-// the second write wins. Say so once, rather than silently risking it.
+// A studio launched from a terminal keeps no lock, so it and the app can hold
+// the same library and the second write wins. The rule is one Saga Studio at a
+// time — so the dialog's one job is to offer to close the other copy. No
+// "do not remind me": this is a state to leave, not to get used to. And no
+// user-facing talk of servers or ports — from in here it is simply another
+// copy of the app.
 async function maybeWarnAboutClassic () {
-  if (config.get('hideClassicWarning')) return
-  if (!(await backend.classicRunning())) return
-  const known = paths.KNOWN_LIBRARIES.includes(paths.library())
-  if (!known) return
-  const { response, checkboxChecked } = await dialog.showMessageBox(win, {
-    type: 'info',
-    buttons: ['Continue', 'Open the Library Folder'],
+  const other = await backend.classicInfo()
+  if (!other) return
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'warning',
+    buttons: ['Close the Other Copy', 'Leave It Running'],
     defaultId: 0,
-    message: 'The classic Saga Studio server is running',
-    detail: 'Something is answering on port 5010, and this app has opened a ' +
-      'library that server may also be using.\n\nBoth can read it safely, but ' +
-      'editing the same episode in both at once means the last save wins. ' +
-      'Best to work in one at a time.',
-    checkboxLabel: 'Do not remind me',
-    checkboxChecked: false
+    cancelId: 1,
+    message: 'Another copy of Saga Studio is running',
+    detail: 'It was started outside this app — probably from a terminal — and ' +
+      'it may be open on the same library.\n\nEditing in two copies at once ' +
+      'can lose work: whichever saves last wins.'
   })
-  if (checkboxChecked) config.save({ hideClassicWarning: true })
-  if (response === 1) shell.openPath(paths.library())
+  if (response !== 0) return
+  if (!(await backend.killClassic(other.pid))) {
+    await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['OK'],
+      message: 'It would not close',
+      detail: 'Quit it in the terminal it was started from, then keep working here.'
+    })
+  }
 }
 
 // ── things the menu and the shell page can ask for ──────────────────────
@@ -245,7 +252,7 @@ const api = {
   openVoices: () => shell.openPath(paths.voices()),
 
   openLog () {
-    const p = path.join(app.getPath('userData'), 'backend.log')
+    const p = path.join(app.getPath('userData'), 'studio.log')
     fs.writeFileSync(p, backend.logText() + '\n')
     shell.openPath(p)
   },

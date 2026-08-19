@@ -62,7 +62,7 @@ function render ({ state, detail = {} }) {
   const heads = {
     'no-python': 'No Python interpreter found',
     'no-torch': 'That Python cannot run the voice model',
-    crashed: 'The backend stopped unexpectedly',
+    crashed: 'Saga Studio stopped unexpectedly',
     failed: 'The studio could not start'
   }
 
@@ -75,7 +75,7 @@ function render ({ state, detail = {} }) {
       <p>Saga Studio speaks with Chatterbox, which needs <b>torch</b>. Point the
       app at a virtual environment that has it, or make one:</p>
       <pre class="cmd">${esc(VENV)}</pre>` : ''}
-    ${detail.log ? `<p>What the backend said:</p><pre id="log">${esc(detail.log)}</pre>` : ''}
+    ${detail.log ? `<p>The last thing it said:</p><pre id="log">${esc(detail.log)}</pre>` : ''}
     <div class="row">
       <button class="pri" id="pick">Choose Python…</button>
       <button id="lib">Choose Library Folder…</button>
