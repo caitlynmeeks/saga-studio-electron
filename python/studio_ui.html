@@ -341,11 +341,11 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
   <button id="minall" onclick="minAll()" disabled
     title="collapse every card to its bar">−</button>
   <button id="frb" onclick="toggleFind()" disabled
-    title="find and replace across this episode — ⌘F">find</button>
-  <button id="dockb" onclick="toggleDock()" title="show or hide the stage — the story, live under the cards">stage</button>
+    title="find and replace across this episode — ⌘F">Find</button>
+  <button id="dockb" onclick="toggleDock()" title="show or hide the stage — the story, live under the cards">Stage</button>
   <button onclick="openStage()"
     title="pop the stage out — a window for the second screen; it mirrors the one below">⧉</button>
-  <button id="chatb" onclick="togglePanel()" title="show or hide the side panel">inspector</button>
+  <button id="chatb" onclick="togglePanel()" title="show or hide the side panel">Inspector</button>
 </header>
 
 <div id="storypanel" hidden>
@@ -361,26 +361,32 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
   <div class="mut" style="font-size:10.5px;margin-bottom:8px">how captions arrive, on the stage
     and in the exported story — any card can override both on its subtitle row</div>
   <div style="display:flex"><span style="flex:1"></span>
-    <button class="tiny" onclick="toggleStoryPanel()">close</button></div>
+    <button class="tiny" onclick="toggleStoryPanel()">Close</button></div>
 </div>
 
 <aside>
  <div id="stabs">
-   <button id="sbStories" onclick="setSide('stories')">stories</button>
-   <button id="sbVoices" onclick="setSide('voices')">voices</button>
-   <button id="sbClips" onclick="setSide('clips')">media</button>
-   <button id="sbPublish" onclick="setSide('publish')">publish</button>
+   <button id="sbStories" onclick="setSide('stories')">Stories</button>
+   <button id="sbVoices" onclick="setSide('voices')">Voices</button>
+   <button id="sbClips" onclick="setSide('clips')">Media</button>
+   <button id="sbPublish" onclick="setSide('publish')">Publish</button>
  </div>
  <div class="pane" id="sideStories">
-  <h2>documents</h2>
-  <div id="drop">drop .md or .sagaproj here<br><span style="font-size:11px">or click to choose</span></div>
+  <h2>Stories</h2>
+  <button class="pri" onclick="newStoryPanel()" style="width:100%"
+    title="Start a story — empty, or from a markdown file">+ New Story</button>
+  <div id="newstory" hidden style="margin-top:8px;border:1px solid var(--line);border-radius:7px;padding:10px">
+    <input id="ns_title" placeholder="Story title…" style="width:100%"
+      onkeydown="if(event.key==='Enter')createStory()">
+    <button class="pri" onclick="createStory()" style="width:100%;margin-top:6px">Create Empty Story</button>
+    <div class="mut" style="text-align:center;margin:6px 0;font-size:11px">— or —</div>
+    <div id="drop">Drop .md or .sagaproj here<br><span style="font-size:11px">or click to choose</span></div>
+  </div>
   <input type="file" id="file" accept=".md,.markdown,.txt,.sagaproj" multiple hidden>
-  <button onclick="newStory()" style="width:100%;margin-top:8px"
-    title="an empty story, built card by card from the + strips">+ new story</button>
   <div id="projsort" style="margin-top:12px"></div>
   <div id="projects"></div>
 
-  <h2 style="margin-top:18px">backup</h2>
+  <h2 style="margin-top:18px">Backup</h2>
   <label class="mut" style="font-size:11px;display:block">
     <input type="checkbox" id="bkaudio" checked> include rendered audio</label>
   <label class="mut" style="font-size:11px;display:flex;gap:5px;align-items:center;margin-top:5px">
@@ -391,8 +397,8 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
       <option value="copy">keep both</option>
     </select></label>
   <div style="display:flex;gap:5px;margin-top:7px">
-    <button onclick="exportAll()">export everything</button>
-    <button onclick="$('arch').click()">import…</button>
+    <button onclick="exportAll()">Export Everything</button>
+    <button onclick="$('arch').click()">Import…</button>
   </div>
   <input type="file" id="arch" accept=".sagaproj" hidden>
   <input type="file" id="clipfile" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aif,.aiff" hidden>
@@ -402,7 +408,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
  </div>
 
  <div class="pane" id="sideVoices">
-  <h2>voice profiles</h2>
+  <h2>Voice Profiles</h2>
   <div id="profiles"></div>
   <div style="display:flex;gap:5px;margin-top:7px">
     <input id="newprof" placeholder="new profile name" style="flex:1">
@@ -411,13 +417,13 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
  </div>
 
  <div class="pane" id="sideClips">
-  <h2>audio clips</h2>
+  <h2>Audio Clips</h2>
   <div class="mut" style="font-size:11px;margin-bottom:8px">Music and sound
     effects, shared by every episode. Click one to hear it.</div>
   <div id="clipsort"></div>
   <div id="clips"></div>
   <div style="display:flex;gap:5px;margin-top:8px">
-    <button onclick="importClip()">import a clip…</button>
+    <button onclick="importClip()">Import a Clip…</button>
   </div>
 
   <h2 style="margin-top:18px">visuals</h2>
@@ -426,14 +432,14 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
   <div id="mediasort"></div>
   <div id="media"></div>
   <div style="display:flex;gap:5px;margin-top:8px">
-    <button onclick="importMedia()">import an image or film…</button>
+    <button onclick="importMedia()">Import an Image or Film…</button>
   </div>
   <input type="file" id="mediafile" hidden
     accept="image/*,video/*,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov">
  </div>
 
  <div class="pane" id="sidePublish">
-  <h2>publish</h2>
+  <h2>Publish</h2>
   <div id="pubwrap"></div>
  </div>
 </aside>
@@ -449,8 +455,8 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 
 <div id="right">
  <div id="rtabs">
-   <button id="tabInspect" onclick="setTab('inspect')">inspector</button>
-   <button id="tabChat" onclick="setTab('chat')">discuss</button>
+   <button id="tabInspect" onclick="setTab('inspect')">Inspector</button>
+   <button id="tabChat" onclick="setTab('chat')">Discuss</button>
    <span style="flex:1"></span>
    <button class="tiny" onclick="setPanel(false)" title="hide this panel">×</button>
  </div>
@@ -462,35 +468,28 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
    </div>
  </div>
  <div id="chat" class="rpane">
-  <h2>discuss</h2>
+  <h2>Discuss</h2>
   <div id="log"><div class="m mut">Ask about pacing, pronunciation, or a specific passage.
 Selected chunks are sent as context.</div></div>
   <textarea id="ask" placeholder="e.g. does chunk 12 read naturally aloud?"></textarea>
   <div style="display:flex;gap:6px;margin-top:6px">
-    <button class="pri" onclick="send()" id="sendb">ask</button>
+    <button class="pri" onclick="send()" id="sendb">Ask</button>
     <span class="mut" id="chatnote" style="font-size:11px;align-self:center"></span>
   </div>
  </div>
 </div>
 
 <footer>
-  <button id="undob" onclick="undo()" title="⌘Z">undo</button>
-  <button class="pri" id="bakeb" onclick="bake()">bake all stale</button>
-  <button id="stopb" onclick="stopBake()" style="color:var(--red);border-color:var(--red)" hidden>stop baking</button>
-  <button id="pvbook" onclick="previewBook()"
-    title="mix and play the book right here, without exporting the mp3">▶ preview audiobook</button>
-  <button id="pvtop" onclick="previewFromTop()" hidden
-    title="forget the selected card and play the whole book from the beginning">⤒ from start</button>
+  <button id="undob" onclick="undo()" title="⌘Z">Undo</button>
+  <button class="pri" id="bakeb" onclick="bake()">Bake All Stale</button>
+  <button id="stopb" onclick="stopBake()" style="color:var(--red);border-color:var(--red)" hidden>Stop Baking</button>
+  <button onclick="stageFromTop()" title="Play the story from the top, on a clean slate">⏮</button>
   <button id="stgplay" onclick="stageToggle()"
-    title="play the story on the stage — from the selected card, with its last ride’s flags; pauses and resumes">▶ story</button>
-  <button onclick="stageFromTop()"
-    title="play the story from the top, on a clean slate">⟲ from start</button>
-  <button onclick="assemble()">assemble audiobook</button>
+    title="Play the story — from the selected card, with its last ride’s flags; pauses and resumes">▶ Story</button>
   <span id="stgask"></span>
   <span class="mut" id="status"></span>
   <span style="flex:1"></span>
-  <button id="revealb" onclick="revealOut()" title="show the assembled audiobook in the Finder">open renders folder ↗</button>
-  <a id="dl" class="mut" style="font-size:12px" href="#" hidden>download mp3</a>
+  <button id="revealb" onclick="revealOut()" title="Show this episode’s renders in the Finder">Open Renders Folder ↗</button>
 </footer>
 
 <script>
@@ -550,13 +549,12 @@ function clearCur(){ CUR=null; paintCur(); }
 // The footer button says where it will start, so "preview" is never a guess
 // about whether you are about to hear eight minutes you have already heard.
 function syncBookBtn(){
-  const b=$('pvbook');
-  if(BOOKPLAY)return;                  // mid-playback it is the clock; leave it
-  b.textContent = CUR==null ? '▶ preview audiobook' : `▶ preview from #${CUR}`;
-  b.title = CUR==null
-    ? 'mix and play the whole book right here, without exporting the mp3'
-    : `play from card #${CUR} to the end — the cards before it are not in the mix`;
-  $('pvtop').hidden = CUR==null;
+  // the linear preview retired with its buttons — the story transport is the
+  // one way to listen now; only the label’s where-from hint remains
+  const b=$('stgplay');
+  if(b)b.title = CUR==null
+    ? 'Play the story from the top; pauses and resumes'
+    : `Play the story from card #${CUR}, with its last ride’s flags; pauses and resumes`;
 }
 
 async function api(p,b){const r=await fetch(p,b?{method:'POST',body:JSON.stringify(b)}:undefined);
@@ -669,7 +667,7 @@ async function refresh(){
   if(STATE.omnivoice&&!LANGS)
     loadLangs().then(()=>{ if(EDITING)renderProfiles(); });
   if(!PLUGINS)loadPlugins().then(()=>{ if(EDITING)renderProfiles(); });
-  $('projsort').innerHTML=sortBar('projects','recent');
+  $('projsort').innerHTML=sortBar('projects','Recent');
   // by name, not by title: the episodes are numbered, so the slug order is the
   // reading order — which is the answer "alphabetical" is really being asked for
   $('projects').innerHTML=sortedBy(STATE.projects,'projects','edited').map(p=>`
@@ -914,9 +912,9 @@ function profEditor(n){
       </div>`}).join('')
       :'<div class="mut" style="font-size:11px;padding:2px 0">no voice yet</div>'}
     <select onchange="addDraftVoice(this.value);this.value=''" style="width:100%;margin:5px 0">
-      <option value="">+ add an existing voice…</option>
+      <option value="">+ Add an existing voice…</option>
       ${VS.map(v=>`<option value="${esc(v.name)}">${esc(v.name)} (${fmtSecs(v.secs)})</option>`).join('')}</select>
-    <div id="vdrop" class="vdrop">drop a .wav here to add a new voice</div>
+    <div id="vdrop" class="vdrop">Drop a .wav here to add a new voice</div>
     `}
 
     ${ko?`
@@ -955,7 +953,7 @@ function profEditor(n){
     </div>
     <div style="display:flex;gap:5px;margin:2px 0 6px">
       <button id="fxhear" onclick="fxAudition()"
-        title="${ko?'the preset, at its pace,':'the reference clip'} at this loudness — through the plugin too, if it is on. Unsaved changes included.">▶ hear it</button>
+        title="${ko?'the preset, at its pace,':'the reference clip'} at this loudness — through the plugin too, if it is on. Unsaved changes included.">▶ Hear It</button>
     </div>
 
     <div class="psec">effects${qm('a VST3 / Audio Unit after the model, on the mix — mixed in, not rendered in, so it costs no re-bake and applies to every engine and to ◎ voiced cards')}</div>
@@ -968,7 +966,7 @@ function profEditor(n){
     ${fxp?`<div style="display:flex;gap:5px;align-items:center;margin:6px 0">
         <label class="mut" style="font-size:11px;display:flex;gap:5px;align-items:center">
         <input type="checkbox" ${pfx.enabled?'checked':''} onchange="setFxOn(this.checked)">
-        on</label>${qm('a shifter is never quite transparent, so off means off')}</div>
+        On</label>${qm('a shifter is never quite transparent, so off means off')}</div>
       ${PLUGPARAMS[fxp]
         ? PLUGPARAMS[fxp].map(d=>fxKnob(d,pfx)).join('')
         : '<div class="mut" style="font-size:11px;padding:6px 0">reading its controls…</div>'}`:''}
@@ -988,19 +986,19 @@ function profEditor(n){
           ${profNames().filter(p=>p!==n).map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join('')}
         </select>
         <span class="mut">→ ${esc(n)}</span>
-        <button onclick="moveCards()">move</button>
+        <button onclick="moveCards()">Move</button>
       </div>`:''}
 
     <div id="pimpact" class="pimpact"></div>
 
     <div class="pact main">
-      <button id="psave" class="pri" onclick="saveProf()" disabled>save changes</button>
-      <button id="pdisc" onclick="discardProf()" disabled>discard</button>
-      <button onclick="saveProfAs()" title="keep this profile as it is and put these settings in a new one">save as new…</button>
+      <button id="psave" class="pri" onclick="saveProf()" disabled>Save Changes</button>
+      <button id="pdisc" onclick="discardProf()" disabled>Discard</button>
+      <button onclick="saveProfAs()" title="keep this profile as it is and put these settings in a new one">Save As New…</button>
       <span style="flex:1"></span>
-      <button onclick="closeProf()">close</button>
+      <button onclick="closeProf()">Close</button>
       ${n==='Default'?'':`<button onclick="delProfile()" style="color:var(--red)"
-        title="cards using it fall back to Default">delete</button>`}
+        title="cards using it fall back to Default">Delete</button>`}
     </div></div>`;
 }
 
@@ -1076,7 +1074,7 @@ function renameVoiceAt(i){
   const row=document.querySelectorAll('#profedit .vrow')[i]; if(!row)return;
   const was=row.innerHTML;
   row.innerHTML=`<input value="${esc(v)}" style="flex:1;min-width:80px">
-    <button class="tiny">rename</button><button class="tiny">cancel</button>`;
+    <button class="tiny">Rename</button><button class="tiny">Cancel</button>`;
   const inp=row.querySelector('input'), b=row.querySelectorAll('button');
   const restore=()=>{ row.innerHTML=was; };
   b[0].onclick=()=>renameVoice(v,inp.value.trim(),restore);
@@ -1359,7 +1357,7 @@ async function fxAudition(){
   const ko=(DRAFT.engine||'chatterbox')==='kokoro';
   const v=ko?(DRAFT.kvoice||'af_heart'):(DRAFT.voices||[])[DRAFT.active||0];
   if(!v)return void($('status').textContent='this profile has no voice clip to play');
-  const b=$('fxhear'); if(b){ b.disabled=true; b.textContent=ko?'rendering…':'processing…'; }
+  const b=$('fxhear'); if(b){ b.disabled=true; b.textContent=ko?'Rendering…':'Processing…'; }
   try{
     const body={plugin:fx.plugin||'',params:fx.params||{},
       gain:DRAFT.gain==null?100:DRAFT.gain};
@@ -1375,7 +1373,7 @@ async function fxAudition(){
     if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
     AUDIO=new Audio(url); AUDIO.play();
     $('status').textContent=`“${v}” as this profile sounds right now — save to keep it`;
-  }finally{ if(b){ b.disabled=false; b.textContent='▶ hear it'; } }
+  }finally{ if(b){ b.disabled=false; b.textContent='▶ Hear It'; } }
 }
 function setFxParam(name,v){
   const params={...(((DRAFT||{}).fx||{}).params||{})};
@@ -1387,7 +1385,7 @@ function setFxParam(name,v){
 // Two orders, because they answer different questions. By name is how you find
 // something you already know the name of; by date is how you find the thing you
 // added on Tuesday and cannot remember what you called.
-const SORTS={};
+const SORTS={projects:'added'};   // stories open on Recent: new work floats up
 try{ Object.assign(SORTS,JSON.parse(localStorage.getItem('saga.sorts')||'{}')); }catch(e){}
 function setSort(list,how){
   SORTS[list]=how;
@@ -1402,7 +1400,7 @@ function setSort(list,how){
 const sortBar=(list,late)=>{
   const how=SORTS[list]||'name';
   return `<div class="sortbar">
-    <button class="${how==='name'?'on':''}" onclick="setSort('${list}','name')">name</button>
+    <button class="${how==='name'?'on':''}" onclick="setSort('${list}','name')">Name</button>
     <button class="${how==='added'?'on':''}" onclick="setSort('${list}','added')">${late}</button>
   </div>`;
 };
@@ -1429,7 +1427,7 @@ let CLIPVIEW=[];
 function renderClips(){
   const n=STATE.clip_counts||{};
   CLIPVIEW=sortedBy(STATE.clips||[],'clips','added');
-  $('clipsort').innerHTML=sortBar('clips','newest');
+  $('clipsort').innerHTML=sortBar('clips','Newest');
   $('clips').innerHTML = CLIPVIEW.length ? CLIPVIEW.map((c,i)=>{
     const used=n[c.name]||0, when=fmtWhen(c.added);
     return `<div class="proj" draggable="true" oncontextmenu="clipMenu(event,${i})"
@@ -1493,8 +1491,8 @@ function clipMenu(e,i){
   const c=CLIPVIEW[i]; if(!c)return;
   const used=(STATE.clip_counts||{})[c.name]||0;
   openCtx(e,[
-    {label:'play', run:()=>playClipAt(i)},
-    {label:'rename…', run:()=>{ openCtx(e,[]);
+    {label:'Play', run:()=>playClipAt(i)},
+    {label:'Rename…', run:()=>{ openCtx(e,[]);
        ctxAsk(c.name,'clip name','rename',t=>renameClip(c.name,t)); }},
     '-',
     // Deleting is deliberately not offered: clips are global, undo can
@@ -1520,7 +1518,7 @@ let MEDIAVIEW=[];
 function renderMedia(){
   const n=STATE.media_counts||{};
   MEDIAVIEW=sortedBy(STATE.media||[],'media','added');
-  $('mediasort').innerHTML=sortBar('media','newest');
+  $('mediasort').innerHTML=sortBar('media','Newest');
   $('media').innerHTML = MEDIAVIEW.length ? MEDIAVIEW.map((m,i)=>{
     const used=n[m.name]||0, when=fmtWhen(m.added);
     const thumb=m.kind==='image'
@@ -1544,7 +1542,7 @@ function mediaMenu(e,i){
   const m=MEDIAVIEW[i]; if(!m)return;
   const used=(STATE.media_counts||{})[m.name]||0;
   openCtx(e,[
-    {label:'rename…', run:()=>{ openCtx(e,[]);
+    {label:'Rename…', run:()=>{ openCtx(e,[]);
        ctxAsk(m.name,'media name','rename',t=>renameMedia(m.name,t)); }},
     '-',
     // no delete, as clips: undo can resurrect a card that points at it
@@ -1623,25 +1621,34 @@ function renderPublish(){
     <div class="mut" style="font-size:12px;margin-bottom:10px">“${esc(DOC.title)}”${
       miss?` — <span class="warn">${miss} card${miss===1?'':'s'} not rendered</span>`
           :' — all rendered'}</div>
-    <h2>audiobook</h2>
+    <h2>Audiobook</h2>
     <div class="mut" style="font-size:11px">Cards top to bottom, choices walked
-      straight past. The mp3 lands in out/.</div>
-    <button onclick="assemble()" style="margin-top:6px">assemble mp3</button>
-    <h2 style="margin-top:16px">animatic video</h2>
+      straight past. The file lands in out/.</div>
+    <div style="display:flex;gap:5px;margin-top:6px;align-items:center">
+      <select id="pubfmt" onchange="try{localStorage.setItem('saga.pubfmt',this.value)}catch(e){}">
+        <option value="mp3">MP3 — small, plays everywhere</option>
+        <option value="m4a">M4A — AAC, audiobook apps</option>
+        <option value="flac">FLAC — lossless</option>
+        <option value="wav">WAV — the raw master</option>
+      </select>
+      <button onclick="assemble()">Assemble</button>
+    </div>
+    <h2 style="margin-top:16px">Animatic Video</h2>
     <div class="mut" style="font-size:11px">${nvis
       ?nvis+' visual'+(nvis===1?'':'s')+' as stills under the audiobook’s audio; film contributes its first frame.'
       :'No visual cards yet — the film would be a black screen with a soundtrack.'}</div>
     <div style="display:flex;gap:5px;margin-top:6px;align-items:center">
       <select id="pubheight"><option value="720">720p</option>
         <option value="1080" selected>1080p</option></select>
-      <button id="pubvid" onclick="publishVideo()">export video</button>
+      <button id="pubvid" onclick="publishVideo()">Export Video</button>
     </div>
-    <h2 style="margin-top:16px">web story</h2>
+    <h2 style="margin-top:16px">Web Story</h2>
     <div class="mut" style="font-size:11px">A folder of HTML that plays offline —
       visuals, captions${nch?', and its '+nch+' choice'+(nch===1?'':'s'):''}.
       Unzip anywhere, open index.html.</div>
-    <button id="pubweb" onclick="publishWeb()" style="margin-top:6px">export web story</button>
+    <button id="pubweb" onclick="publishWeb()" style="margin-top:6px">Export Web Story</button>
     <div id="pubmsg" class="mut" style="font-size:11px;margin-top:8px"></div>`;
+  try{ const f=localStorage.getItem('saga.pubfmt'); if(f&&$('pubfmt'))$('pubfmt').value=f; }catch(e){}
 }
 async function publishVideo(){
   if(!DOC)return;
@@ -1738,30 +1745,30 @@ document.addEventListener('contextmenu',e=>{
 function cardMenu(e,id){
   const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
   const items=[
-    {label:c.min?'expand':'collapse', run:()=>setMin(id,!c.min)},
-    {label:c.label?'rename…':'name…', run:()=>{ openCtx(e,[]);
+    {label:c.min?'Expand':'Collapse', run:()=>setMin(id,!c.min)},
+    {label:c.label?'Rename…':'Name…', run:()=>{ openCtx(e,[]);
        ctxAsk(c.label||'','Maisie discovers the plan','name',v=>setCard(id,{label:v},true)); }},
   ];
-  if(c.label)items.push({label:'clear the name', run:()=>setCard(id,{label:''},true)});
+  if(c.label)items.push({label:'Clear the Name', run:()=>setCard(id,{label:''},true)});
   if(SEL.size>1)items.unshift(
-    {label:`group the ${SEL.size} selected`, run:()=>makeGroup(freeGroupName())},'-');
-  if(c.group)items.push({label:'ungroup', run:()=>popFromGroup(id)});
-  items.push('-',{label:'copy', run:()=>copyCard(id)});
+    {label:`Group the ${SEL.size} Selected`, run:()=>makeGroup(freeGroupName())},'-');
+  if(c.group)items.push({label:'Ungroup', run:()=>popFromGroup(id)});
+  items.push('-',{label:'Copy', run:()=>copyCard(id)});
   openCtx(e,items);
 }
 
 function projMenu(e,name){
   const p=(STATE.projects||[]).find(x=>x.name===name); if(!p)return;
   openCtx(e,[
-    {label:'open', run:()=>openProject(name)},
-    {label:'rename…', run:()=>{ openCtx(e,[]); ctxAsk(p.title,'episode title','rename',
+    {label:'Open', run:()=>openProject(name)},
+    {label:'Rename…', run:()=>{ openCtx(e,[]); ctxAsk(p.title,'episode title','rename',
         t=>renameProject(name,t)); }},
-    {label:'duplicate', run:()=>duplicateProject(name)},
+    {label:'Duplicate', run:()=>duplicateProject(name)},
     '-',
-    {label:'show in Finder', run:()=>reveal(name)},
-    {label:'export…', run:()=>exportOne(name)},
+    {label:'Show in Finder', run:()=>reveal(name)},
+    {label:'Export…', run:()=>exportOne(name)},
     '-',
-    {label:'delete…', danger:true, run:()=>deleteProject(name,p.title)},
+    {label:'Delete…', danger:true, run:()=>deleteProject(name,p.title)},
   ]);
 }
 async function renameProject(name,title){
@@ -1796,15 +1803,15 @@ function profMenu(e,i){
   const n=profNames()[i]; if(!n)return;
   const isDef=n==='Default';
   openCtx(e,[
-    {label:'edit', run:()=>editProfile(n)},
-    {label:'rename…', disabled:isDef, run:()=>{ openCtx(e,[]);
+    {label:'Edit', run:()=>editProfile(n)},
+    {label:'Rename…', disabled:isDef, run:()=>{ openCtx(e,[]);
        ctxAsk(n,'profile name','rename',t=>renameProfile(n,t)); }},
-    {label:'duplicate', run:()=>duplicateProfile(n)},
-    {label:'put back the previous settings',
+    {label:'Duplicate', run:()=>duplicateProfile(n)},
+    {label:'Put Back the Previous Settings',
      disabled:!(((STATE.profiles||{})[n]||{})._history||[]).length,
      run:()=>revertProf(n)},
     '-',
-    {label:isDef?'Default cannot be deleted':'delete…',
+    {label:isDef?'Default cannot be deleted':'Delete…',
      danger:!isDef, disabled:isDef, run:()=>delProfile(n)},
   ]);
 }
@@ -1882,11 +1889,11 @@ const gkey=g=>(DOC?DOC.name:'')+'/'+g;
 const isGmin=g=>!!GMIN[gkey(g)];
 function groupMenu(e,g){
   openCtx(e,[
-    {label:isGmin(g)?'unfold':'fold away', run:()=>toggleGmin(g)},
-    {label:'rename\u2026', run:()=>{ openCtx(e,[]);
+    {label:isGmin(g)?'Unfold':'Fold Away', run:()=>toggleGmin(g)},
+    {label:'Rename\u2026', run:()=>{ openCtx(e,[]);
        ctxAsk(g,'group name','rename',t=>renameGroup(g,t)); }},
     '-',
-    {label:'ungroup all \u2014 the cards stay', run:()=>ungroup(g)},
+    {label:'Ungroup All \u2014 the cards stay', run:()=>ungroup(g)},
   ]);
 }
 async function renameGroup(g,to){
@@ -1930,7 +1937,7 @@ function gbar(c){
       title="${allLocked?'unlock every card in this group':'lock every card in this group'}">${allLocked?'🔒':'🔓'}</button>
     <button class="tiny" onclick="copyGroup('${esc(g)}')"
       title="copy this group — then “+ paste” in any gap puts all ${n} cards back">⧉</button>
-    <button class="tiny" onclick="muteGroup('${esc(g)}')">${allMuted?'unmute':'mute'}</button>
+    <button class="tiny" onclick="muteGroup('${esc(g)}')">${allMuted?'Unmute':'Mute'}</button>
     <button class="tiny" onclick="ungroup('${esc(g)}')" style="color:var(--red)" title="ungroup all — the cards stay where they are">×</button>
   </div>`;
 }
@@ -2075,7 +2082,7 @@ const foldBtn=c=>c.min
   ?`<button class="tiny" onclick="setMin(${c.id},false)" title="expand">▸</button>`
   :`<button class="tiny" onclick="setMin(${c.id},true)"
      title="collapse — easier to drag; right-click the header to name it">▾</button>`;
-const muteBtn=c=>`<button class="tiny" onclick="mute(${c.id},${!c.mute})">${c.mute?'unmute':'mute'}</button>`;
+const muteBtn=c=>`<button class="tiny" onclick="mute(${c.id},${!c.mute})">${c.mute?'Unmute':'Mute'}</button>`;
 const delBtn=id=>`<button class="tiny" onclick="del(${id})" style="color:var(--red)" title="remove this card">×</button>`;
 const lockBtn=c=>`<button class="tiny" onclick="setCard(${c.id},{locked:${!c.locked}},true)"
   style="filter:grayscale(1)${c.locked?'':';opacity:.35'}"
@@ -2114,14 +2121,14 @@ async function minAll(){
   await open_(DOC.name,true);
 }
 const insBar=at=>`<div class="ins">
-    <button class="pb" onclick="pasteCard(${at},event)">+ paste</button>
-    <button onclick="insertCard(${at},'speech',event)" title="insert an empty text card here">+ text</button>
-    <button onclick="insertCard(${at},'voiced',event)" title="insert a card spoken by you, in a character's voice">+ ◎ voiced</button>
-    <button onclick="insertCard(${at},'audio',event)" title="insert a music / sound-effect card here">+ ♪ audio</button>
-    <button onclick="insertCard(${at},'visual',event)" title="insert a picture or film — the stage shows it from here until the next visual">+ ⛶ visual</button>
-    <button onclick="insertCard(${at},'choice',event)" title="insert a choice — the stage stops here and asks; the audiobook walks straight past">+ ⑂ choice</button>
-    <button onclick="insertCard(${at},'group',event)" title="insert a group — a scene with a bar of its own, empty until cards join it; tag the bar and a choice can jump to it">+ ⊞ group</button>
-    <button onclick="insertCard(${at},'silence',event)" title="insert a timed pause here">+ silence</button>
+    <button class="pb" onclick="pasteCard(${at},event)">+ Paste</button>
+    <button onclick="insertCard(${at},'speech',event)" title="insert an empty text card here">+ Text</button>
+    <button onclick="insertCard(${at},'voiced',event)" title="insert a card spoken by you, in a character's voice">+ ◎ Voiced</button>
+    <button onclick="insertCard(${at},'audio',event)" title="insert a music / sound-effect card here">+ ♪ Audio</button>
+    <button onclick="insertCard(${at},'visual',event)" title="insert a picture or film — the stage shows it from here until the next visual">+ ⛶ Visual</button>
+    <button onclick="insertCard(${at},'choice',event)" title="insert a choice — the stage stops here and asks; the audiobook walks straight past">+ ⑂ Choice</button>
+    <button onclick="insertCard(${at},'group',event)" title="insert a group — a scene with a bar of its own, empty until cards join it; tag the bar and a choice can jump to it">+ ⊞ Group</button>
+    <button onclick="insertCard(${at},'silence',event)" title="insert a timed pause here">+ Silence</button>
   </div>`;
 const grip=id=>`<span class="grip" draggable="true" ondragstart="dragStart(event,${id})"
   ondragend="dragEnd()" title="drag to move this card">⠿</span>`;
@@ -2149,9 +2156,9 @@ const tagsUi=c=>`<span class="tags" id="tg${c.id}">${(c.tags||[]).map(t=>
     title="plays only when ${esc(c.when)} holds — click to edit">?${esc(c.when)
     }<i onclick="event.stopPropagation();saveWhen(${c.id},'')" title="always play it">×</i></span>`:''
   }<button class="tiny" onclick="addTag(event,${c.id})"
-    title="tag this ${c.type==='group'?'group — a choice can jump to it as a scene':'card — a label, and somewhere a choice can jump to'}">+tag</button>${
+    title="tag this ${c.type==='group'?'group — a choice can jump to it as a scene':'card — a label, and somewhere a choice can jump to'}">+Tag</button>${
   (c.when||c.type==='group')?'':`<button class="tiny" onclick="editWhen(event,${c.id})"
-    title="play this card only when a condition holds — brave, !met_gertie, coins>=3">+when</button>`}</span>`;
+    title="play this card only when a condition holds — brave, !met_gertie, coins>=3">+When</button>`}</span>`;
 function addTag(ev,id){
   const host=ev.target.parentElement;
   if(host.querySelector('.tagin'))return;
@@ -2233,24 +2240,24 @@ function speechCard(c){return `
       ${runonBtn(c)}
       ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
       <label class="mut dchk" style="font-size:11px"><input type="checkbox" ${SEL.has(c.id)?'checked':''}
-        onchange="pick(${c.id},this.checked)"> discuss</label>
+        onchange="pick(${c.id},this.checked)"> Discuss</label>
     </div>
     <textarea id="t${c.id}" oninput="touched(${c.id})" onblur="flush(${c.id})"
       onfocus="setCur(${c.id})"${c.locked?' readonly':''}${(HEIGHT[c.id]||c.height)?` style="height:${HEIGHT[c.id]||c.height}px"`:''}>${esc(c.text)}</textarea>
     ${(SUBS.has(c.id)||c.sub||c.chain)?subRow(c):''}
     ${DELIV.has(c.id)?delivRow(c):''}
     <div class="act">
-      <button id="pf${c.id}" onclick="playFull(${c.id})" ${c.ready&&!c.mute?'':'disabled'}>▶ full</button>
-      <button id="pv${c.id}" onclick="prev(${c.id})" disabled>preview selected</button>
-      <button id="rb${c.id}" class="pri" onclick="one(${c.id})" ${c.mute?'disabled':''}>render</button>
+      <button id="pf${c.id}" onclick="playFull(${c.id})" ${c.ready&&!c.mute?'':'disabled'}>▶ Full</button>
+      <button id="pv${c.id}" onclick="prev(${c.id})" disabled>Preview Selected</button>
+      <button id="rb${c.id}" class="pri" onclick="one(${c.id})" ${c.mute?'disabled':''}>Render</button>
       ${takeUi(c)}
       <button id="dv${c.id}" class="${Object.keys(c.params||{}).length?'dirty':''}"
         onclick="toggleDeliv(${c.id})"
-        title="change the engine or the delivery for this one card only">delivery</button>
+        title="change the engine or the delivery for this one card only">Delivery</button>
       <button id="sub${c.id}" class="${((c.sub||'').trim()||c.chain)?'dirty':''}" onclick="toggleSub(${c.id})"
-        title="what the stage shows, when that differs from what is spoken — Teide on screen, tay-dee in the booth">subtitle</button>
-      <button onclick="splitAt(${c.id})">split</button>
-      <button onclick="merge(${c.id})">merge next</button>
+        title="what the stage shows, when that differs from what is spoken — Teide on screen, tay-dee in the booth">Subtitle</button>
+      <button onclick="splitAt(${c.id})">Split</button>
+      <button onclick="merge(${c.id})">Merge Next</button>
       <button onclick="dup(${c.id})">duplicate</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
@@ -2281,7 +2288,7 @@ function audioCard(c){
         <option value="">choose a clip…</option>
         ${clips.map(k=>`<option value="${esc(k.name)}" ${k.name===c.clip?'selected':''}>${esc(k.name)} (${fmtSecs(k.secs)})</option>`).join('')}
       </select>
-      <button onclick="pickClip(${c.id})">import a file…</button>
+      <button onclick="pickClip(${c.id})">Import a File…</button>
       <button id="pc${c.id}" onclick="playClip(${c.id})" ${c.ready&&!c.mute?'':'disabled'}>▶ play</button>
     </div>
     <div class="arow">
@@ -2315,7 +2322,7 @@ function audioCard(c){
     ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
     <div class="act">
       <button id="sub${c.id}" class="${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
-        title="a caption for the sound — “(Foghorn blowing)”, “(Music)” — for viewers with the sound off">subtitle</button>
+        title="a caption for the sound — “(Foghorn blowing)”, “(Music)” — for viewers with the sound off">Subtitle</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
@@ -2360,17 +2367,17 @@ function voicedCard(c){
       <span style="flex:1"></span>
       <button onclick="pickPerf(${c.id})">${c.perf?'replace…':'import a recording…'}</button>
       <button id="pk${c.id}" onclick="playPerf(${c.id})" ${c.haveperf?'':'disabled'}
-        title="hear your own recording, before conversion">▶ yours</button>
+        title="hear your own recording, before conversion">▶ Yours</button>
     </div>
     ${(SUBS.has(c.id)||c.sub||c.chain)?subRow(c):''}
     <div class="act">
       <button id="pf${c.id}" onclick="playFull(${c.id})" ${c.ready&&!c.mute?'':'disabled'}
-        title="hear it in the character's voice">▶ in voice</button>
+        title="hear it in the character's voice">▶ In Voice</button>
       <button id="rb${c.id}" class="pri" onclick="one(${c.id})"
-        ${c.mute||!c.haveperf?'disabled':''}>render</button>
+        ${c.mute||!c.haveperf?'disabled':''}>Render</button>
       ${takeUi(c)}
       <button id="sub${c.id}" class="${((c.sub||'').trim()||c.chain)?'dirty':''}" onclick="toggleSub(${c.id})"
-        title="a voiced card has no prose — this is what the stage shows while your performance plays">subtitle</button>
+        title="a voiced card has no prose — this is what the stage shows while your performance plays">Subtitle</button>
       <button onclick="dup(${c.id})">duplicate</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
@@ -2393,7 +2400,7 @@ function silenceCard(c){return `
       <span style="flex:1"></span>
       ${runonBtn(c)}
       <button id="sub${c.id}" class="tiny ${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
-        title="a caption while the rest holds — “(A long silence)” — for viewers with the sound off">subtitle</button>
+        title="a caption while the rest holds — “(A long silence)” — for viewers with the sound off">Subtitle</button>
       ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
     ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
@@ -2433,13 +2440,13 @@ function visualCard(c){
         ${media.map(m=>`<option value="${esc(m.name)}" ${m.name===c.media?'selected':''}>${
           esc(m.name)}${m.kind==='video'?' (film)':''}</option>`).join('')}
       </select>
-      <button onclick="pickMedia(${c.id})">import a file…</button>
+      <button onclick="pickMedia(${c.id})">Import a File…</button>
     </div>
     <div class="arow">${show}</div>
     ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
     <div class="act">
       <button id="sub${c.id}" class="tiny ${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
-        title="a caption over this picture — shown while it stands, typewriter overrides included">subtitle</button>
+        title="a caption over this picture — shown while it stands, typewriter overrides included">Subtitle</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
@@ -2462,7 +2469,7 @@ function choiceCard(c){
       <span class="pill">⑂ choice</span>
       <label class="mut" style="font-size:11px"
         title="no chooser: the first option whose condition passes is taken silently — if/else in one card">
-        <input type="checkbox" ${c.auto?'checked':''} onchange="setAuto(${c.id},this.checked)"> auto</label>
+        <input type="checkbox" ${c.auto?'checked':''} onchange="setAuto(${c.id},this.checked)"> Auto</label>
       ${c.mute?'<span class="pill warn">muted</span>':''}
       ${tagsUi(c)}
       <span style="flex:1"></span>
@@ -2471,9 +2478,9 @@ function choiceCard(c){
     <div id="op${c.id}">${opts.map((o,i)=>optRow(c,o,i)).join('')}</div>
     ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
     <div class="act">
-      <button onclick="addOption(${c.id})">+ option</button>
+      <button onclick="addOption(${c.id})">+ Option</button>
       <button id="sub${c.id}" class="tiny ${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
-        title="the question over the buttons — what the stage shows while it asks">subtitle</button>
+        title="the question over the buttons — what the stage shows while it asks">Subtitle</button>
       <span class="mut" id="ah${c.id}" style="font-size:11px">${
         c.auto?'first passing option is taken silently':'the stage stops here and asks'}</span>
       <span style="flex:1"></span>
@@ -2502,13 +2509,13 @@ function optRow(c,o,i){
     <span class="mut">→</span>
     <select onchange="setOption(${c.id},${i},'goto',this.value)"
       title="where this option jumps — a scene, or any tagged card; empty ends the story">
-      <option value="">(the end)</option>
-      ${groups.length?`<optgroup label="scenes">${groups.map(g=>{
+      <option value="">(The End)</option>
+      ${groups.length?`<optgroup label="Scenes">${groups.map(g=>{
         const t=gfirst.get(g);
         return `<option value="${t?esc(t):'g:'+g.id}" ${t&&t===o.goto?'selected':''
           }>⊞ ${esc(g.gname||'group')}${t?'':' — tags itself'}</option>`;
       }).join('')}</optgroup>`:''}
-      ${rest.length?`<optgroup label="tagged cards">${rest.map(t=>
+      ${rest.length?`<optgroup label="Tagged Cards">${rest.map(t=>
         `<option value="${esc(t)}" ${t===o.goto?'selected':''}>${esc(t)}${esc(hint(t))}</option>`).join('')}</optgroup>`:''}
       ${dangling?`<option value="${esc(o.goto)}" selected>${esc(o.goto)} (missing)</option>`:''}
     </select>
@@ -2664,8 +2671,8 @@ function renderFR(){
     <label class="mut" style="font-size:11px"><input type="checkbox" id="frWhole" checked> whole word</label>
     <label class="mut" style="font-size:11px"><input type="checkbox" id="frCase"> match case</label>
     <label class="mut" style="font-size:11px"><input type="checkbox" id="frRe"> regex</label>
-    <button onclick="frFindAll()">find</button>
-    <button class="pri" id="frGo" onclick="frApply()" disabled>replace all</button>
+    <button onclick="frFindAll()">Find</button>
+    <button class="pri" id="frGo" onclick="frApply()" disabled>Replace All</button>
     <span class="mut" id="frMsg" style="font-size:11.5px"></span>
     <button class="tiny" style="margin-left:auto" onclick="setFR(false)"
       title="close the find bar — ⌘F brings it back">×</button>
@@ -3015,9 +3022,9 @@ function delivRow(c){
     ${knobs}
     <span style="flex:1"></span>
     <button onclick="profileFromCard(${c.id})"
-      title="keep this sound — save it as a profile other cards can use">make profile…</button>
+      title="keep this sound — save it as a profile other cards can use">Make Profile…</button>
     <button onclick="clearParams(${c.id})"
-      ${Object.keys(p).length?'':'disabled'} title="back to whatever the profile says">reset</button>
+      ${Object.keys(p).length?'':'disabled'} title="back to whatever the profile says">Reset</button>
   </div>`;
 }
 async function setParam(id,key,v){
@@ -3051,7 +3058,7 @@ function askName(host, suggested, placeholder, onOk){
   const w=document.createElement('div');
   w.className='askname';
   w.innerHTML=`<input placeholder="${esc(placeholder)}" value="${esc(suggested)}">
-    <button class="pri">save</button><button>cancel</button>`;
+    <button class="pri">Save</button><button>Cancel</button>`;
   host.appendChild(w);
   const inp=w.querySelector('input'), btns=w.querySelectorAll('button');
   const ok=()=>{ const v=inp.value.trim(); if(!v)return inp.focus(); w.remove(); onOk(v); };
@@ -3385,7 +3392,7 @@ async function copyCard(id){
   // The button says so itself: a note in the footer is 900px from where you
   // are looking, and copying is exactly the action that leaves nothing behind.
   const b=$('cp'+id);
-  if(b){ b.textContent='copied'; setTimeout(()=>{ if($('cp'+id)===b)b.textContent='⧉'; },1200); }
+  if(b){ b.textContent='Copied'; setTimeout(()=>{ if($('cp'+id)===b)b.textContent='⧉'; },1200); }
   $('status').textContent=`copied ${clipLabel(CLIP)} — “+ paste” in any gap puts it back`;
 }
 async function copyGroup(g){
@@ -3607,7 +3614,7 @@ if(STAGE)STAGE.onmessage=e=>{
   }
   if(!DOC||m.name!==DOC.name)return;
   if(m.type==='state'){ const b=$('stgplay');
-    if(b)b.textContent=m.playing?'⏸ story':'▶ story'; }
+    if(b)b.textContent=m.playing?'⏸ Story':'▶ Story'; }
   if(m.type==='choices')paintStageChoices(m.opts);
   if(m.type==='playing'&&m.card!=null)followCard(m.card);
   if(m.type==='stopped'){ clearPlaying();
@@ -3659,16 +3666,25 @@ async function storyRename(t){
   t=(t||'').trim(); if(!t||!DOC||t===DOC.title)return;
   await renameProject(DOC.name,t);
 }
-async function newStory(){
-  const t=(prompt('Name the new story:')||'').trim(); if(!t)return;
+// prompt() does not exist in the desktop app, so the ask is a real panel —
+// with the markdown drop target inside it, since importing IS the other way
+// a story begins
+function newStoryPanel(){
+  const p=$('newstory'); p.hidden=!p.hidden;
+  if(!p.hidden){ $('ns_title').value=''; $('ns_title').focus(); }
+}
+async function createStory(){
+  const t=$('ns_title').value.trim();
+  if(!t)return void $('ns_title').focus();
   const slug=t.toLowerCase().replace(/[^a-z0-9_-]+/g,'-').slice(0,60);
   if((STATE.projects||[]).some(p=>p.name===slug))
-    return void($('status').innerHTML='<span class="warn">a story by that name is already here</span>');
+    return void($('status').innerHTML='<span class="warn">A story by that name is already here</span>');
   const r=await api('/api/import',{title:t,markdown:''});
   if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  $('newstory').hidden=true;
   await refresh();
   open_(r.name,true);
-  $('status').innerHTML=`<span class="ok">“${esc(t)}” begins</span> — build it from the + strips`;
+  $('status').innerHTML=`<span class="ok">“${esc(t)}” begins</span> — build it from the + strips below`;
 }
 // Keep the speaking card on screen — the whole point is that when you hear a
 // problem, the card is already in front of you. But do not haul the list about
@@ -3783,7 +3799,8 @@ async function assemble(){
         `<span class="warn">assemble cancelled</span> · `+missChip(miss.length));
   }
   $('status').textContent='assembling…';
-  const r=await api('/api/assemble',{name:DOC.name});
+  const fmt=($('pubfmt')&&$('pubfmt').value)||localStorage.getItem('saga.pubfmt')||'mp3';
+  const r=await api('/api/assemble',{name:DOC.name,fmt});
   $('status').innerHTML=r.ok?`<span class="ok">assembled</span> ${esc(r.file)}${
     r.missing?' · '+missChip(r.missing)+' and left out':''}`
     :'nothing rendered yet';

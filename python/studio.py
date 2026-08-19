@@ -2240,8 +2240,16 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
     return full, sr, missing, marks
 
 
-def assemble(name, gap=0.35):
-    """Mixdown to out/<name>.mp3 — the deliverable."""
+# what assemble() can ship. The mix is mono narration, so lossy stays mono;
+# wav is the untouched master and skips ffmpeg entirely.
+ASSEMBLE_FMTS = {"mp3": ["-codec:a", "libmp3lame", "-b:a", "64k", "-ac", "1"],
+                 "m4a": ["-codec:a", "aac", "-b:a", "96k", "-ac", "1"],
+                 "flac": ["-codec:a", "flac"],
+                 "wav": None}
+
+
+def assemble(name, gap=0.35, fmt="mp3"):
+    """Mixdown to out/<name>.<fmt> — the deliverable."""
     import torchaudio as ta
     full, sr, missing, _ = mixdown(load(name), gap)
     if full is None:
@@ -2250,14 +2258,14 @@ def assemble(name, gap=0.35):
     out.mkdir(exist_ok=True)
     wav = out / f"{name}.wav"
     ta.save(str(wav), full, sr)
-    mp3 = out / f"{name}.mp3"
-    if shutil.which("ffmpeg"):
-        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                        "-i", str(wav), "-codec:a", "libmp3lame", "-b:a", "64k",
-                        "-ac", "1", str(mp3)], check=True)
-        wav.unlink()
-        return mp3, missing
-    return wav, missing
+    codec = ASSEMBLE_FMTS.get(fmt if fmt in ASSEMBLE_FMTS else "mp3")
+    if codec is None or not shutil.which("ffmpeg"):
+        return wav, missing
+    dst = out / f"{name}.{fmt}"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-i", str(wav), *codec, str(dst)], check=True)
+    wav.unlink()
+    return dst, missing
 
 
 def preview_book(name, frm=None, upto=None):
@@ -3826,7 +3834,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "remaining":
                                         _bake["total"] - _bake["done"] - 1})
             if u.path == "/api/assemble":
-                f, missing = assemble(d["name"])
+                f, missing = assemble(d["name"],
+                                      fmt=str(d.get("fmt") or "mp3").lower())
                 return self._send(200, {"ok": bool(f), "file": str(f) if f else None,
                                         "missing": missing})
             if u.path == "/api/publish_video":

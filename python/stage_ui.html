@@ -76,12 +76,12 @@ body.embed #bar,body.mirror #bar{display:none}
   <div id="chooser"></div>
 </div>
 <div id="bar">
-  <span id="title" class="mut">no episode</span>
+  <span id="title" class="mut">No episode</span>
   <span style="flex:1"></span>
   <span id="vars" class="mut" style="font-size:11px"></span>
   <span id="clock" class="mut"></span>
-  <button id="playb" onclick="toggle()">▶ play</button>
-  <button onclick="playFrom(null)" title="back to the top">⟲ from start</button>
+  <button id="playb" onclick="toggle()">▶ Play</button>
+  <button onclick="playFrom(null)" title="back to the top">⟲ From Start</button>
   <span id="dot" title="editor connection"></span>
 </div>
 <script src="/player.js"></script>
@@ -130,7 +130,7 @@ if(BC)BC.onmessage=e=>{
     if(m.name)NAME=m.name;
     if(!AUDIO.paused)pause();
     else if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended&&RUNOFF){
-      AUDIO.play(); $('playb').textContent='⏸ pause'; say({type:'state',playing:true});
+      AUDIO.play(); $('playb').textContent='⏸ Pause'; say({type:'state',playing:true});
     }else story(m.from==null?null:m.from);
   }
   if(m.type==='pause'&&!AUDIO.paused)pause();
@@ -154,7 +154,7 @@ function mirror(m){
 }
 
 async function load(){
-  if(!NAME){ $('title').textContent='no episode — open one in the studio'; return; }
+  if(!NAME){ $('title').textContent='No episode — open one in the studio'; return; }
   DOC=await api('/api/doc?name='+encodeURIComponent(NAME));
   if(!DOC||DOC.error){ DOC=null; $('title').innerHTML=
     '<span class="warn">could not open “'+esc(NAME)+'”</span>'; return; }
@@ -286,7 +286,7 @@ function playRun(tok,from,upto){
       AUDIO.src='/api/book_audio?name='+encodeURIComponent(NAME)+'&t='+Date.now();
       AUDIO.play().then(()=>{ PEND=null; })            // sound granted: wish spent
         .catch(()=>{ RUNOFF=null; res(false); });
-      $('playb').textContent='⏸ pause';
+      $('playb').textContent='⏸ Pause';
       say({type:'state',playing:true});
     })();
   });
@@ -296,7 +296,7 @@ function ask(tok,opts,c){
   return new Promise(res=>{
     if(tok!==TOKEN)return res(null);
     CAPST={txt:'',chain:false};           // a choice breaks the chain
-    $('playb').textContent='▶ play';
+    $('playb').textContent='▶ Play';
     say({type:'state',playing:false});
     // a choice card's subtitle is the question over the buttons
     if(c&&c.sub)caption(c.sub,0,0,false,false);
@@ -327,28 +327,28 @@ function paintVars(){
 }
 
 function ended(reason){
-  $('playb').textContent='▶ play';
+  $('playb').textContent='▶ Play';
   say({type:'state',playing:false});
   caption(''); fxcap('');
   say({type:'stopped',card:MARKS[MARKI]?MARKS[MARKI].id:null});
   const ch=$('chooser');
   ch.innerHTML=(reason&&reason.startsWith('dangling:')
       ?`<span class="warn" style="align-self:center">no card is tagged “${esc(reason.slice(9))}” — the story had nowhere to go</span>`
-      :'')+`<button onclick="story(null)">⟲ once more</button>`;
+      :'')+`<button onclick="story(null)">⟲ Once More</button>`;
   ch.classList.add('on'); $('room').classList.add('choosing');
 }
 
 // ── transport ─────────────────────────────────────────────
 function pause(){
   AUDIO.pause();                       // the run's promise stays pending
-  $('playb').textContent='▶ resume';
+  $('playb').textContent='▶ Resume';
   say({type:'state',playing:false});
   say({type:'stopped',card:MARKS[MARKI]?MARKS[MARKI].id:null});
 }
 function toggle(){
   if(!AUDIO.paused)return pause();
   if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended&&RUNOFF){
-    AUDIO.play(); $('playb').textContent='⏸ pause'; return;   // resume the run
+    AUDIO.play(); $('playb').textContent='⏸ Pause'; return;   // resume the run
   }
   story(PEND);      // an ungranted "play from card N" wish is honoured here
 }
@@ -358,7 +358,7 @@ function stop(){
   if(RUNOFF){ const f=RUNOFF; RUNOFF=null; f(); }
   if(ASKOFF){ const f=ASKOFF; ASKOFF=null; f(); }
   AUDIO.pause(); hideChooser();
-  $('playb').textContent='▶ play';
+  $('playb').textContent='▶ Play';
   say({type:'state',playing:false});
 }
 function playFrom(from){ story(from); }
