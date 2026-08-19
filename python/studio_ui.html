@@ -867,8 +867,15 @@ function keepPlace(a,was){
 }
 
 async function open_(name,quiet,anchor){
+  const wasName=DOC&&DOC.name;
   DOC=await api('/api/doc?name='+encodeURIComponent(name));
   $('hdr').textContent=DOC.title+' · '+DOC.chunks.length+' chunks';
+  // a different story in the editor is a different story on the stage, and
+  // it must be told NOW — mid-ride included — or the old one keeps playing
+  // and the next ▶ resumes it. Same-name rebuilds stay quiet: the stage
+  // fetches its own fresh copy per ride, and stomping its DOC mid-ride
+  // would pull the cards out from under the marks.
+  if(STAGE&&wasName!==DOC.name)STAGE.postMessage({type:'open',name:DOC.name});
   drawDraftBar();
   // Measured while the old stack is still on screen. Only for an in-place
   // rebuild: opening another document should start at its top, not at the

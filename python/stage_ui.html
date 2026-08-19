@@ -154,14 +154,19 @@ if(BC)BC.onmessage=e=>{
   if(m.type==='frame'&&!EMBED)return void mirror(m);   // an owner is painting
   if(m.type==='choose')return void(CHOOSE&&CHOOSE(m.i));
   if(MIRROR)return;                    // a mirror obeys no transport of its own
-  if(m.type==='open'&&m.name){ if(m.name!==NAME)stop(); NAME=m.name; load(); }
+  if(m.type==='open'&&m.name){ if(m.name!==NAME)switchStory(m.name); else load(); }
   if(!EMBED&&m.to==='embed')return;    // addressed transport is the embed's alone
   if(m.type==='cur')idleShow(m.card);
   if(m.type==='stop')stop();
-  if(m.type==='play'){ if(m.name)NAME=m.name; story(m.from==null?null:m.from); }
+  if(m.type==='play'){
+    if(m.name&&m.name!==NAME)switchStory(m.name);
+    story(m.from==null?null:m.from);
+  }
   if(m.type==='toggle'){
-    if(m.name)NAME=m.name;
-    if(!AUDIO.paused)pause();
+    // a different story behind the same button is a switch, never a resume —
+    // the paused ride belongs to the old episode and must not speak for this one
+    if(m.name&&m.name!==NAME){ switchStory(m.name); story(m.from==null?null:m.from); }
+    else if(!AUDIO.paused)pause();
     else if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended&&RUNOFF){
       AUDIO.play(); $('playb').textContent='⏸ Pause'; say({type:'state',playing:true});
     }else story(m.from==null?null:m.from);
@@ -406,6 +411,16 @@ function stop(){
   AUDIO.pause(); hideChooser();
   $('playb').textContent='▶ Play';
   say({type:'state',playing:false});
+}
+// A different story arriving — by open, play or toggle — ends the old ride
+// completely: its pause, its pending wish, its flags, its audio. Nothing of
+// one episode may leak into another's playback, and the resume branch must
+// never find yesterday's episode still loaded in the deck.
+function switchStory(n){
+  stop();
+  AUDIO.removeAttribute('src');        // no src, no stale resume
+  VARS={}; PEND=null; paintVars();
+  NAME=n; load();
 }
 function playFrom(from){ story(from); }
 
