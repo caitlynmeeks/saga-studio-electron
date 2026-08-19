@@ -15,6 +15,11 @@ const config = require('./lib/config')
 const paths = require('./lib/paths')
 const buildMenu = require('./lib/menu')
 
+// The stage may make sound the moment the editor asks it to — in the app we
+// own the browser, so the autoplay veil that guards a plain Chrome pop-out
+// never appears here.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+
 let win = null
 let starting = false
 
