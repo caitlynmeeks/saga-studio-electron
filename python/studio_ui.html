@@ -834,7 +834,7 @@ async function refresh(){
     $('stopb').disabled=false; $('stopb').textContent='Stop Rendering';
     if(WASBAKING){ WASBAKING=false;
       $('status').innerHTML = b.error
-        ? `<span class="warn">rendering stopped at ${b.done}/${b.total} — ${esc(b.error)}</span>`
+        ? `<span class="warn">rendered ${b.done}/${b.total} — ${esc(b.error)}</span>`
         : b.stopped
         ? `<span class="warn">rendering stopped at ${b.done}/${b.total}</span> — press it again to resume`
         : b.total

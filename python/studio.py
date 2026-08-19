@@ -1469,6 +1469,23 @@ def _cb_vc(src, voice, seed, dest):
                             "seed": int(seed or 0), "out": str(dest)})
 
 
+def _nothing_to_say(spoken):
+    """True when the text strips to nothing a voice could say — blank, only
+    scene marks, only zero-width characters. The engines throw cryptic errors
+    on such input (kokoro: "need at least one array to concatenate")."""
+    return not re.sub(r"[\s\u200b-\u200d\u2060\ufeff]", "", spoken)
+
+
+def _write_silence(dest, secs=0.3, sr=24000):
+    """What a card with nothing to say renders to: a beat of silence. A lone
+    scene mark or a blank line an import kept is a breath the author drew on
+    purpose — or a card they will delete on sight — and neither should stop
+    a bake with an engine's stack trace."""
+    import numpy as np
+    import soundfile as sf
+    sf.write(str(dest), np.zeros(int(sr * secs), dtype=np.float32), sr)
+
+
 def voice_file(name):
     if not name:
         raise FileNotFoundError("this profile has no voice clip yet — add one "
@@ -2179,7 +2196,10 @@ def render_kokoro(c, doc, force=False):
     spoken = c["text"].replace("❦", " ").strip()      # scene mark: silent
     tmp = dest.with_name(dest.stem + ".tmp.wav")
     try:
-        _kokoro_gen(spoken, p, tmp)
+        if _nothing_to_say(spoken):
+            _write_silence(tmp)
+        else:
+            _kokoro_gen(spoken, p, tmp)
         tmp.rename(dest)                   # atomic, as everywhere else here
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -2201,7 +2221,10 @@ def render_omnivoice(c, doc, force=False):
     spoken = c["text"].replace("❦", " ").strip()      # scene mark: silent
     tmp = dest.with_name(dest.stem + ".tmp.wav")
     try:
-        _ov_gen(spoken, p, tmp)
+        if _nothing_to_say(spoken):
+            _write_silence(tmp)
+        else:
+            _ov_gen(spoken, p, tmp)
         tmp.rename(dest)                   # atomic, as everywhere else here
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -2235,7 +2258,10 @@ def render(c, doc, force=False):
     spoken = c["text"].replace("❦", " ").strip()      # scene mark: silent
     tmp = dest.with_name(dest.stem + ".tmp.wav")
     try:
-        _cb_gen(spoken, p, c.get("seed"), tmp)
+        if _nothing_to_say(spoken):
+            _write_silence(tmp)
+        else:
+            _cb_gen(spoken, p, c.get("seed"), tmp)
         tmp.rename(dest)                   # atomic: no half-written cache entries
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -2266,6 +2292,11 @@ def render_preview(c, doc, force=False, text=None):
     dest = AUDIO / f"{h}.wav"
     if dest.exists() and not force:
         return h, True, spoken
+    if _nothing_to_say(spoken):
+        tmp = dest.with_name(dest.stem + ".tmp.wav")
+        _write_silence(tmp)
+        tmp.rename(dest)
+        return h, False, spoken
     if p["engine"] == "kokoro":
         tmp = dest.with_name(dest.stem + ".tmp.wav")
         try:
@@ -2358,6 +2389,7 @@ def bake(name):
             and not (AUDIO / f"{chunk_hash(c, doc)}.wav").exists()]
     _bake.update(running=True, done=0, total=len(todo), project=name, label="",
                  cancel=False, stopped=False, error="")
+    fails = []
     try:
         for c in todo:
             if _bake["cancel"]:
@@ -2368,15 +2400,23 @@ def bake(name):
             try:
                 render_any(c, doc)
             except Exception as ex:
-                # A bake must never die silently. One card's failure usually
-                # means every card's failure — a missing engine, a missing
-                # voice — so stop here and put the reason where the status
-                # line reads it, rather than grinding through the rest.
-                _bake.update(stopped=True,
-                             error=f"card #{c['id']}: {type(ex).__name__}: {ex}")
-                break
+                # A bake must never die silently — but one strange card must
+                # not stop the other 139 either. A card's failure is noted
+                # and the bake walks on; the SAME failure twice running is
+                # systemic — a missing engine, a dead worker — and every
+                # further card would only repeat it, or wait minutes to.
+                msg = f"{type(ex).__name__}: {ex}"
+                fails.append((c["id"], msg))
+                if len(fails) >= 2 and fails[-2][1] == msg:
+                    _bake["stopped"] = True
+                    break
+                continue
             _bake["done"] += 1
     finally:
+        if fails:
+            shown = "; ".join(f"card #{i}: {m}" for i, m in fails[:3])
+            _bake["error"] = (f"{len(fails)} card(s) failed — {shown}"
+                              + (" …" if len(fails) > 3 else ""))
         _bake.update(running=False, label="", cancel=False)
 
 
