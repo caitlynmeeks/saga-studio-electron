@@ -9,6 +9,7 @@
   "private": true,
   "scripts": {
     "start": "electron .",
+    "runtime": "bash scripts/prepare-runtime.sh",
     "dist": "electron-builder"
   },
   "devDependencies": {
@@ -17,6 +18,7 @@
   "build": {
     "appId": "wtf.caity.sagastudio",
     "productName": "Saga Studio",
+    "asar": false,
     "files": [
       "main.js",
       "preload.js",
@@ -28,17 +30,23 @@
       "python/player.js",
       "python/export_player.html",
       "python/omnivoice_server.py",
+      "python/chatterbox_server.py",
       "python/saga_mcp.py",
       "python/discuss_rules.md",
       "python/requirements.txt"
     ],
+    "extraResources": [
+      { "from": "build/runtime/python", "to": "python" },
+      { "from": "build/runtime/uv", "to": "uv" },
+      { "from": "build/models", "to": "models" }
+    ],
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
-        "dmg",
-        "zip"
+        "dmg"
       ],
-      "icon": "build/icon.icns"
+      "icon": "build/icon.icns",
+      "identity": null
     },
     "directories": {
       "output": "dist"

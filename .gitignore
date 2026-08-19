@@ -5,3 +5,5 @@ python/__pycache__/
 *.log
 .DS_Store
 build/icon.iconset/
+build/runtime/
+build/models/
