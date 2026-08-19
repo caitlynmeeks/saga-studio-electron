@@ -2652,8 +2652,14 @@ def assemble(name, gap=0.35, fmt="mp3"):
     if codec is None or not shutil.which("ffmpeg"):
         return wav, missing
     dst = out / f"{name}.{fmt}"
-    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                    "-i", str(wav), *codec, str(dst)], check=True)
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                        "-i", str(wav), *codec, str(dst)],
+                       capture_output=True, text=True)
+    if r.returncode:
+        # the wav master is whole — leave it, name it, and say what happened
+        raise RuntimeError("ffmpeg could not encode " + fmt + ": "
+                           + (r.stderr or "").strip()[-300:]
+                           + f" — the wav master is at {wav}")
     wav.unlink()
     return dst, missing
 

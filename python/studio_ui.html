@@ -1795,28 +1795,30 @@ function renderPublish(){
 async function publishVideo(){
   if(!DOC)return;
   const b=$('pubvid'); b.classList.add('busy'); b.disabled=true;
-  $('pubmsg').textContent='mixing and encoding — a long episode takes a minute…';
-  const r=await api('/api/publish_video',{name:DOC.name,height:+$('pubheight').value});
+  pubSay('<span class="warn">exporting the animatic — mixing and encoding takes a minute…</span>');
+  let r; try{ r=await api('/api/publish_video',{name:DOC.name,height:+$('pubheight').value}); }
+  catch(ex){ r={error:String(ex)}; }
   b.classList.remove('busy'); b.disabled=false;
-  if(r.error)return void($('pubmsg').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
-  $('pubmsg').innerHTML=`<span class="ok">done</span> — ${r.frames} still${
+  if(r.error)return void pubSay(`<span class="warn">video export failed — ${esc(r.error)}</span>`);
+  pubSay(`<span class="ok">animatic done</span> — ${r.frames} still${
     r.frames===1?'':'s'}, ${size(r.bytes)}${r.missing
       ?`, <span class="warn">${r.missing} unrendered card${r.missing===1?'':'s'} skipped</span>`:''}
     · <a href="/api/download_video?name=${encodeURIComponent(DOC.name)}">download</a>
-    · <a href="#" onclick="revealOut();return false">show in Finder</a>`;
+    · <a href="#" onclick="revealOut();return false">show in Finder</a>`);
 }
 async function publishWeb(){
   if(!DOC)return;
   const b=$('pubweb'); b.classList.add('busy'); b.disabled=true;
-  $('pubmsg').textContent='mixing every stretch and packing the folder…';
-  const r=await api('/api/publish_html',{name:DOC.name});
+  pubSay('<span class="warn">exporting the web story — mixing every stretch and packing the folder…</span>');
+  let r; try{ r=await api('/api/publish_html',{name:DOC.name}); }
+  catch(ex){ r={error:String(ex)}; }
   b.classList.remove('busy'); b.disabled=false;
-  if(r.error)return void($('pubmsg').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
-  $('pubmsg').innerHTML=`<span class="ok">done</span> — ${r.segments} stretch${
+  if(r.error)return void pubSay(`<span class="warn">web export failed — ${esc(r.error)}</span>`);
+  pubSay(`<span class="ok">web story done</span> — ${r.segments} stretch${
     r.segments===1?'':'es'} of audio, ${size(r.bytes)} zipped${r.missing
       ?`, <span class="warn">${r.missing} unrendered card${r.missing===1?'':'s'} skipped</span>`:''}
     · <a href="/api/download_web?name=${encodeURIComponent(DOC.name)}">download</a>
-    · <a href="#" onclick="revealOut();return false">show in Finder</a>`;
+    · <a href="#" onclick="revealOut();return false">show in Finder</a>`);
 }
 
 // ── right-click menus ─────────────────────────────────────
@@ -4044,30 +4046,43 @@ function jumpUnrendered(){
     ` · showing #${c.id}, ${MISSI+1} of ${m.length} — click again for the next`;
 }
 
+// Every export reports to the same place the bake does — the status line at
+// the bottom — as well as the publish pane's own message. And nothing here
+// may fail into silence: a thrown fetch, a 500, an early bail all say so.
+function pubSay(h){
+  $('status').innerHTML=h;
+  const m=$('pubmsg'); if(m)m.innerHTML=h;
+}
 async function assemble(){
   if(!DOC)return;
-  // A card you edited a moment ago is stale even if the screen has not caught
-  // up, and a bake may have finished since the last look — ask the server what
-  // is really rendered before counting.
-  await flushAll(); await syncCards();
-  const miss=unrendered();
-  if(miss.length){
-    const list=miss.slice(0,12).map(c=>'#'+c.id+(c.type==='audio'?' (no clip)'
-      :c.type==='voiced'?(c.haveperf?' (voiced, not rendered)':' (no recording)'):'')).join(', ')
-      +(miss.length>12?`, and ${miss.length-12} more`:'');
-    if(!confirm(
-      `${miss.length} live card${miss.length>1?'s have':' has'} not been rendered:\n\n${list}\n\n`+
-      `They will be missing from the audiobook.\n\n`+
-      `OK to assemble without them — or Cancel and press Render Stale Cards first.`))
-      return void($('status').innerHTML=
-        `<span class="warn">assemble cancelled</span> · `+missChip(miss.length));
+  pubSay('assembling — checking what is rendered…');
+  try{
+    // A card you edited a moment ago is stale even if the screen has not
+    // caught up, and a bake may have finished since the last look — ask the
+    // server what is really rendered before counting.
+    await flushAll(); await syncCards();
+    const miss=unrendered();
+    if(miss.length){
+      const list=miss.slice(0,12).map(c=>'#'+c.id+(c.type==='audio'?' (no clip)'
+        :c.type==='voiced'?(c.haveperf?' (voiced, not rendered)':' (no recording)'):'')).join(', ')
+        +(miss.length>12?`, and ${miss.length-12} more`:'');
+      if(!confirm(
+        `${miss.length} live card${miss.length>1?'s have':' has'} not been rendered:\n\n${list}\n\n`+
+        `They will be missing from the audiobook.\n\n`+
+        `OK to assemble without them — or Cancel and press Render Stale Cards first.`))
+        return void pubSay(`<span class="warn">assemble cancelled</span> · `+missChip(miss.length));
+    }
+    pubSay('<span class="warn">assembling the audiobook — a long episode takes a minute…</span>');
+    const fmt=($('pubfmt')&&$('pubfmt').value)||localStorage.getItem('saga.pubfmt')||'mp3';
+    const r=await api('/api/assemble',{name:DOC.name,fmt});
+    pubSay(r.ok?`<span class="ok">assembled</span> ${esc(r.file)}${
+        r.missing?' · '+missChip(r.missing)+' and left out':''}
+        · <a href="#" onclick="revealOut();return false">show in Finder</a>`
+      :r.error?`<span class="warn">assemble failed — ${esc(r.error)}</span>`
+      :'nothing rendered yet — render some cards first');
+  }catch(ex){
+    return void pubSay(`<span class="warn">assemble failed — ${esc(String(ex))}</span>`);
   }
-  $('status').textContent='assembling…';
-  const fmt=($('pubfmt')&&$('pubfmt').value)||localStorage.getItem('saga.pubfmt')||'mp3';
-  const r=await api('/api/assemble',{name:DOC.name,fmt});
-  $('status').innerHTML=r.ok?`<span class="ok">assembled</span> ${esc(r.file)}${
-    r.missing?' · '+missChip(r.missing)+' and left out':''}`
-    :'nothing rendered yet';
   open_(DOC.name,true); }
 
 // ── discuss ───────────────────────────────────────────────
