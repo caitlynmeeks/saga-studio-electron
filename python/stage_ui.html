@@ -31,9 +31,14 @@ object-fit:contain;background:#000}
 #caption,#fxcap,#chooser,#gate{z-index:1}
 /* the dark room says it is dark on purpose — and steps aside the moment
    anything at all is on: a picture, a caption, a sound line, a chooser */
-#empty{position:absolute;inset:0;display:flex;align-items:center;
-justify-content:center;color:var(--dim);font-size:13px;text-align:center;
-padding:0 10vw;line-height:1.7}
+#empty{position:absolute;inset:0;display:flex;flex-direction:column;gap:14px;
+align-items:center;justify-content:center;color:var(--dim);font-size:13px;
+text-align:center;padding:0 10vw;line-height:1.7}
+/* the house wordmark, faint on the dark — a placeholder image can take this
+   spot someday, but the room should never be plain black */
+#empty::before{content:"SAGA STUDIO";font-family:var(--mono);
+font-size:clamp(18px,3.2vw,30px);letter-spacing:.45em;padding-left:.45em;
+color:var(--fg);opacity:.14}
 #room:has(img,video) #empty,#room:has(#caption.on) #empty,
 #room:has(#fxcap.on) #empty,#room:has(#chooser.on) #empty{display:none}
 #caption{position:absolute;left:0;right:0;bottom:26px;text-align:center;

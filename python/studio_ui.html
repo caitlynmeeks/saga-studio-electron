@@ -1755,29 +1755,27 @@ function renderPublish(){
     <h2>Audiobook</h2>
     <div class="mut" style="font-size:11px">Cards top to bottom, choices walked
       straight past. The file lands in out/.</div>
-    <div style="display:flex;gap:5px;margin-top:6px;align-items:center">
-      <select id="pubfmt" onchange="try{localStorage.setItem('saga.pubfmt',this.value)}catch(e){}">
-        <option value="mp3">MP3 — small, plays everywhere</option>
-        <option value="m4a">M4A — AAC, audiobook apps</option>
-        <option value="flac">FLAC — lossless</option>
-        <option value="wav">WAV — the raw master</option>
-      </select>
-      <button onclick="assemble()">Assemble</button>
-    </div>
+    <select id="pubfmt" style="width:100%;margin-top:6px"
+      onchange="try{localStorage.setItem('saga.pubfmt',this.value)}catch(e){}">
+      <option value="mp3">MP3 — small, plays everywhere</option>
+      <option value="m4a">M4A — AAC, audiobook apps</option>
+      <option value="flac">FLAC — lossless</option>
+      <option value="wav">WAV — the raw master</option>
+    </select>
+    <button onclick="assemble()" style="width:100%;margin-top:5px">Assemble Audiobook</button>
     <h2 style="margin-top:16px">Animatic Video</h2>
     <div class="mut" style="font-size:11px">${nvis
       ?nvis+' visual'+(nvis===1?'':'s')+' as stills under the audiobook’s audio; film contributes its first frame.'
       :'No visual cards yet — the film would be a black screen with a soundtrack.'}</div>
-    <div style="display:flex;gap:5px;margin-top:6px;align-items:center">
-      <select id="pubheight"><option value="720">720p</option>
-        <option value="1080" selected>1080p</option></select>
-      <button id="pubvid" onclick="publishVideo()">Export Video</button>
-    </div>
+    <select id="pubheight" style="width:100%;margin-top:6px">
+      <option value="720">720p</option>
+      <option value="1080" selected>1080p</option></select>
+    <button id="pubvid" onclick="publishVideo()" style="width:100%;margin-top:5px">Export Video</button>
     <h2 style="margin-top:16px">Web Story</h2>
     <div class="mut" style="font-size:11px">A folder of HTML that plays offline —
       visuals, captions${nch?', and its '+nch+' choice'+(nch===1?'':'s'):''}.
       Unzip anywhere, open index.html.</div>
-    <button id="pubweb" onclick="publishWeb()" style="margin-top:6px">Export Web Story</button>
+    <button id="pubweb" onclick="publishWeb()" style="width:100%;margin-top:6px">Export Web Story</button>
     <div id="pubmsg" class="mut" style="font-size:11px;margin-top:8px"></div>`;
   try{ const f=localStorage.getItem('saga.pubfmt'); if(f&&$('pubfmt'))$('pubfmt').value=f; }catch(e){}
 }

@@ -68,7 +68,10 @@ function createWindow () {
         overrideBrowserWindowOptions: {
           backgroundColor: '#000000',
           width: 1280,
-          height: 800
+          height: 800,
+          // the only child the server opens is the stage, and a stage that
+          // slips behind the editor is a stage you forget is playing
+          alwaysOnTop: true
         }
       }
     }
