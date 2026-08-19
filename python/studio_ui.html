@@ -333,7 +333,7 @@ body[data-panel=off]{grid-template-columns:270px 1fr}
 body[data-panel=off] #right{display:none}
 /* "send this as context" only means something while discuss is the visible tab */
 body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
-#chatb.on,#frb.on{border-color:var(--green);color:var(--green)}
+#chatb.on,#frb.on,#dockb.on,#followb.on{border-color:var(--green);color:var(--green)}
 /* take stepper: which roll of the dice this card is speaking */
 .take{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--line);
   border-radius:5px;padding:0 2px;margin-left:2px}
@@ -530,6 +530,8 @@ Selected cards go along as context.</div></div>
   <button onclick="rewind()" title="Jump to the top card — the next ▶ starts there">⏮</button>
   <button id="stgplay" onclick="stageToggle()"
     title="Play the story — from the selected card, with its last ride’s flags; pauses and resumes">▶ Story</button>
+  <button id="followb" onclick="toggleFollow()"
+    title="Follow the story — the list scrolls to keep the speaking card on screen. Off, or while you are typing in a card, it stays where you are">Follow</button>
   <span id="stgask"></span>
   <span class="mut" id="status"></span>
   <span style="flex:1"></span>
@@ -3042,19 +3044,23 @@ function subRow(c){
       title="don’t clear this caption when the card ends — the next caption appends to it, one growing block across cards split for delivery. Silences and sound clips in between leave it standing.">
       <input type="checkbox" ${c.chain?'checked':''}
         onchange="setCard(${c.id},{chain:this.checked});paintSubBtn(${c.id})"> ⇢ chain</label>`}
-    ${(fx||c.type==='choice')?'':`<select style="max-width:88px;flex:none"
-      title="typewriter for this card — “story” follows the story settings"
+    ${(fx||c.type==='choice')?'':`<span class="lbl" style="width:auto"
+      title="the typewriter effect — this card’s caption revealed letter by letter on the stage. “as story” follows the story settings">⌨ typing</span>
+    <select style="flex:none"
+      title="the typewriter effect for this card — “as story” follows the story settings"
       onchange="setCard(${c.id},{tw:this.value===''?null:+this.value})">
-      <option value="">⌨ story</option>
-      <option value="1" ${c.tw===1?'selected':''}>⌨ on</option>
-      <option value="0" ${c.tw===0?'selected':''}>⌨ off</option>
+      <option value="">as story</option>
+      <option value="1" ${c.tw===1?'selected':''}>on</option>
+      <option value="0" ${c.tw===0?'selected':''}>off</option>
     </select>
-    <select style="max-width:88px;flex:none"
-      title="the typing sound while this card’s caption reveals"
+    <span class="lbl" style="width:auto"
+      title="the typing sound while this card’s caption reveals">keys</span>
+    <select style="flex:none"
+      title="the typing sound while this card’s caption reveals — “as story” follows the story settings"
       onchange="setCard(${c.id},{twsfx:this.value===''?null:+this.value})">
-      <option value="">keys: story</option>
-      <option value="1" ${c.twsfx===1?'selected':''}>keys: on</option>
-      <option value="0" ${c.twsfx===0?'selected':''}>keys: off</option>
+      <option value="">as story</option>
+      <option value="1" ${c.twsfx===1?'selected':''}>on</option>
+      <option value="0" ${c.twsfx===0?'selected':''}>off</option>
     </select>`}
   </div>`;
 }
@@ -3908,13 +3914,30 @@ async function createStory(){
 // Keep the speaking card on screen — the whole point is that when you hear a
 // problem, the card is already in front of you. But do not haul the list about
 // on every card: only move when it has drifted out of the comfortable middle,
-// or following along becomes seasickness.
+// or following along becomes seasickness. And never while your hands are in a
+// card, or with Follow toggled off — the highlight still walks, the list
+// stays where you put it.
+let FOLLOW=true;
+try{ FOLLOW=localStorage.getItem('saga.follow')!=='0'; }catch(e){}
+function toggleFollow(){
+  FOLLOW=!FOLLOW;
+  try{ localStorage.setItem('saga.follow',FOLLOW?'1':'0'); }catch(e){}
+  paintFollow();
+  $('status').textContent=FOLLOW
+    ?'following the story — the speaking card stays on screen'
+    :'staying put — the highlight still moves, the list does not';
+}
+function paintFollow(){ const b=$('followb'); if(b)b.classList.toggle('on',FOLLOW); }
+paintFollow();
 function followCard(id){
   clearPlaying();
   const el=$('c'+id); if(!el)return;
   el.classList.add('playing');
   const c=DOC&&DOC.chunks.find(x=>x.id===id);
   if(c&&!c.ready&&c.type!=='silence')el.classList.add('nores');   // the chime you just heard
+  if(!FOLLOW)return;
+  const ae=document.activeElement;                 // typing beats following
+  if(ae&&(ae.tagName==='TEXTAREA'||ae.tagName==='INPUT'))return;
   const m=$('main'), r=el.getBoundingClientRect(), mr=m.getBoundingClientRect();
   if(r.top<mr.top+50||r.bottom>mr.bottom-50)
     el.scrollIntoView({block:'center',behavior:'smooth'});
