@@ -63,6 +63,10 @@ border-radius:5px;padding:3px 11px;font:12px var(--mono);cursor:pointer}
 .mut{color:var(--dim)}.warn{color:var(--amber)}
 #dot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none}
 #dot.on{background:var(--green)}
+/* embedded in the editor (the Game view) or mirroring another stage: pure
+   picture — the editor carries the transport, so the bar has no business here */
+body.embed,body.mirror{grid-template-rows:1fr}
+body.embed #bar,body.mirror #bar{display:none}
 </style>
 </head>
 <body>
@@ -72,13 +76,9 @@ border-radius:5px;padding:3px 11px;font:12px var(--mono);cursor:pointer}
   <div id="chooser"></div>
 </div>
 <div id="bar">
-  <b>STAGE</b>
   <span id="title" class="mut">no episode</span>
   <span style="flex:1"></span>
   <span id="vars" class="mut" style="font-size:11px"></span>
-  <label class="mut" style="font-size:11px" title="reveal captions at the pace of the audio">
-    <input type="checkbox" id="twk" onchange="try{localStorage.setItem('saga.stage.tw',this.checked?'1':'')}catch(e){}">
-    typewriter</label>
   <span id="clock" class="mut"></span>
   <button id="playb" onclick="toggle()">▶ play</button>
   <button onclick="playFrom(null)" title="back to the top">⟲ from start</button>
@@ -92,6 +92,16 @@ async function api(p,b){const r=await fetch(p,b?{method:'POST',body:JSON.stringi
   try{return await r.json()}catch(e){return{error:'bad reply'}}}
 
 const qs=new URLSearchParams(location.search);
+// The embed — the editor's Game view — is the one true player: it lives in a
+// same-origin iframe, so the editor's own clicks satisfy autoplay and it
+// never needs a gesture of its own. Every OTHER stage (a pop-out on the
+// second monitor, a plain tab) becomes a mirror the moment an owner paints:
+// it shows the owner's frames, forwards choice clicks, and never makes a
+// sound of its own — one clock, one voice, many walls. A stage that never
+// hears an owner stays what it always was: a standalone player with a bar.
+const EMBED=qs.has('embed');
+if(EMBED)document.body.classList.add('embed');
+let MIRROR=false;
 let NAME=qs.get('name')||'';
 let DOC=null;              // the open episode, as /api/doc tells it
 let MARKS=[], MARKI=-1;    // card start times of the playing stretch
@@ -109,12 +119,39 @@ if(BC)BC.onmessage=e=>{
   const m=e.data||{};
   $('dot').classList.add('on');
   if(m.type==='hello')return;
-  // same name included: "open" means "look again", not only "look elsewhere"
+  if(m.type==='frame'&&!EMBED)return void mirror(m);   // an owner is painting
+  if(m.type==='choose')return void(CHOOSE&&CHOOSE(m.i));
+  if(MIRROR)return;                    // a mirror obeys no transport of its own
   if(m.type==='open'&&m.name){ if(m.name!==NAME)stop(); NAME=m.name; load(); }
+  if(!EMBED&&m.to==='embed')return;    // addressed transport is the embed's alone
+  if(m.type==='cur')idleShow(m.card);
   if(m.type==='play'){ if(m.name)NAME=m.name; story(m.from==null?null:m.from); }
+  if(m.type==='toggle'){
+    if(m.name)NAME=m.name;
+    if(!AUDIO.paused)pause();
+    else if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended&&RUNOFF){
+      AUDIO.play(); $('playb').textContent='⏸ pause'; say({type:'state',playing:true});
+    }else story(m.from==null?null:m.from);
+  }
   if(m.type==='pause'&&!AUDIO.paused)pause();
 };
 say({type:'hello'});
+// what a mirror does: paint whatever the owner says is on its wall
+function mirror(m){
+  if(!MIRROR){ MIRROR=true; document.body.classList.add('mirror'); stop(); }
+  if('media'in m)showMedia(m.media,m.kind);
+  if('cap'in m)caption(m.cap,m.secs,m.from,m.tw,false);
+  if('fx'in m)fxcap(m.fx);
+  if('opts'in m){
+    const ch=$('chooser');
+    if(!m.opts){ ch.classList.remove('on'); ch.onclick=null; $('room').classList.remove('choosing'); }
+    else{
+      ch.innerHTML=m.opts.map((o,i)=>`<button data-i="${i}">${esc(o)||'…'}</button>`).join('');
+      ch.classList.add('on'); $('room').classList.add('choosing');
+      ch.onclick=ev=>{ const b=ev.target.closest('button'); if(b)say({type:'choose',i:+b.dataset.i}); };
+    }
+  }
+}
 
 async function load(){
   if(!NAME){ $('title').textContent='no episode — open one in the studio'; return; }
@@ -135,12 +172,16 @@ const card=id=>DOC&&DOC.chunks.find(c=>c.id===id);
 function show(c){
   if(SHOWN&&c&&SHOWN.id===c.id)return;
   SHOWN=c||null;
+  showMedia(c&&c.media,c&&c.mediakind);
+  if(EMBED)say({type:'frame',media:c?c.media:null,kind:c?c.mediakind:''});
+}
+function showMedia(media,kind){
   const room=$('room');
   room.querySelectorAll('img,video').forEach(el=>el.remove());
-  if(!c||!c.media)return;
-  const url='/api/media?f='+encodeURIComponent(c.media);
+  if(!media)return;
+  const url='/api/media?f='+encodeURIComponent(media);
   let el;
-  if(c.mediakind==='video'){
+  if(kind==='video'){
     el=document.createElement('video');
     el.src=url; el.muted=true; el.playsInline=true;
     el.play().catch(()=>{});      // muted film is exempt from autoplay policy
@@ -153,17 +194,39 @@ function show(c){
   room.insertBefore(el,$('caption'));
 }
 
+// the typing sound: a soft key-click per revealed character, rate-limited so
+// fast captions clatter instead of buzzing. WebAudio, made on the spot — no
+// asset, no request; if the context is not allowed yet, silence, no error.
+let ACTX=null, LASTTK=0;
+function keyclick(){
+  const now=performance.now();
+  if(now-LASTTK<45)return;
+  LASTTK=now;
+  try{
+    ACTX=ACTX||new (window.AudioContext||window.webkitAudioContext)();
+    if(ACTX.state==='suspended')ACTX.resume();
+    const o=ACTX.createOscillator(), g=ACTX.createGain();
+    o.type='square'; o.frequency.value=1500+Math.random()*900;
+    g.gain.setValueAtTime(.022,ACTX.currentTime);
+    g.gain.exponentialRampToValueAtTime(.0001,ACTX.currentTime+.03);
+    o.connect(g); g.connect(ACTX.destination);
+    o.start(); o.stop(ACTX.currentTime+.035);
+  }catch(e){}
+}
+
 let TYPER=null, CAPST={txt:'',chain:false}, CAPQ=[], CAPI=-1;
-function caption(text,secs,from){
+function caption(text,secs,from,tw,sfx){
   const el=$('caption');
   if(TYPER){ TYPER(); TYPER=null; }
+  if(EMBED)say({type:'frame',cap:text||'',secs,from,tw:!!tw});
   if(!text)return void el.classList.remove('on');
   el.classList.add('on');
-  if($('twk').checked&&secs>0)TYPER=SagaPlay.typeCaption(el,text,secs,from||0);
+  if(tw&&secs>0)TYPER=SagaPlay.typeCaption(el,text,secs,from||0,sfx?keyclick:null);
   else el.textContent=text;
 }
 function fxcap(t){
   const el=$('fxcap');
+  if(EMBED)say({type:'frame',fx:t||''});
   if(!t)return void el.classList.remove('on');
   el.textContent=t; el.classList.add('on');
 }
@@ -172,7 +235,10 @@ function fxcap(t){
 // SagaPlay.walk drives everything; this page only supplies the hooks. TOKEN
 // abandons a walk the moment a newer one starts — the old walk's pending
 // promises see a stale token and resolve false, and the engine lets go.
-let TOKEN=0, VARS={}, ASKOFF=null, RUNOFF=null;
+let TOKEN=0, VARS={}, ASKOFF=null, RUNOFF=null, CHOOSE=null;
+// this card's typewriter word, else the story's — same for the key sound
+const twOf=c=>c&&c.tw!=null?!!c.tw:!!(DOC&&DOC.typewriter);
+const sfxOf=c=>c&&c.twsfx!=null?!!c.twsfx:!!(DOC&&DOC.typesfx);
 // Where a ride wanted to begin. A freshly opened window may not be allowed to
 // make sound until it is clicked — if the first play() is refused, the wish
 // is kept, and the ▶ button's very human gesture grants it from that card.
@@ -199,7 +265,7 @@ async function story(fromId){
   if(fromId!=null){ const k=DOC.chunks.findIndex(c=>c.id===fromId); if(k>=0)start=k; }
   await SagaPlay.walk(DOC.chunks,{
     playRun:(from,upto)=>playRun(tok,from,upto),
-    ask:opts=>ask(tok,opts),
+    ask:(opts,c)=>ask(tok,opts,c),
     onEnd:reason=>{ if(tok===TOKEN)ended(reason); },
   },VARS,start);
 }
@@ -221,26 +287,36 @@ function playRun(tok,from,upto){
       AUDIO.play().then(()=>{ PEND=null; })            // sound granted: wish spent
         .catch(()=>{ RUNOFF=null; res(false); });
       $('playb').textContent='⏸ pause';
+      say({type:'state',playing:true});
     })();
   });
 }
 
-function ask(tok,opts){
+function ask(tok,opts,c){
   return new Promise(res=>{
     if(tok!==TOKEN)return res(null);
     CAPST={txt:'',chain:false};           // a choice breaks the chain
     $('playb').textContent='▶ play';
+    say({type:'state',playing:false});
+    // a choice card's subtitle is the question over the buttons
+    if(c&&c.sub)caption(c.sub,0,0,false,false);
     const ch=$('chooser');
+    const labels=opts.map(o=>o.label||'…');
     ch.innerHTML=opts.map((o,i)=>`<button data-i="${i}">${esc(o.label)||'…'}</button>`).join('');
     ch.classList.add('on'); $('room').classList.add('choosing');
-    ch.onclick=e=>{ const b=e.target.closest('button'); if(!b)return;
-      hideChooser();
-      res(tok===TOKEN?opts[+b.dataset.i]:null); };
+    say({type:'choices',opts:labels});
+    if(EMBED)say({type:'frame',opts:labels});
+    const pick=i=>{ hideChooser(); res(tok===TOKEN?opts[i]:null); };
+    ch.onclick=e=>{ const b=e.target.closest('button'); if(b)pick(+b.dataset.i); };
+    CHOOSE=pick;                          // the editor and the mirrors choose too
     ASKOFF=()=>res(null);
   });
 }
 function hideChooser(){ const ch=$('chooser');
-  ch.classList.remove('on'); ch.onclick=null; $('room').classList.remove('choosing'); ASKOFF=null; paintVars(); }
+  ch.classList.remove('on'); ch.onclick=null; $('room').classList.remove('choosing');
+  ASKOFF=null; CHOOSE=null; paintVars();
+  say({type:'choices',opts:null});
+  if(EMBED)say({type:'frame',opts:null}); }
 // The story's flags right now — the walk mutates VARS as choices apply their
 // sets, and seeing them is half of testing a branch.
 function paintVars(){
@@ -252,6 +328,7 @@ function paintVars(){
 
 function ended(reason){
   $('playb').textContent='▶ play';
+  say({type:'state',playing:false});
   caption(''); fxcap('');
   say({type:'stopped',card:MARKS[MARKI]?MARKS[MARKI].id:null});
   const ch=$('chooser');
@@ -265,6 +342,7 @@ function ended(reason){
 function pause(){
   AUDIO.pause();                       // the run's promise stays pending
   $('playb').textContent='▶ resume';
+  say({type:'state',playing:false});
   say({type:'stopped',card:MARKS[MARKI]?MARKS[MARKI].id:null});
 }
 function toggle(){
@@ -281,8 +359,24 @@ function stop(){
   if(ASKOFF){ const f=ASKOFF; ASKOFF=null; f(); }
   AUDIO.pause(); hideChooser();
   $('playb').textContent='▶ play';
+  say({type:'state',playing:false});
 }
 function playFrom(from){ story(from); }
+
+// the viewfinder: idle, the stage shows the moment of the card being edited —
+// its governing visual and its words — so writing happens against the picture
+function idleShow(id){
+  if(!AUDIO.paused||RUNOFF||ASKOFF||!DOC)return;
+  const k=DOC.chunks.findIndex(c=>c.id===id); if(k<0)return;
+  let vis=null;
+  for(let i=0;i<=k;i++){ const x=DOC.chunks[i];
+    if(x.type==='visual'&&x.ready)vis=x; }
+  show(vis||null);
+  const c=DOC.chunks[k], kind=c.type||'speech';
+  if((kind==='audio'||kind==='silence')&&c.sub){ caption('',0,0,false,false); fxcap(c.sub); }
+  else{ fxcap('');
+    caption(c.sub||(kind==='speech'?c.text:'')||'',0,0,false,false); }
+}
 
 function tick(){
   const t=AUDIO.currentTime;
@@ -313,6 +407,9 @@ function tick(){
       // slice of the card's audio — replayed below against the clock
       CAPQ=SagaPlay.captions(CAPST,c,c.sub||(kind==='speech'?c.text:''),MARKS[i].at,dur);
       CAPI=-1;
+      // the card's typewriter word rides on its pages
+      const tw=twOf(c), sfx=sfxOf(c);
+      CAPQ.forEach(ev=>{ ev.tw=tw; ev.sfx=sfx; });
       if(CAPQ.length&&CAPQ[0].text)fxcap('');
     }
   }
@@ -326,7 +423,7 @@ function pageTick(t){
   while(CAPI+1<CAPQ.length&&CAPQ[CAPI+1].at<=t){
     CAPI++;
     const ev=CAPQ[CAPI];
-    caption(ev.text,ev.secs,ev.from);
+    caption(ev.text,ev.secs,ev.from,ev.tw,ev.sfx);
   }
 }
 const fmt=s=>{ s=Math.floor(s||0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
@@ -335,7 +432,6 @@ document.addEventListener('keydown',e=>{
   if(e.key===' '){ e.preventDefault(); toggle(); }
 });
 
-try{ $('twk').checked=localStorage.getItem('saga.stage.tw')==='1'; }catch(e){}
 load();
 </script>
 </body>

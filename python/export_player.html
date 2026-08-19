@@ -125,7 +125,10 @@ function show(c){
 // The knobs a viewer expects of a player: volume, captions, the typewriter,
 // full screen, share. Remembered per browser — a story reopened tomorrow
 // sounds and reads the way it was left.
-let CC=true, TW=false, TYPER=null;
+// TW honours the story's typewriter design (its setting, card overrides
+// included); unlit, every caption is plain. The author decides the default,
+// the viewer keeps the veto.
+let CC=true, TW=true, TYPER=null;
 const pref=(k,v)=>{ try{ localStorage.setItem('saga.player.'+k,v) }catch(e){} };
 function setVol(v){ AUDIO.volume=v/100; pref('vol',v); }
 function toggleCC(){ CC=!CC; $('ccb').classList.toggle('lit',CC);
@@ -153,11 +156,30 @@ try{
 }catch(e){}
 
 let CAPST={txt:'',chain:false}, CAPQ=[], CAPI=-1;
-function caption(t,secs,from){ const el=$('caption');
+// this card's typewriter word, else the story's — the ⌨ button vetoes both
+const twOf=c=>c&&c.tw!=null?!!c.tw:!!GRAPH.typewriter;
+const sfxOf=c=>c&&c.twsfx!=null?!!c.twsfx:!!GRAPH.typesfx;
+let ACTX=null, LASTTK=0;
+function keyclick(){
+  const now=performance.now();
+  if(now-LASTTK<45)return;
+  LASTTK=now;
+  try{
+    ACTX=ACTX||new (window.AudioContext||window.webkitAudioContext)();
+    if(ACTX.state==='suspended')ACTX.resume();
+    const o=ACTX.createOscillator(), g=ACTX.createGain();
+    o.type='square'; o.frequency.value=1500+Math.random()*900;
+    g.gain.setValueAtTime(.022,ACTX.currentTime);
+    g.gain.exponentialRampToValueAtTime(.0001,ACTX.currentTime+.03);
+    o.connect(g); g.connect(ACTX.destination);
+    o.start(); o.stop(ACTX.currentTime+.035);
+  }catch(e){}
+}
+function caption(t,secs,from,tw,sfx){ const el=$('caption');
   if(TYPER){ TYPER(); TYPER=null; }
   if(!t||!CC)return void el.classList.remove('on');
   el.classList.add('on');
-  if(TW&&secs>0)TYPER=SagaPlay.typeCaption(el,t,secs,from||0);
+  if(TW&&tw&&secs>0)TYPER=SagaPlay.typeCaption(el,t,secs,from||0,sfx?keyclick:null);
   else el.textContent=t; }
 function fxcap(t){ const el=$('fxcap');
   if(!t||!CC)return void el.classList.remove('on');
@@ -258,6 +280,8 @@ function tick(){
     }else{
       CAPQ=SagaPlay.captions(CAPST,c,c.sub||(kind==='speech'?c.text:''),MARKS[i].at,dur);
       CAPI=-1;
+      const tw=twOf(c), sfx=sfxOf(c);
+      CAPQ.forEach(ev=>{ ev.tw=tw; ev.sfx=sfx; });
       if(CAPQ.length&&CAPQ[0].text)fxcap('');
     }
   }
@@ -269,7 +293,7 @@ function pageTick(t){
   while(CAPI+1<CAPQ.length&&CAPQ[CAPI+1].at<=t){
     CAPI++;
     const ev=CAPQ[CAPI];
-    caption(ev.text,ev.secs,ev.from);
+    caption(ev.text,ev.secs,ev.from,ev.tw,ev.sfx);
   }
 }
 const fmt=s=>{ s=Math.floor(s||0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };

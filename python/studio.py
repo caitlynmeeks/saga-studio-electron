@@ -606,6 +606,9 @@ def paste_card(src):
     sub = str(src.get("sub") or "")[:500]
     if sub:
         c["sub"] = sub
+    for k in ("tw", "twsfx"):          # the card's typewriter word travels too
+        if src.get(k) is not None:
+            c[k] = 1 if src[k] else 0
     if src.get("chain"):
         c["chain"] = True
     label = str(src.get("label") or "")[:80]
@@ -2450,6 +2453,9 @@ def _export_chunk(c):
     for k in ("tags", "when", "auto", "mute", "media", "mediakind", "sub", "chain"):
         if c.get(k):
             out[k] = c[k]
+    for k in ("tw", "twsfx"):           # 0 is a real word here: explicit off
+        if c.get(k) is not None:
+            out[k] = c[k]
     if c.get("type") == "choice":
         out["options"] = c.get("options") or []
     return out
@@ -2508,6 +2514,8 @@ def publish_html(name):
         shutil.copy2(f, dest / "media" / f.name)
         media_urls[mn] = "media/" + f.name
     graph = {"title": doc.get("title", name),
+             "typewriter": bool(doc.get("typewriter")),
+             "typesfx": bool(doc.get("typesfx")),
              "chunks": [_export_chunk(c) for c in chunks],
              "segments": segs, "media": media_urls}
     page = (HERE / "export_player.html").read_text(encoding="utf-8")
@@ -3123,6 +3131,18 @@ class H(BaseHTTPRequestHandler):
                             # words at all for a voiced card. Display only:
                             # never in any hash, so captioning costs nothing.
                             c["sub"] = str(d["sub"] or "")[:500]
+                        if "tw" in d:
+                            # this card's own typewriter word; absent inherits
+                            # the story's. Display only — never in a hash.
+                            if d["tw"] is None:
+                                c.pop("tw", None)
+                            else:
+                                c["tw"] = 1 if d["tw"] else 0
+                        if "twsfx" in d:
+                            if d["twsfx"] is None:
+                                c.pop("twsfx", None)
+                            else:
+                                c["twsfx"] = 1 if d["twsfx"] else 0
                         if "chain" in d:
                             # the caption stands when this card ends, and the
                             # next caption appends — one block across cards
@@ -3342,6 +3362,23 @@ class H(BaseHTTPRequestHandler):
             # exports. The run stays contiguous by construction: grouping
             # fills the span between the outermost picks, and a card dragged
             # out of its run leaves the group (see /api/move).
+            if u.path == "/api/story":
+                # story-level settings: how the tale presents itself, kept in
+                # the doc so they travel with it — into the stage and the
+                # exports alike. Never in any hash; changing them re-bakes
+                # nothing.
+                doc = load(d["name"])
+                changed = False
+                for k in ("typewriter", "typesfx"):
+                    if k in d:
+                        doc[k] = bool(d[k])
+                        changed = True
+                if changed:
+                    save(doc)
+                return self._send(200, {"ok": True,
+                                        "typewriter": bool(doc.get("typewriter")),
+                                        "typesfx": bool(doc.get("typesfx"))})
+
             if u.path == "/api/group":
                 doc = load(d["name"])
                 # names land in onclick attributes and menu labels, so the

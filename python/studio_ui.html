@@ -313,12 +313,28 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
 .take .n{font-size:10.5px;color:var(--dim);padding:0 2px;min-width:44px;text-align:center}
 .take button{border:0;padding:0 4px;line-height:17px;font-size:12px;color:var(--faint);background:none}
 .take button:hover:not(:disabled){color:var(--green)}
+/* the Game view: the stage docked beneath the cards, always live */
+#stagedock{flex:none;position:relative;border-top:1px solid var(--line);background:#000}
+#stagedock iframe{width:100%;height:100%;border:0;display:block}
+#sgrip{position:absolute;top:-4px;left:0;right:0;height:8px;cursor:ns-resize;z-index:6}
+body.nostage #stagedock{display:none}
+#dockb.on{border-color:var(--green);color:var(--green)}
+/* story settings: a small panel under the header, not a fourth sidebar */
+#storypanel{position:absolute;top:46px;left:290px;z-index:40;background:var(--panel);
+border:1px solid var(--line);border-radius:8px;padding:12px 14px;width:310px;
+box-shadow:0 8px 30px rgba(0,0,0,.5)}
+#storypanel h3{font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+color:var(--faint);margin:0 0 9px;font-weight:600}
+#storypanel .srow{display:flex;align-items:center;gap:7px;margin-bottom:7px;font-size:12px}
+#storypanel .srow label{flex:0 0 38%;color:var(--dim);font-size:11px}
+#storypanel .srow input,#storypanel .srow select{flex:1;min-width:0}
 </style>
 </head>
 <body data-panel="off" data-tab="inspect">
 <header>
   <b>SAGA STUDIO</b>
   <span class="mut" id="hdr">no project</span>
+  <button class="tiny" onclick="toggleStoryPanel()" title="story settings — title, typewriter, typing sound">⚙</button>
   <span style="flex:1"></span>
   <span class="pill warn" id="busy"></span>
   <span class="pill" id="model">model: cold</span>
@@ -326,10 +342,27 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
     title="collapse every card to its bar">−</button>
   <button id="frb" onclick="toggleFind()" disabled
     title="find and replace across this episode — ⌘F">find</button>
+  <button id="dockb" onclick="toggleDock()" title="show or hide the stage — the story, live under the cards">stage</button>
   <button onclick="openStage()"
-    title="open the stage — a window showing the visuals, for the second screen">stage ⧉</button>
+    title="pop the stage out — a window for the second screen; it mirrors the one below">⧉</button>
   <button id="chatb" onclick="togglePanel()" title="show or hide the side panel">inspector</button>
 </header>
+
+<div id="storypanel" hidden>
+  <h3>story settings</h3>
+  <div class="srow"><label>title</label>
+    <input id="st_title" onchange="storyRename(this.value)"></div>
+  <div class="srow"><label>typewriter</label>
+    <select id="st_tw" onchange="storySet('typewriter',this.value==='1')">
+      <option value="0">off</option><option value="1">on</option></select></div>
+  <div class="srow"><label>typing sound</label>
+    <select id="st_sfx" onchange="storySet('typesfx',this.value==='1')">
+      <option value="0">off</option><option value="1">on</option></select></div>
+  <div class="mut" style="font-size:10.5px;margin-bottom:8px">how captions arrive, on the stage
+    and in the exported story — any card can override both on its subtitle row</div>
+  <div style="display:flex"><span style="flex:1"></span>
+    <button class="tiny" onclick="toggleStoryPanel()">close</button></div>
+</div>
 
 <aside>
  <div id="stabs">
@@ -342,6 +375,8 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
   <h2>documents</h2>
   <div id="drop">drop .md or .sagaproj here<br><span style="font-size:11px">or click to choose</span></div>
   <input type="file" id="file" accept=".md,.markdown,.txt,.sagaproj" multiple hidden>
+  <button onclick="newStory()" style="width:100%;margin-top:8px"
+    title="an empty story, built card by card from the + strips">+ new story</button>
   <div id="projsort" style="margin-top:12px"></div>
   <div id="projects"></div>
 
@@ -406,6 +441,10 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
 <div id="center">
   <div id="frbar" hidden></div>
   <main id="main"><p class="mut">Drop a markdown file on the left to begin.</p></main>
+  <div id="stagedock" style="height:230px">
+    <div id="sgrip" title="drag to resize the stage"></div>
+    <iframe id="stagefr" allow="autoplay" src="/stage?embed=1"></iframe>
+  </div>
 </div>
 
 <div id="right">
@@ -442,9 +481,12 @@ Selected chunks are sent as context.</div></div>
     title="mix and play the book right here, without exporting the mp3">▶ preview audiobook</button>
   <button id="pvtop" onclick="previewFromTop()" hidden
     title="forget the selected card and play the whole book from the beginning">⤒ from start</button>
-  <button id="stgb" onclick="stagePlayHere()"
-    title="play on the stage from the selected card — flags from its last ride carry over, so a branch can be tested without riding the whole story">stage ▶ here</button>
+  <button id="stgplay" onclick="stageToggle()"
+    title="play the story on the stage — from the selected card, with its last ride’s flags; pauses and resumes">▶ story</button>
+  <button onclick="stageFromTop()"
+    title="play the story from the top, on a clean slate">⟲ from start</button>
   <button onclick="assemble()">assemble audiobook</button>
+  <span id="stgask"></span>
   <span class="mut" id="status"></span>
   <span style="flex:1"></span>
   <button id="revealb" onclick="revealOut()" title="show the assembled audiobook in the Finder">open renders folder ↗</button>
@@ -500,7 +542,10 @@ function paintCur(){
   if(CUR!=null){ const el=$('c'+CUR); if(el)el.classList.add('cur'); }
   syncBookBtn();
 }
-function setCur(id){ if(CUR===id)return; CUR=id; paintCur(); }
+function setCur(id){ if(CUR===id)return; CUR=id; paintCur();
+  // the stage is a viewfinder: idle, it shows the moment being edited
+  if(STAGE&&DOC)STAGE.postMessage({type:'cur',to:'embed',card:id,name:DOC.name});
+}
 function clearCur(){ CUR=null; paintCur(); }
 // The footer button says where it will start, so "preview" is never a guess
 // about whether you are about to hear eight minutes you have already heard.
@@ -2347,8 +2392,11 @@ function silenceCard(c){return `
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
+      <button id="sub${c.id}" class="tiny ${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
+        title="a caption while the rest holds — “(A long silence)” — for viewers with the sound off">subtitle</button>
       ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
+    ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
    </div>`;
 }
 // What the stage shows from this point until the next visual. No time on the
@@ -2388,7 +2436,10 @@ function visualCard(c){
       <button onclick="pickMedia(${c.id})">import a file…</button>
     </div>
     <div class="arow">${show}</div>
+    ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
     <div class="act">
+      <button id="sub${c.id}" class="tiny ${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
+        title="a caption over this picture — shown while it stands, typewriter overrides included">subtitle</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
@@ -2418,8 +2469,11 @@ function choiceCard(c){
       ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
     </div>
     <div id="op${c.id}">${opts.map((o,i)=>optRow(c,o,i)).join('')}</div>
+    ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
     <div class="act">
       <button onclick="addOption(${c.id})">+ option</button>
+      <button id="sub${c.id}" class="tiny ${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
+        title="the question over the buttons — what the stage shows while it asks">subtitle</button>
       <span class="mut" id="ah${c.id}" style="font-size:11px">${
         c.auto?'first passing option is taken silently':'the stage stops here and asks'}</span>
       <span style="flex:1"></span>
@@ -2814,18 +2868,37 @@ function subRow(c){
   // its own layer and pushed aside by the next dialog caption, so chaining
   // does not apply to it and the tick stays out of the way
   const fx=c.type==='audio'||c.type==='silence';
+  const chainable=!c.type||c.type==='voiced';
   return `<div class="arow subrow" id="sb${c.id}">
     <span class="lbl">shown</span>
     <input value="${esc(c.sub||'')}" placeholder="${fx
       ?'(Foghorn blowing) — a caption for the sound, for viewers with the sound off'
       :c.type==='voiced'
       ?'what the stage shows while this performance plays'
+      :c.type==='choice'
+      ?'the question over the buttons — shown while the stage asks'
+      :c.type==='visual'
+      ?'a caption over this picture'
       :'what the stage shows — the card’s text is what is spoken'}"
       onchange="setCard(${c.id},{sub:this.value});paintSubBtn(${c.id})">
-    ${fx?'':`<label class="mut" style="font-size:11px;white-space:nowrap"
+    ${!chainable?'':`<label class="mut" style="font-size:11px;white-space:nowrap"
       title="don’t clear this caption when the card ends — the next caption appends to it, one growing block across cards split for delivery. Silences and sound clips in between leave it standing.">
       <input type="checkbox" ${c.chain?'checked':''}
         onchange="setCard(${c.id},{chain:this.checked});paintSubBtn(${c.id})"> ⇢ chain</label>`}
+    ${(fx||c.type==='choice')?'':`<select style="max-width:88px;flex:none"
+      title="typewriter for this card — “story” follows the story settings"
+      onchange="setCard(${c.id},{tw:this.value===''?null:+this.value})">
+      <option value="">⌨ story</option>
+      <option value="1" ${c.tw===1?'selected':''}>⌨ on</option>
+      <option value="0" ${c.tw===0?'selected':''}>⌨ off</option>
+    </select>
+    <select style="max-width:88px;flex:none"
+      title="the typing sound while this card’s caption reveals"
+      onchange="setCard(${c.id},{twsfx:this.value===''?null:+this.value})">
+      <option value="">keys: story</option>
+      <option value="1" ${c.twsfx===1?'selected':''}>keys: on</option>
+      <option value="0" ${c.twsfx===0?'selected':''}>keys: off</option>
+    </select>`}
   </div>`;
 }
 function toggleSub(id){
@@ -3501,17 +3574,27 @@ let STAGESEEN=false, STAGEPLAY=null;
 function openStage(){
   window.open('/stage'+(DOC?'?name='+encodeURIComponent(DOC.name):''),'saga-stage');
 }
-// Play on the stage from the card being edited. If a stage is open it obeys
-// at once; if none has ever spoken, one is opened and handed the request the
-// moment it says hello — a message into the void is not a feature.
-function stagePlayHere(){
+// The transport. The embedded stage — the Game view under the cards — is the
+// one true player, and these address it by name; a pop-out only mirrors it.
+function stageToggle(){
   if(!DOC||!STAGE)return;
-  const msg={type:'play',from:CUR,name:DOC.name};
-  STAGE.postMessage(msg);
-  if(!STAGESEEN){ STAGEPLAY={...msg,at:Date.now()}; openStage(); }
+  toggleDock(true);                     // the player lives down there
+  STAGE.postMessage({type:'toggle',to:'embed',name:DOC.name,from:CUR});
   $('status').textContent=CUR==null
-    ?'playing the story on the stage from the top'
-    :'playing on the stage from card #'+CUR+' — its last ride’s flags carry over';
+    ?'the story plays from the top'
+    :'the story plays from card #'+CUR+' — its last ride’s flags carry over';
+}
+function stageFromTop(){
+  if(!DOC||!STAGE)return;
+  toggleDock(true);
+  STAGE.postMessage({type:'play',to:'embed',from:null,name:DOC.name});
+}
+// when the stage stops and asks, the question is answerable from here too
+function paintStageChoices(opts){
+  const el=$('stgask'); if(!el)return;
+  el.innerHTML=(opts&&opts.length)?'<span class="mut" style="font-size:11px">the stage asks:</span> '
+    +opts.map((o,i)=>`<button class="tiny" style="color:var(--fg)"
+      onclick="STAGE.postMessage({type:'choose',i:${i}})">${esc(o)}</button>`).join(' '):'';
 }
 if(STAGE)STAGE.onmessage=e=>{
   const m=e.data||{};
@@ -3523,10 +3606,70 @@ if(STAGE)STAGE.onmessage=e=>{
     return;
   }
   if(!DOC||m.name!==DOC.name)return;
+  if(m.type==='state'){ const b=$('stgplay');
+    if(b)b.textContent=m.playing?'⏸ story':'▶ story'; }
+  if(m.type==='choices')paintStageChoices(m.opts);
   if(m.type==='playing'&&m.card!=null)followCard(m.card);
   if(m.type==='stopped'){ clearPlaying();
     if(m.card!=null){ CUR=m.card; paintCur(); } }   // stop, fix that one — as the local preview
 };
+// ── the game view dock ────────────────────────────────────
+function toggleDock(on){
+  if(on===undefined)on=document.body.classList.contains('nostage');
+  document.body.classList.toggle('nostage',!on);
+  try{ localStorage.setItem('saga.dock',on?'1':'0'); }catch(e){}
+  const b=$('dockb'); if(b)b.classList.toggle('on',on);
+}
+toggleDock(localStorage.getItem('saga.dock')!=='0');
+(function(){
+  const g=$('sgrip'), d=$('stagedock'); if(!g||!d)return;
+  try{ const h=+localStorage.getItem('saga.dock.h'); if(h)d.style.height=h+'px'; }catch(e){}
+  g.addEventListener('mousedown',e=>{
+    e.preventDefault();
+    const sy=e.clientY, sh=d.offsetHeight, fr=$('stagefr');
+    fr.style.pointerEvents='none';          // or the iframe eats the drag
+    const mv=ev=>{ const h=Math.max(110,Math.min(window.innerHeight-240,sh+(sy-ev.clientY)));
+      d.style.height=h+'px';
+      try{ localStorage.setItem('saga.dock.h',h); }catch(e){} };
+    const up=()=>{ fr.style.pointerEvents='';
+      removeEventListener('mousemove',mv); removeEventListener('mouseup',up); };
+    addEventListener('mousemove',mv); addEventListener('mouseup',up);
+  });
+})();
+// ── story settings ────────────────────────────────────────
+function toggleStoryPanel(){
+  const p=$('storypanel');
+  if(p.hidden&&!DOC)return void($('status').textContent='open a story first');
+  p.hidden=!p.hidden;
+  if(!p.hidden){
+    $('st_title').value=DOC.title||'';
+    $('st_tw').value=DOC.typewriter?'1':'0';
+    $('st_sfx').value=DOC.typesfx?'1':'0';
+  }
+}
+async function storySet(k,v){
+  if(!DOC)return;
+  const r=await api('/api/story',{name:DOC.name,[k]:v});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  DOC[k]=v;
+  if(STAGE)STAGE.postMessage({type:'open',name:DOC.name});   // the stage rereads
+  $('status').innerHTML=`<span class="ok">${k==='typewriter'?'typewriter':'typing sound'} ${v?'on':'off'}</span> — the story remembers`;
+}
+async function storyRename(t){
+  t=(t||'').trim(); if(!t||!DOC||t===DOC.title)return;
+  await renameProject(DOC.name,t);
+}
+async function newStory(){
+  const t=(prompt('Name the new story:')||'').trim(); if(!t)return;
+  const slug=t.toLowerCase().replace(/[^a-z0-9_-]+/g,'-').slice(0,60);
+  if((STATE.projects||[]).some(p=>p.name===slug))
+    return void($('status').innerHTML='<span class="warn">a story by that name is already here</span>');
+  const r=await api('/api/import',{title:t,markdown:''});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await refresh();
+  open_(r.name,true);
+  $('status').innerHTML=`<span class="ok">“${esc(t)}” begins</span> — build it from the + strips`;
+}
 // Keep the speaking card on screen — the whole point is that when you hear a
 // problem, the card is already in front of you. But do not haul the list about
 // on every card: only move when it has drifted out of the comfortable middle,

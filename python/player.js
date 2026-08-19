@@ -124,11 +124,13 @@ const SagaPlay = (() => {
   // before the audio moves on; clamped so a two-word line does not smear and
   // a monologue does not blur. Returns a canceller, because captions change
   // mid-flight and two typewriters on one element write over each other.
-  function typeCaption (el, text, secs, from) {
+  function typeCaption (el, text, secs, from, ontick) {
     // `from` is where the fresh words start: a chained caption keeps its
     // standing prefix on screen and types only what this card adds, at a
     // rate set by this card's own stretch of audio — which is what keeps
     // the pace honest across a chain of differently-sized cards.
+    // `ontick` hears each revealed character — the hosts hang the typing
+    // sound on it; captions themselves never make noise here.
     from = from || 0
     el.textContent = text.slice(0, from)
     const n = text.length
@@ -139,6 +141,7 @@ const SagaPlay = (() => {
     const t = setInterval(() => {
       i++
       el.textContent = text.slice(0, i)
+      if (ontick && text[i - 1] && text[i - 1].trim()) ontick(i)
       if (i >= n) clearInterval(t)
     }, 1000 / cps)
     return () => clearInterval(t)
