@@ -1802,9 +1802,11 @@ function renderDoc(){
       const gg=c.gname||'Group';
       h+=gbar(c);
       // the strip under the bar is the group's top slot, inside the indent —
-      // which is also how an empty group takes its first member
-      h+=isGmin(gg)?'<div class="ins gfold"></div>'
-        :`<div class="gmem" data-g="${esc(gg)}">${insBar(c.id+1)}</div>`;
+      // how an empty group takes its first member. It stays visible when the
+      // group is folded: "drop it just under the bar" is the natural gesture
+      // for adding to a folded group, and with the members hidden this strip
+      // is the only honest target it can land on.
+      h+=`<div class="gmem" data-g="${esc(gg)}">${insBar(c.id+1)}</div>`;
       return h;
     }
     const g=c.group||null;

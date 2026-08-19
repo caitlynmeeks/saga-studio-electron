@@ -3355,6 +3355,14 @@ class H(BaseHTTPRequestHandler):
                     return self._send(404, {"error": "pick some cards first — "
                                             "shift-click their headers"})
                 a, b = min(idx), max(idx)
+                # groups do not nest, and a span that swallows another group's
+                # bar would mark the bar itself as a member — the kind of quiet
+                # corruption that surfaces as "where did my group go"
+                if any(c.get("type") == "group"
+                       for c in doc["chunks"][a:b + 1]):
+                    return self._send(400, {"error": "that selection contains a "
+                                            "group — ungroup it first, or group "
+                                            "around it"})
                 if any(c.get("group") == gname
                        or (c.get("type") == "group" and c.get("gname") == gname)
                        for c in doc["chunks"][:a] + doc["chunks"][b + 1:]):
@@ -3421,6 +3429,14 @@ class H(BaseHTTPRequestHandler):
                     return self._send(404, {"error": f"no group “{gname}”"})
                 a, b = min(idx), max(idx) + 1
                 to = max(0, min(int(d["to"]), len(ch)))
+                # a group landing inside another's run would split it in two —
+                # slide past to the end of that run instead
+                if 0 < to < len(ch) and ch[to].get("group") \
+                        and ch[to - 1].get("group") == ch[to].get("group") \
+                        and ch[to].get("group") != gname:
+                    g0 = ch[to]["group"]
+                    while to < len(ch) and ch[to].get("group") == g0:
+                        to += 1
                 if a <= to <= b:
                     return self._send(200, {"ok": True, "moved": False})
                 snapshot(doc, f"move group “{gname}”")
