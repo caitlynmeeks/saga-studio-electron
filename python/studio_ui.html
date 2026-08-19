@@ -136,6 +136,14 @@ input[type=number]{width:62px}
   border-radius:5px;padding:2px 7px;margin:5px 0;white-space:normal;
   overflow-wrap:anywhere}
 #log .tchip.warn{color:var(--amber);border-color:#5c4a26}
+/* first-run cards: what Discuss needs and how to get it, in place of an
+   error nobody asked for */
+#log .setup{border:1px solid var(--line);border-radius:7px;padding:9px 11px;
+  margin:6px 0;color:var(--fg);white-space:normal;line-height:1.55}
+#log .setup code{color:var(--green);-webkit-user-select:all;user-select:all}
+#log .setup a{color:var(--amber);cursor:pointer}
+#log .setup .cpy{cursor:pointer;color:var(--dim);border:1px solid var(--line);
+  border-radius:4px;padding:0 5px;font-size:10.5px;margin-left:5px}
 /* a draft is Claude's sandbox: this bar is where the author disposes of what
    the agent proposed */
 #draftbar{display:flex;gap:8px;align-items:center;padding:7px 12px;
@@ -497,7 +505,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
  </div>
  <div id="chat" class="rpane">
   <h2>Discuss</h2>
-  <div id="log"><div class="m mut">Ask about pacing or a passage — or hand over real work: a new scene, a casting, a whole story. Claude works in a draft; you apply it or discard it.
+  <div id="log"><div class="m mut" id="chatintro">Ask about pacing or a passage — or hand over real work: a new scene, a casting, a whole story. Claude works in a draft; you apply it or discard it.
 Selected cards go along as context.</div></div>
   <textarea id="ask" placeholder="e.g. tighten the foghorn scene, keep my phrasing"></textarea>
   <div style="display:flex;gap:6px;margin-top:6px">
@@ -686,6 +694,7 @@ async function importArchive(f){
 async function refresh(){
   STATE=await api('/api/state');
   $('model').textContent='model: '+STATE.model;
+  paintDiscuss();
   renderProfileList();       // counts move as cards do; the editor is left alone
   if(document.body.dataset.side==='clips'){ renderClips(); renderMedia(); }
   if(document.body.dataset.side==='publish')renderPublish();
@@ -3933,6 +3942,14 @@ async function send(){
             if(CHAT_MUT.has(ev.name)){touched=true;poke();}
           }
           else if(ev.e==='toolerr'||ev.e==='err')addChip('warn','⚠ '+ev.t);
+          else if(ev.e==='auth'){ span=null;
+            const s=document.createElement('div'); s.className='setup';
+            s.innerHTML='Claude is installed but not signed in yet. Open '+
+              'Terminal, run <code>claude</code>, and follow the sign-in — '+
+              'once is enough. A Claude plan (Pro or Max) or an API key from '+
+              '<a href="https://platform.claude.com" target="_blank" rel="noopener">'+
+              'platform.claude.com</a> both work. Then ask again.';
+            bub.appendChild(s); $('log').scrollTop=1e6; }
         }
       }
     }
@@ -3949,6 +3966,41 @@ function chatNew(){
     '<span class="warn">stop the current ask first</span>');
   CHAT.fresh=true;
   $('log').innerHTML='<div class="m mut">A fresh conversation — the old one is forgotten on the next ask.</div>';
+}
+
+// Discuss needs a Claude on the machine. When there is none, the panel is an
+// invitation rather than an error: what it is, that it is optional, and the
+// two steps to turn it on. Signed-in-ness is only knowable by asking, so
+// that half arrives as an "auth" card on the first ask instead (see send()).
+const CHAT_INTRO='Ask about pacing or a passage — or hand over real work: '+
+  'a new scene, a casting, a whole story. Claude works in a draft; you apply '+
+  'it or discard it.\nSelected cards go along as context.';
+function paintDiscuss(){
+  const ok=STATE.claude!==false;   // an older engine says nothing; assume present
+  $('ask').disabled=!ok;
+  if(!CHAT.running)$('sendb').disabled=!ok;
+  const i=$('chatintro'); if(!i)return;
+  if(ok){
+    if(i.dataset.setup){ i.dataset.setup=''; i.textContent=CHAT_INTRO; }
+    return;
+  }
+  if(i.dataset.setup)return;
+  i.dataset.setup='1';
+  i.innerHTML=`<div class="setup"><b>Discuss pairs Saga Studio with Claude</b>,
+    Anthropic’s AI — talk through a scene, or hand it real work that it builds
+    in a draft you review. It’s optional: everything else here works without it.
+    <br><br>To turn it on:<br>
+    1 · Install <a href="https://claude.com/claude-code" target="_blank" rel="noopener">Claude
+    Code</a>: <code>npm install -g @anthropic-ai/claude-code</code><span
+    class="cpy" onclick="copyCmd(this)">copy</span><br>
+    2 · Sign in once — open Terminal, run <code>claude</code>, and follow the
+    sign-in. A Claude plan (Pro or Max) or an API key both work.<br><br>
+    <span class="mut">Asks use your plan’s included usage, or your key’s
+    pay-per-use.</span><br><a onclick="refresh()">⟳ check again</a></div>`;
+}
+function copyCmd(el){
+  navigator.clipboard.writeText('npm install -g @anthropic-ai/claude-code')
+    .then(()=>{ el.textContent='copied'; setTimeout(()=>el.textContent='copy',1200); });
 }
 
 // ── drafts ── the sandbox where the discuss agent works. The bar over the

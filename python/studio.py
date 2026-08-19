@@ -137,7 +137,14 @@ def kokoro_available():
 # SAGA_TOKEN adds a shared secret if the network is not fully trusted.
 HOST = os.environ.get("SAGA_HOST", "127.0.0.1")
 TOKEN = os.environ.get("SAGA_TOKEN", "")
-CLAUDE = shutil.which("claude") or "/opt/homebrew/bin/claude"
+# SAGA_CLAUDE points at an unusually-installed Claude Code; otherwise PATH,
+# then the homebrew spot the packaged app cannot see PATH for. A function,
+# not a constant: someone following the discuss panel's install steps has
+# the studio already running, and their new claude should be found on the
+# very next look rather than after a restart.
+def claude_path():
+    return (os.environ.get("SAGA_CLAUDE") or shutil.which("claude")
+            or "/opt/homebrew/bin/claude")
 OPEN_CMD = "open" if sys.platform == "darwin" else "xdg-open"
 
 ROOT.mkdir(parents=True, exist_ok=True)
@@ -2604,7 +2611,7 @@ def _chat_cmd(project, question, chunk_ids, fresh):
         "env": {"SAGA_API": f"http://127.0.0.1:{PORT}",
                 "SAGA_TOKEN": TOKEN}}}}
     rules = (HERE / "discuss_rules.md").read_text(encoding="utf-8")
-    cmd = [CLAUDE, "-p", ctx + "The author says: " + question,
+    cmd = [claude_path(), "-p", ctx + "The author says: " + question,
            "--output-format", "stream-json", "--verbose",
            "--include-partial-messages",
            "--mcp-config", json.dumps(cfg),
@@ -2677,7 +2684,7 @@ class H(BaseHTTPRequestHandler):
                                     cwd=str(HERE))
         except FileNotFoundError:
             return self._send(500, {"error": "Claude Code is not installed "
-                                    "— install `claude` or set CLAUDE"})
+                                    "— install `claude` or set SAGA_CLAUDE"})
         with _chats_lock:
             _chats[project] = proc
 
@@ -2707,7 +2714,8 @@ class H(BaseHTTPRequestHandler):
                 errtail.append(ln.strip())
                 del errtail[:-4]
 
-        threading.Thread(target=drain_err, daemon=True).start()
+        errt = threading.Thread(target=drain_err, daemon=True)
+        errt.start()
 
         streamed = 0            # deltas sent; the fallback for CLIs without
         done = False            # partial messages only fires when none came
@@ -2769,10 +2777,18 @@ class H(BaseHTTPRequestHandler):
                 if _chats.get(project) is proc:
                     del _chats[project]
         if not done:
+            errt.join(timeout=2)     # stderr hits EOF once the child is gone
+            tail = " · ".join(x for x in errtail if x)[-300:]
             try:
-                tail = " · ".join(x for x in errtail if x)[-300:]
-                self._sse({"e": "err", "t": "the agent stopped early"
-                           + (f" — {tail}" if tail else "")})
+                # "Not logged in · Please run /login" is Claude Code's way of
+                # saying the machine has never signed in. The panel turns
+                # that into hand-holding rather than terminal jargon.
+                if re.search(r"not logged in|please run /login|invalid api key",
+                             tail, re.I):
+                    self._sse({"e": "auth"})
+                else:
+                    self._sse({"e": "err", "t": "the agent stopped early"
+                               + (f" — {tail}" if tail else "")})
             except OSError:
                 pass
 
@@ -2824,6 +2840,11 @@ class H(BaseHTTPRequestHandler):
                 "engines": list(ENGINES), "omnivoice": ov_available(),
                 "kokoro": kokoro_available(), "kvoices": kokoro_voices(),
                 "stale_build": build_stale(),
+                # whether the discuss agent has a Claude to speak with —
+                # checked fresh each time, so installing it mid-session is
+                # noticed on the next refresh. Whether that Claude is signed
+                # in is only knowable by asking, so the panel learns it then.
+                "claude": Path(claude_path()).exists(),
                 "model": "warm" if _model else "cold"})
         if u.path == "/api/plugins":
             try:
