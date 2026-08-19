@@ -61,17 +61,17 @@ background:var(--chrome);border-top:1px solid var(--line);font-size:12px}
 border-radius:5px;padding:3px 11px;font:12px var(--mono);cursor:pointer}
 #bar button:hover{border-color:var(--green);color:var(--green)}
 .mut{color:var(--dim)}.warn{color:var(--amber)}
-#dot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none}
-#dot.on{background:var(--green)}
 /* embedded in the editor (the Game view): pure picture — the dock's own bar
-   carries the chrome. A popped-out mirror keeps a sliver of bar for the one
-   thing only it can offer: the way back in. */
+   carries the chrome. A popped-out mirror keeps a sliver of bar, worn as a
+   HEADER, for the one thing only it can offer: the way back in, top right. */
 body.embed{grid-template-rows:1fr}
 body.embed #bar{display:none}
 #popin{display:none}
+body.mirror{grid-template-rows:auto 1fr}
+body.mirror #bar{order:-1;border-top:0;border-bottom:1px solid var(--line)}
+body.mirror #room{order:1}
 body.mirror #bar>*{display:none}
-body.mirror #bar #popin{display:inline-block}
-body.mirror #bar #dot{display:inline-block}
+body.mirror #bar #popin{display:inline-block;margin-left:auto}
 </style>
 </head>
 <body>
@@ -88,8 +88,7 @@ body.mirror #bar #dot{display:inline-block}
   <button id="playb" onclick="toggle()">▶ Play</button>
   <button onclick="playFrom(null)" title="back to the top">⟲ From Start</button>
   <button id="popin" onclick="popIn()"
-    title="Return the stage to its dock in the editor">⇲ Pop Back In</button>
-  <span id="dot" title="editor connection"></span>
+    title="Pop the stage back into its dock in the editor">⧉</button>
 </div>
 <script src="/player.js"></script>
 <script>
@@ -132,7 +131,6 @@ const sayFrame=patch=>{ if(!EMBED)return;
   Object.assign(LASTF,patch||{}); say({type:'frame',...LASTF}); };
 if(BC)BC.onmessage=e=>{
   const m=e.data||{};
-  $('dot').classList.add('on');
   if(m.type==='hello'){ if(EMBED)sayFrame(); return; }  // a late mirror gets the wall
   if(m.type==='frame'&&!EMBED)return void mirror(m);   // an owner is painting
   if(m.type==='choose')return void(CHOOSE&&CHOOSE(m.i));
