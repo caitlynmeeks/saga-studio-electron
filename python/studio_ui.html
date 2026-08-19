@@ -833,9 +833,13 @@ async function refresh(){
     clearTimeout(BAKETIMER); BAKETIMER=null;
     $('stopb').disabled=false; $('stopb').textContent='Stop Rendering';
     if(WASBAKING){ WASBAKING=false;
-      $('status').innerHTML = b.stopped
+      $('status').innerHTML = b.error
+        ? `<span class="warn">rendering stopped at ${b.done}/${b.total} — ${esc(b.error)}</span>`
+        : b.stopped
         ? `<span class="warn">rendering stopped at ${b.done}/${b.total}</span> — press it again to resume`
-        : `<span class="ok">rendering complete — ${b.done}/${b.total}</span>`;
+        : b.total
+        ? `<span class="ok">rendering complete — ${b.done}/${b.total}</span>`
+        : 'nothing to render — every live card is already ready';
     }
   }
 }
@@ -3717,7 +3721,16 @@ async function moveCard(id,to,grp){
 }
 
 // ── bake / assemble ───────────────────────────────────────
-async function bake(){ if(!DOC)return; await ensureProfSaved(); await api('/api/bake',{name:DOC.name}); refresh(); }
+async function bake(){
+  if(!DOC)return;
+  await ensureProfSaved();
+  const r=await api('/api/bake',{name:DOC.name});
+  if(r&&r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  // optimistically: a short bake — an error on card one, or nothing stale —
+  // can finish before the first poll, and the ending must still be told
+  WASBAKING=true;
+  refresh();
+}
 async function stopBake(){
   const b=$('stopb'); b.disabled=true; b.textContent='stopping…';
   await api('/api/bake_stop',{});
@@ -3764,7 +3777,9 @@ let STAGESEEN=false, STAGEPLAY=null;
 // one true player, and these address it by name; a pop-out only mirrors it.
 function stageToggle(){
   if(!DOC||!STAGE)return;
-  toggleDock(true);                     // the player lives down there
+  // The player is the embedded stage whether or not the dock is showing — a
+  // display:none iframe still plays. So ▶ never summons the dock: hearing
+  // the story is not a request to watch it, and Stage is one click away.
   STAGE.postMessage({type:'toggle',to:'embed',name:DOC.name,from:CUR});
   $('status').textContent=CUR==null
     ?'the story plays from the top'

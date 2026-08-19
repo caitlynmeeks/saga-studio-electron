@@ -208,7 +208,7 @@ _kokoro = None
 _kvoices = None
 _lock = threading.Lock()          # espeak's phonemizer: one kokoro render at a time
 _bake = {"running": False, "done": 0, "total": 0, "project": "", "label": "",
-         "cancel": False, "stopped": False}
+         "cancel": False, "stopped": False, "error": ""}
 _docmut = threading.Lock()        # one doc.json read-modify-write at a time
 
 DEFAULTS = {"voice": "", "exag": 0.4, "cfg": 0.35,
@@ -2357,7 +2357,7 @@ def bake(name):
     todo = [c for c in doc["chunks"] if is_renderable(c) and not c.get("mute")
             and not (AUDIO / f"{chunk_hash(c, doc)}.wav").exists()]
     _bake.update(running=True, done=0, total=len(todo), project=name, label="",
-                 cancel=False, stopped=False)
+                 cancel=False, stopped=False, error="")
     try:
         for c in todo:
             if _bake["cancel"]:
@@ -2365,7 +2365,16 @@ def bake(name):
                 break
             _bake["label"] = (c["text"][:60] if is_speech(c)
                               else "◎ " + (c.get("perfname") or "performance"))
-            render_any(c, doc)
+            try:
+                render_any(c, doc)
+            except Exception as ex:
+                # A bake must never die silently. One card's failure usually
+                # means every card's failure — a missing engine, a missing
+                # voice — so stop here and put the reason where the status
+                # line reads it, rather than grinding through the rest.
+                _bake.update(stopped=True,
+                             error=f"card #{c['id']}: {type(ex).__name__}: {ex}")
+                break
             _bake["done"] += 1
     finally:
         _bake.update(running=False, label="", cancel=False)
