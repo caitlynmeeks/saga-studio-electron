@@ -28,6 +28,8 @@
       "python/player.js",
       "python/export_player.html",
       "python/omnivoice_server.py",
+      "python/saga_mcp.py",
+      "python/discuss_rules.md",
       "python/requirements.txt"
     ],
     "mac": {
