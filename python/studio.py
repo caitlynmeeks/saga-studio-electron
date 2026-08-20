@@ -606,7 +606,9 @@ def paste_card(src):
     elif kind == "visual":
         c = {"id": 0, "type": "visual",
              "media": re.sub(r"[^a-z0-9_-]", "", str(src.get("media") or "")),
-             "note": ""}
+             # on a visual card the note is the paint prompt — content,
+             # not marginalia, so it travels with the copy
+             "note": str(src.get("note") or "")[:2000]}
         if src.get("ref"):                 # the generate button's reference
             c["ref"] = re.sub(r"[^a-z0-9_-]", "", str(src["ref"]))
         gen = [re.sub(r"[^a-z0-9_-]", "", str(x))
@@ -4424,7 +4426,13 @@ class H(BaseHTTPRequestHandler):
                 for c in doc["chunks"]:
                     out.append(c)
                     if c["id"] == d["id"]:
-                        out.append({**json.loads(json.dumps(c)), "note": ""})
+                        dup = json.loads(json.dumps(c))
+                        # a note is marginalia about where a card sits —
+                        # except on a visual card, where it IS the paint
+                        # prompt: the thing a duplicate most wants to keep
+                        if c.get("type") != "visual":
+                            dup["note"] = ""
+                        out.append(dup)
                 for i, c in enumerate(out):
                     c["id"] = i
                 doc["chunks"] = out

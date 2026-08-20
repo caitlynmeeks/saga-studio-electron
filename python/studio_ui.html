@@ -2628,6 +2628,7 @@ function paintRow(c){
     <div class="arow">
       <textarea id="vp${c.id}" rows="2" style="flex:1;resize:vertical;min-height:38px"
         placeholder="${nb?'what to paint — subject, style, mood, light':'the paint prompt — a Gemini key is needed (hover the button below)'}"
+        oninput="fitTa(this)"
         onblur="setCard(${c.id},{note:this.value})"${c.locked?' readonly':''}>${esc(c.note||'')}</textarea>
     </div>
     <div class="arow">
@@ -2661,6 +2662,7 @@ function togglePaint(id){
   const act=document.querySelector('#c'+id+' .act');
   if(act)act.insertAdjacentHTML('beforebegin', paintRow(c));
   const inp=$('vp'+id);
+  fitTa(inp);                // open at the size of what it holds
   if(inp&&!c.locked&&!inp.value)inp.focus();
 }
 
@@ -2741,7 +2743,7 @@ function titleCard(c){
     </div>
     <div class="arow">
       <textarea rows="2" placeholder="the words on the screen — line breaks hold"
-        style="flex:1;resize:vertical;min-height:40px"
+        style="flex:1;resize:vertical;min-height:40px" oninput="fitTa(this)"
         onblur="setCard(${c.id},{text:this.value})"${c.locked?' readonly':''}>${esc(c.text||'')}</textarea>
     </div>
     <div class="arow">
@@ -2915,7 +2917,24 @@ function autosize(id){
   setTimeout(()=>{ta._prog=false},0);
 }
 const sized=c=>HEIGHT[c.id]||c.height;
-function fitAll(){ DOC.chunks.forEach(c=>{ if(!sized(c)) autosize(c.id); }); }
+function fitAll(){ DOC.chunks.forEach(c=>{ if(!sized(c)) autosize(c.id); });
+  document.querySelectorAll('#main .arow textarea').forEach(fitTa); }
+// Every little text box — a subtitle, a paint prompt, a title's words —
+// opens at the height of what it holds (within reason), because a caption
+// paced with // is a paragraph and reading it through a two-line slot was
+// all scrolling. The native corner grip stays for dragging it taller or
+// shorter by hand; dragging always wins over the next auto-fit.
+function fitTa(el){
+  if(!el||el.dataset.dragged)return;
+  el.style.height='auto';
+  el.style.height=Math.min(el.scrollHeight+2,340)+'px';
+}
+// a hand on the grip is a decision: remember it and stop auto-fitting
+document.addEventListener('mousedown',e=>{
+  const ta=e.target.closest('#main .arow textarea'); if(!ta)return;
+  const r=ta.getBoundingClientRect();
+  if(e.clientX>r.right-18&&e.clientY>r.bottom-18)ta.dataset.dragged='1';
+});
 
 // A rebuild of the card list would drop an inline height, so remember it and
 // put it back — and persist it so it survives a reload too.
@@ -3257,6 +3276,7 @@ function subRow(c){
       :c.type==='visual'
       ?'a caption over this picture'
       :'what the stage shows — the card’s text is what is spoken. A // paces the pieces one after another'}"
+      oninput="fitTa(this)"
       onchange="setCard(${c.id},{sub:this.value});paintSubBtn(${c.id})">${esc(c.sub||'')}</textarea>
     ${!chainable?'':`<label class="mut" style="font-size:11px;white-space:nowrap"
       title="don’t clear this caption when the card ends — the next caption appends to it, one growing block across cards split for delivery. Silences and sound clips in between leave it standing.">
@@ -3303,6 +3323,7 @@ function toggleSub(id){
     // following the card's own edits, while an empty sub keeps captioning
     // from the live text.
     if(!inp.value&&(c.type||'speech')==='speech'&&c.text)inp.value=c.text;
+    fitTa(inp);              // open at the size of what it holds
     inp.focus();
   }
 }
@@ -3766,7 +3787,7 @@ function cardClip(c){
     {clip:c.clip||'', mode:c.mode||'full', after:c.after, fade:c.fade, gain:c.gain});
   else if(k.type==='silence')k.secs=c.secs;
   else if(k.type==='visual')Object.assign(k,
-    {media:c.media||'', ref:c.ref, gen:c.gen});
+    {media:c.media||'', ref:c.ref, gen:c.gen, note:c.note});
   else if(k.type==='title')Object.assign(k,
     {text:c.text||'', secs:c.secs, fade:c.fade});
   else if(k.type==='choice')Object.assign(k,
