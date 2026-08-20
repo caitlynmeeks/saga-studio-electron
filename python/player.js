@@ -176,13 +176,16 @@ const SagaPlay = (() => {
   }
 
   function pages (t) {
-    // A standalone // is the author's own page break: they pace the line
-    // themselves, and each piece is a page exactly as written, shown in
-    // turn across the card's audio. Only a // with space (or an edge) on
-    // both sides counts, so a URL in the prose keeps its slashes. Without
-    // any, a paragraph packs itself into sentence pages as it always has.
-    if (/(?:^|\s)\/\/(?:\s|$)/.test(t)) {
-      return t.split(/(?:^|\s)\/\/(?:\s|$)/).map(s => s.trim()).filter(Boolean)
+    // A // is the author's own page break: they pace the line themselves,
+    // and each piece is a page exactly as written, shown in turn across
+    // the card's audio. Spacing around it is the author's business —
+    // `still,//it` breaks as surely as `still, // it`. Only a URL's own
+    // :// is shielded (swapped out before the split, restored after).
+    // Without any //, a paragraph packs itself into sentence pages.
+    const g = t.replace(/:\/\//g, ':\u0001')
+    if (g.includes('//')) {
+      return g.split(/\s*\/\/+\s*/)
+        .map(s => s.replace(/\u0001/g, '//').trim()).filter(Boolean)
     }
     const out = []
     let cur = ''

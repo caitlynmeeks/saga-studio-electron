@@ -33,9 +33,10 @@ the story rather than trusting remembered ids.**
   jump anchors. `sub` is what the screen shows when it differs from what is
   spoken. `when` (`met_gertie`, `!brave`, `coins>=3`) skips the card when it
   fails. `runon: true` removes the rest before the card, for a sentence
-  split across two cards. A standalone ` // ` in the text (or the sub) is a
-  caption break: the pieces are shown one after another, paced across the
-  card's audio, and the voice never reads it. Use it to pace a poem's lines.
+  split across two cards. A `//` in the text (or the sub) is a caption
+  break: the pieces are shown one after another, paced across the card's
+  audio, and the voice never reads it — spacing around it does not matter,
+  and a URL's own `://` is left alone. Use it to pace a poem's lines.
 - **group** — a named bar (`gname`); the cards after it that belong to it
   form a scene. Name it when inserting (pass `gname`) or later with
   `rename_group` — never via edit_card. A tagged group is a jump

@@ -241,13 +241,14 @@ def normalise(t):
 
 
 def spoken_text(t):
-    """What the booth is fed. The scene mark ❦ is silent, and so is a
-    standalone // — the author's manual caption break, which paces the words
-    on the screen (see player.js pages()) and must never be read aloud.
-    Only a // with space (or an edge) on both sides counts, so a URL in the
-    prose keeps its slashes."""
-    t = t.replace("❦", " ")
-    return re.sub(r"(?:(?<=\s)|^)//(?=\s|$)", " ", t).strip()
+    """What the booth is fed. The scene mark ❦ is silent, and so is // —
+    the author's manual caption break, which paces the words on the screen
+    (see player.js pages()) and must never be read aloud. Spacing around it
+    does not matter; only a URL's own :// is shielded. Newlines survive —
+    they are phrasing — so the mark eats spaces and tabs, never the line."""
+    t = t.replace("❦", " ").replace("://", ":\x01")
+    t = re.sub(r"[ \t]*//+[ \t]*", " ", t)
+    return t.replace("\x01", "//").strip()
 
 
 def split_chunks(text, cap=280):

@@ -3259,7 +3259,7 @@ function subRow(c){
       ?'the question over the buttons — shown while the stage asks'
       :c.type==='visual'
       ?'a caption over this picture'
-      :'what the stage shows — the card’s text is what is spoken. A standalone // paces the pieces one after another'}"
+      :'what the stage shows — the card’s text is what is spoken. A // paces the pieces one after another'}"
       onchange="setCard(${c.id},{sub:this.value});paintSubBtn(${c.id})">${esc(c.sub||'')}</textarea>
     ${!chainable?'':`<label class="mut" style="font-size:11px;white-space:nowrap"
       title="don’t clear this caption when the card ends — the next caption appends to it, one growing block across cards split for delivery. Silences and sound clips in between leave it standing.">
