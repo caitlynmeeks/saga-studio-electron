@@ -2608,33 +2608,68 @@ function visualCard(c){
           esc(m.name)}${m.kind==='video'?' (film)':''}</option>`).join('')}
       </select>
       <button onclick="pickMedia(${c.id})">Import a File…</button>
-      ${(c.gen||[]).length?`<button onclick="genMenu(event,${c.id})"
-        title="the variants painted for this card — choose one, drop one, paint another">${
-        (c.gen||[]).length} variant${(c.gen||[]).length===1?'':'s'} ▾</button>`:''}
+    </div>
+    <div class="arow">${show}</div>
+    ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
+    ${PAINTS.has(c.id)?paintRow(c):''}
+    <div class="act">
+      <button id="sub${c.id}" class="tiny ${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
+        title="a caption over this picture — shown while it stands, typewriter overrides included">Subtitle</button>
+      <button id="pt${c.id}" class="tiny ${((c.note||'').trim()||(c.gen||[]).length)?'dirty':''}"
+        onclick="togglePaint(${c.id})"
+        title="paint this card with nanobanana — prompt, reference image, variants">✨ Paint</button>
+      <span class="mut" id="s${c.id}" style="font-size:11px"></span>
+    </div>
+   </div>`;
+}
+
+// The paint panel, shut by default and popped open by the ✨ Paint button —
+// beneath the picture, because it is ABOUT the picture. The prompt is the
+// card's note (the same field the discuss agent writes its prompts into,
+// so either of them can repaint the other's card), the reference keeps a
+// story's pictures one cast, and the variants menu holds every painting
+// this card has tried on.
+let PAINTS=new Set();
+function paintRow(c){
+  const media=STATE.media||[], nb=!!STATE.nanobanana;
+  return `<div id="pr${c.id}">
+    <div class="arow">
+      <textarea id="vp${c.id}" rows="2" style="flex:1;resize:vertical;min-height:38px"
+        placeholder="${nb?'what to paint — subject, style, mood, light':'the paint prompt — a Gemini key is needed (hover the button below)'}"
+        onblur="setCard(${c.id},{note:this.value})"${c.locked?' readonly':''}>${esc(c.note||'')}</textarea>
     </div>
     <div class="arow">
-      <input id="vp${c.id}" value="${esc(c.note||'')}" style="flex:1"
-        placeholder="${STATE.nanobanana?'what to paint — subject, style, mood, light':'the paint prompt — needs a Gemini key (hover ✨)'}"
-        onblur="setCard(${c.id},{note:this.value})"${c.locked?' readonly':''}>
-      <select onchange="setCard(${c.id},{ref:this.value})" style="max-width:120px"
+      <select onchange="setCard(${c.id},{ref:this.value})" style="max-width:150px"
         title="optional reference image — the model matches its style or subject, which keeps a story's pictures one cast">
         <option value="">no reference</option>
         ${media.filter(m=>m.kind!=='video').map(m=>`<option value="${esc(m.name)}" ${
           m.name===c.ref?'selected':''}>ref: ${esc(m.name)}</option>`).join('')}
       </select>
-      <button id="gb${c.id}" class="pri" onclick="genImage(${c.id})" ${STATE.nanobanana?'':'disabled'}
-        title="${STATE.nanobanana
+      ${(c.gen||[]).length?`<button onclick="genMenu(event,${c.id})"
+        title="the variants painted for this card — choose one, drop one, paint another">${
+        (c.gen||[]).length} variant${(c.gen||[]).length===1?'':'s'} ▾</button>`:''}
+      <span style="flex:1"></span>
+      <button id="gb${c.id}" class="pri" onclick="genImage(${c.id})" ${nb?'':'disabled'}
+        title="${nb
           ?'paint this card with nanobanana — every press is a NEW variant, a few cents and ~15s each'
           :'no Gemini API key — paste one from aistudio.google.com into gemini_key.txt in your library folder, no restart needed'}">✨ ${c.media?'Repaint':'Paint'}</button>
     </div>
-    <div class="arow">${show}</div>
-    ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
-    <div class="act">
-      <button id="sub${c.id}" class="tiny ${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
-        title="a caption over this picture — shown while it stands, typewriter overrides included">Subtitle</button>
-      <span class="mut" id="s${c.id}" style="font-size:11px"></span>
-    </div>
-   </div>`;
+  </div>`;
+}
+function togglePaint(id){
+  const row=$('pr'+id);
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  if(row){
+    // closing must not eat a half-typed prompt: removal skips the blur
+    const inp=$('vp'+id);
+    if(inp&&!c.locked&&inp.value!==(c.note||''))setCard(id,{note:inp.value});
+    row.remove(); PAINTS.delete(id); return;
+  }
+  PAINTS.add(id);
+  const act=document.querySelector('#c'+id+' .act');
+  if(act)act.insertAdjacentHTML('beforebegin', paintRow(c));
+  const inp=$('vp'+id);
+  if(inp&&!c.locked&&!inp.value)inp.focus();
 }
 
 // ── painting visuals ──────────────────────────────────────
