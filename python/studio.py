@@ -168,6 +168,10 @@ def kokoro_available():
 # SAGA_TOKEN adds a shared secret if the network is not fully trusted.
 HOST = os.environ.get("SAGA_HOST", "127.0.0.1")
 TOKEN = os.environ.get("SAGA_TOKEN", "")
+# Where the publish tab's Share button carries web stories: darkride.ai's
+# stage door, or any compatible receiver — a local darkride_server.py for
+# testing — via SAGA_DARKRIDE.
+DARKRIDE = os.environ.get("SAGA_DARKRIDE", "https://darkride.ai").rstrip("/")
 # SAGA_CLAUDE points at an unusually-installed Claude Code; otherwise PATH,
 # then the homebrew spot the packaged app cannot see PATH for. A function,
 # not a constant: someone following the discuss panel's install steps has
@@ -3153,6 +3157,64 @@ def publish_html(name):
     return Path(made), len(segs), missing_total
 
 
+def share_web(name):
+    """Carry the web story to darkride.ai and come back with the link.
+
+    The export is rebuilt when the document has changed since the zip was
+    packed, so Share always means "share what I have now". share.json in
+    the project folder keeps the slug and the secret token the stage door
+    hands out on the first upload — which is what lets every later share
+    REPLACE the story at the same URL instead of scattering a new link per
+    revision. A token the server no longer recognises (the story deleted
+    there, the box rebuilt) is dropped and the share retried once as new,
+    because a stale secret should cost the author nothing but a fresh URL."""
+    import urllib.request
+    import urllib.error
+    zp = pdir(name) / "out" / f"{name}-web.zip"
+    docf = pdir(name) / "doc.json"
+    built = False
+    if not zp.exists() or (docf.exists()
+                           and docf.stat().st_mtime > zp.stat().st_mtime):
+        zp, _, _ = publish_html(name)
+        built = True
+    sf = pdir(name) / "share.json"
+    try:
+        share = json.loads(sf.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        share = {}
+    if zp.stat().st_size > 400 * 1024 * 1024:
+        raise RuntimeError("the story is over darkride's 400 MB cap — "
+                           "trim the media or the audio and export again")
+    payload = zp.read_bytes()
+    for retry in (False, True):
+        req = urllib.request.Request(DARKRIDE + "/api/upload", data=payload,
+                                     headers={"Content-Type": "application/zip"})
+        if share.get("slug") and share.get("token"):
+            req.add_header("X-Darkride-Slug", share["slug"])
+            req.add_header("X-Darkride-Token", share["token"])
+        try:
+            with urllib.request.urlopen(req, timeout=600) as r:
+                out = json.loads(r.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as ex:
+            try:
+                msg = json.loads(ex.read().decode("utf-8")).get("error") or str(ex)
+            except (ValueError, OSError):
+                msg = str(ex)
+            if ex.code == 403 and share and not retry:
+                share = {}
+                continue
+            raise RuntimeError(msg)
+        except (urllib.error.URLError, OSError) as ex:
+            raise RuntimeError(f"could not reach {DARKRIDE} — "
+                               f"{getattr(ex, 'reason', None) or ex}")
+    share.update({"slug": out["slug"], "url": out["url"], "at": int(time.time())})
+    if out.get("token"):
+        share["token"] = out["token"]
+    sf.write_text(json.dumps(share), encoding="utf-8")
+    return out["url"], built, zp.stat().st_size
+
+
 # ── the discuss agent ───────────────────────────────────────────────────
 # This used to be three lines: shell out, wait three minutes, print whatever
 # came back. Now the agent has hands and a memory. It runs headless Claude
@@ -3640,6 +3702,15 @@ class H(BaseHTTPRequestHandler):
             # film runs to real megabytes; stream it like a book
             return self._send_file(f, MEDIA_MIME.get(f.suffix.lower(),
                                                      "application/octet-stream"))
+        if u.path == "/api/share_info":
+            # the standing darkride link, if this story has one — the token
+            # stays home; only the URL is anyone's business
+            try:
+                s = json.loads((pdir(q.get("name", [""])[0]) / "share.json")
+                               .read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                s = {}
+            return self._send(200, {"url": s.get("url"), "at": s.get("at")})
         if u.path == "/api/book_audio":
             f = pdir(q.get("name", [""])[0]) / "out" / ".preview.wav"
             if not f.exists():
@@ -3973,7 +4044,9 @@ class H(BaseHTTPRequestHandler):
                                   "/api/reveal", "/api/profile/impact",
                                   # slow and read-only, the same shape as
                                   # assemble — they must not block typing
-                                  "/api/publish_video", "/api/publish_html") else _docmut
+                                  # (share touches only share.json and out/)
+                                  "/api/publish_video", "/api/publish_html",
+                                  "/api/share") else _docmut
         if lock:
             lock.acquire()
         try:
@@ -4816,6 +4889,13 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "file": str(f),
                                         "bytes": f.stat().st_size,
                                         "segments": nsegs, "missing": missing})
+            if u.path == "/api/share":
+                try:
+                    url, built, nbytes = share_web(d["name"])
+                except RuntimeError as ex:
+                    return self._send(400, {"error": str(ex)})
+                return self._send(200, {"ok": True, "url": url,
+                                        "built": built, "bytes": nbytes})
             if u.path == "/api/book_preview":
                 frm, upto = d.get("from"), d.get("upto")
                 f, secs, missing, marks = preview_book(

@@ -1781,8 +1781,38 @@ function renderPublish(){
       visuals, captions${nch?', and its '+nch+' choice'+(nch===1?'':'s'):''}.
       Unzip anywhere, open index.html.</div>
     <button id="pubweb" onclick="publishWeb()" style="width:100%;margin-top:6px">Export Web Story</button>
+    <h2 style="margin-top:16px">Share</h2>
+    <div class="mut" style="font-size:11px">The web story, live on
+      <b>darkride.ai</b> at a link anyone can open. Sharing again updates
+      the story and keeps the link.</div>
+    <button id="pubshare" onclick="shareWeb()" style="width:100%;margin-top:6px">↗ Share to darkride.ai</button>
+    <div id="sharemsg" class="mut" style="font-size:11px;margin-top:5px"></div>
     <div id="pubmsg" class="mut" style="font-size:11px;margin-top:8px"></div>`;
   try{ const f=localStorage.getItem('saga.pubfmt'); if(f&&$('pubfmt'))$('pubfmt').value=f; }catch(e){}
+  paintShare();
+}
+// the standing link, shown whenever the tab opens — the reminder that a
+// story is out there wearing an older revision
+async function paintShare(){
+  if(!DOC)return;
+  const r=await api('/api/share_info?name='+encodeURIComponent(DOC.name));
+  const el=$('sharemsg');
+  if(el&&r&&r.url)el.innerHTML=shareLine(r.url,'shared');
+}
+const shareLine=(url,word)=>`<span class="ok">${word}</span> —
+  <a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>
+  · <a href="#" onclick="navigator.clipboard.writeText(this.previousElementSibling.href);
+    this.textContent='copied';return false">copy</a>`;
+async function shareWeb(){
+  if(!DOC)return;
+  const b=$('pubshare'); b.classList.add('busy'); b.disabled=true;
+  $('sharemsg').innerHTML='<span class="warn">sharing — packing the story and carrying it to darkride.ai…</span>';
+  let r; try{ r=await api('/api/share',{name:DOC.name}); }
+  catch(ex){ r={error:String(ex)}; }
+  b.classList.remove('busy'); b.disabled=false;
+  if(r.error)return void($('sharemsg').innerHTML=
+    `<span class="warn">share failed — ${esc(r.error)}</span>`);
+  $('sharemsg').innerHTML=shareLine(r.url,r.built?'exported fresh and live':'live');
 }
 async function publishVideo(){
   if(!DOC)return;
