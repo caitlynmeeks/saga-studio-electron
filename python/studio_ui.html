@@ -340,14 +340,10 @@ body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
 .take .n{font-size:10.5px;color:var(--dim);padding:0 2px;min-width:44px;text-align:center}
 .take button{border:0;padding:0 4px;line-height:17px;font-size:12px;color:var(--faint);background:none}
 .take button:hover:not(:disabled){color:var(--green)}
-/* the Game view: the stage docked beneath the cards, always live */
-#stagedock{flex:none;position:relative;border-top:1px solid var(--line);background:#000;
-display:flex;flex-direction:column}
-#sbar{flex:none;display:flex;align-items:center;gap:8px;padding:2px 10px;
-background:var(--chrome);border-bottom:1px solid var(--line);font-size:10px;
-letter-spacing:.08em;color:var(--faint)}
-#stagedock iframe{width:100%;flex:1;min-height:0;border:0;display:block}
-#sgrip{position:absolute;top:-4px;left:0;right:0;height:8px;cursor:ns-resize;z-index:6}
+/* the stage's engine room: the embedded player, mounted but never shown —
+   it owns the sound (same-origin autoplay); the visible stage is a window */
+#stagedock{flex:none}
+#stagedock iframe{width:100%;border:0;display:block}
 body.nostage #stagedock{display:none}
 #dockb.on{border-color:var(--green);color:var(--green)}
 /* story settings: a small panel under the header, not a fourth sidebar */
@@ -376,7 +372,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
     title="collapse every card to its bar">−</button>
   <button id="frb" onclick="toggleFind()" disabled
     title="find and replace across this episode — ⌘F">Find</button>
-  <button id="dockb" onclick="stageBtn(event)" title="show or hide the stage — the story, live under the cards. ⌘-click opens it straight into its own window">Stage</button>
+  <button id="dockb" onclick="stageBtn()" title="open the stage in its own window — the story plays there; click again to bring it to the front">Stage</button>
   <button id="chatb" onclick="togglePanel()" title="show or hide the side panel">Inspector</button>
 </header>
 
@@ -486,14 +482,12 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
   <div id="frbar" hidden></div>
   <div id="draftbar" hidden></div>
   <main id="main"><p class="mut">Drop a markdown file on the left to begin.</p></main>
-  <div id="stagedock" style="height:230px">
-    <div id="sgrip" title="drag to resize the stage"></div>
-    <div id="sbar"><span>STAGE</span><span style="flex:1"></span>
-      <button class="tiny" onclick="popOut()"
-        title="Pop the stage out to its own window — this panel steps aside until it returns">⧉</button>
-      <button class="tiny" style="color:var(--red)" onclick="toggleDock(false)"
-        title="Hide the stage — the Stage button up top brings it back">×</button>
-    </div>
+  <!-- The stage's engine room, permanently hidden. A same-origin iframe
+       inherits the editor's clicks for the autoplay permission, so the
+       SOUND lives here and always has; display:none does not stop an
+       audio element, which is the whole trick. The stage anyone SEES is
+       the popped-out window — a silent mirror of this iframe's frames. -->
+  <div id="stagedock">
     <iframe id="stagefr" allow="autoplay" src="/stage?embed=1"></iframe>
   </div>
 </div>
@@ -3067,9 +3061,12 @@ async function flush(id){
   await queueSave(id);
 }
 // Anything that rebuilds the card list, renumbers ids or moves to another
-// document has to bank the pending edits first. Saving on blur used to do this
-// by accident; a debounce means it has to be asked for.
-const flushAll=()=>Promise.all([...DIRTY].map(flush));
+// document has to bank the pending edits first. BOTH halves of them: the
+// DIRTY cards whose save has not started, and the saves already in flight —
+// clicking Undo blurs the card, the blur starts its save a breath before
+// the click lands, and awaiting only DIRTY let /api/undo overtake that save
+// on the wire, so the edit landed back on top of its own undo.
+const flushAll=()=>Promise.all([...DIRTY].map(flush).concat(Object.values(SAVING)));
 
 // Update what the server derives — hash, ready, effective params — by patching
 // the cards in place. renderDoc() replaces every card's HTML, which drops
@@ -4020,12 +4017,17 @@ const popAlive=()=>(POPUP&&!POPUP.closed)||Date.now()-POPSEEN<5000;
 function popWatch(){
   if(POPWATCH)return;
   POPWATCH=setInterval(()=>{ if(!popAlive()){
-    clearInterval(POPWATCH); POPWATCH=null; POPUP=null; toggleDock(true); } },1200);
+    clearInterval(POPWATCH); POPWATCH=null; POPUP=null; paintStageBtn(false);
+    // closing the theatre pauses the show — the sound lives in the hidden
+    // embed and would otherwise play on to nobody; ▶ Story resumes it,
+    // from the selected card, fresh
+    if(STAGE)STAGE.postMessage({type:'pause',to:'embed'});
+  } },1200);
 }
 function popOut(){
   POPUP=window.open('/stage?pop=1'+(DOC?'&name='+encodeURIComponent(DOC.name):''),'saga-stage');
   POPSEEN=Date.now();
-  toggleDock(false); popWatch();
+  paintStageBtn(true); popWatch();
 }
 // when the stage stops and asks, the question is answerable from here too
 function paintStageChoices(opts){
@@ -4049,7 +4051,7 @@ if(STAGE)STAGE.onmessage=e=>{
   if(m.type==='popped'){
     POPSEEN=Date.now();
     if(!POPUP||POPUP.closed){ try{POPUP=window.open('','saga-stage')}catch(_){} }
-    if(!document.body.classList.contains('nostage'))toggleDock(false);
+    paintStageBtn(true);
     popWatch();
     return;
   }
@@ -4058,53 +4060,30 @@ if(STAGE)STAGE.onmessage=e=>{
   if(m.type==='state'){ const b=$('stgplay');
     if(b)b.textContent=m.playing?'⏸ Story':'▶ Story'; }
   if(m.type==='popin'){ if(POPUP){ try{POPUP.close()}catch(_){} POPUP=null; }
-    POPSEEN=0; clearInterval(POPWATCH); POPWATCH=null; toggleDock(true); }
+    POPSEEN=0; clearInterval(POPWATCH); POPWATCH=null; paintStageBtn(false);
+    if(STAGE)STAGE.postMessage({type:'pause',to:'embed'}); }
   if(m.type==='choices')paintStageChoices(m.opts);
   if(m.type==='playing'&&m.card!=null)followCard(m.card);
   if(m.type==='stopped'){ clearPlaying();
     if(m.card!=null){ CUR=m.card; paintCur(); } }   // stop, fix that one — as the local preview
 };
-// ── the game view dock ────────────────────────────────────
-// The header button: a plain click shows or hides the dock; ⌘-click skips
-// the dock and opens the stage straight into its own window — or focuses
-// the one already out there, since the story is never on screen twice.
-function stageBtn(e){
-  if(e.metaKey){ if(popAlive())toggleDock(true); else popOut(); return; }
-  toggleDock();
-}
-function toggleDock(on){
-  if(on===undefined)on=document.body.classList.contains('nostage');
-  // while a pop-out lives, the dock stays away — the story must never be on
-  // screen twice. "Show me the stage" is answered by the window itself.
-  if(on&&popAlive()){
+// ── the stage window ──────────────────────────────────────
+// The stage anyone SEES is always its own window. The docked view is
+// retired: the embedded iframe stays mounted under the deck but never
+// shows — it exists because a same-origin iframe inherits the editor's
+// clicks for the autoplay permission, so it owns the sound and broadcasts
+// the frames, and the window is its silent mirror. The header button
+// opens that window, or brings the one already out there to the front;
+// closing the window pauses the show (see popWatch).
+function stageBtn(){
+  if(popAlive()){
     try{ (POPUP&&!POPUP.closed?POPUP:window.open('','saga-stage')).focus(); }catch(_){}
-    $('status').textContent='the stage is popped out — ⧉ in its bar brings it home';
     return;
   }
-  document.body.classList.toggle('nostage',!on);
-  try{ localStorage.setItem('saga.stage',on?'1':'0'); }catch(e){}
-  const b=$('dockb'); if(b)b.classList.toggle('on',on);
+  popOut();
 }
-// Hidden until asked for: an audiobook session may never need the stage at
-// all, and the Stage button up top is one click away. Remembered per machine
-// — under a fresh key, because the old one was stamped "shown" on every
-// machine by the old default and would keep the dock up for ever.
-toggleDock(localStorage.getItem('saga.stage')==='1');
-(function(){
-  const g=$('sgrip'), d=$('stagedock'); if(!g||!d)return;
-  try{ const h=+localStorage.getItem('saga.dock.h'); if(h)d.style.height=h+'px'; }catch(e){}
-  g.addEventListener('mousedown',e=>{
-    e.preventDefault();
-    const sy=e.clientY, sh=d.offsetHeight, fr=$('stagefr');
-    fr.style.pointerEvents='none';          // or the iframe eats the drag
-    const mv=ev=>{ const h=Math.max(110,Math.min(window.innerHeight-240,sh+(sy-ev.clientY)));
-      d.style.height=h+'px';
-      try{ localStorage.setItem('saga.dock.h',h); }catch(e){} };
-    const up=()=>{ fr.style.pointerEvents='';
-      removeEventListener('mousemove',mv); removeEventListener('mouseup',up); };
-    addEventListener('mousemove',mv); addEventListener('mouseup',up);
-  });
-})();
+function paintStageBtn(on){ const b=$('dockb'); if(b)b.classList.toggle('on',on); }
+document.body.classList.add('nostage');   // the engine room never shows
 // ── story settings ────────────────────────────────────────
 function toggleStoryPanel(){
   const p=$('storypanel');
@@ -4458,6 +4437,15 @@ async function undo(){
   if(r.ok) open_(DOC.name,true);
 }
 document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&(e.key==='z'||e.key==='Z')&&e.target.tagName==='TEXTAREA'){
+    // Inside a card, ⌘Z is the textarea's own undo — but the desktop app's
+    // menu deliberately carries no undo accelerator (it would swallow the
+    // key from the card-history undo below), which left native undo with
+    // nobody to dispatch it there. So dispatch it by hand, both launches.
+    e.preventDefault();
+    document.execCommand(e.shiftKey?'redo':'undo');
+    return;
+  }
   if((e.metaKey||e.ctrlKey)&&e.key==='z'&&e.target.tagName!=='TEXTAREA'){e.preventDefault();undo()}
   // ⌘F is find-in-manuscript here, not find-in-page: the page is 60 cards of
   // which the browser can only see the ones the scroller has built.
