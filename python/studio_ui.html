@@ -2978,21 +2978,71 @@ function takeUi(c){
       title="re-roll this card — same words, a different reading, without touching the text${
         ov?'.\nOmniVoice: each take is kept, but re-rendering one will not reproduce it — there is no seed.':''}">
     <button id="tkb${c.id}" onclick="takeStep(${c.id},-1)" ${n?'':'disabled'}
-      title="back to the previous take — instant if you have heard it before">◂</button>
-    <span class="n" id="tk${c.id}">${takeName(n)}</span>
+      title="back to the previous kept take — instant if you have heard it before">◂</button>
+    <button class="n" id="tk${c.id}" onclick="takeMenu(event,${c.id})"
+      title="every reading this card has — click one to hear it, hide the ones that are off">${takeName(n)}</button>
     <button onclick="takeStep(${c.id},1)" title="roll again: the same words, read differently">⟳</button>
   </span>`;
 }
+// The take menu: what the blind ◂ ⟳ stepper never showed. Every rendered
+// reading with its length, the current one marked; click one to hear it,
+// hide the ones that are off (kept out of the walk, never deleted — bringing
+// one back is free), roll a fresh one. Whichever take is current is the one
+// the stage plays and every export assembles — hiding never changes the
+// sound, only the shortlist.
+async function takeMenu(e,id){
+  const c=DOC.chunks.find(x=>x.id===id); if(!c)return;
+  await flush(id);                  // the menu lists takes of the words on screen
+  const r=await api('/api/takes?name='+encodeURIComponent(DOC.name)+'&id='+id);
+  if(r.error){ $('status').textContent=r.error; return; }
+  const hid=new Set(r.hidden||[]);
+  const kept=r.takes.filter(t=>!hid.has(t.take));
+  const items=kept.map(t=>({
+    label:(t.take===r.current?'● ':'  ')+takeName(t.take)
+      +(t.ready?` · ${(t.secs||0).toFixed(1)}s`:' · not rendered yet'),
+    run:()=>takeSet(id,t.take)}));
+  items.push('-');
+  const top=Math.max(0,...r.takes.map(t=>t.take));
+  items.push({label:'⟳ roll a new take',run:()=>takeSet(id,top+1)});
+  if(kept.length>1)
+    items.push({label:`✕ hide ${takeName(r.current)} — it's off`,danger:true,
+      run:()=>takeHide(id,r.current,true)});
+  if(hid.size){
+    items.push('-');
+    for(const t of r.takes){ if(!hid.has(t.take))continue;
+      items.push({label:`↩ bring back ${takeName(t.take)}`,
+        run:()=>takeHide(id,t.take,false)});
+    }
+  }
+  openCtx(e,items);
+}
 async function takeStep(id,d){
   const c=DOC.chunks.find(x=>x.id===id); if(!c)return;
-  const was=c.seed||0, n=Math.max(0,was+d);
-  if(n===was)return;
+  const was=c.seed||0, hid=new Set(c.hidden_takes||[]);
+  let n=was+d;
+  while(n>0&&hid.has(n))n+=d;       // the walk only visits kept takes
+  if(n<0||n===was||hid.has(n))return;
+  takeSet(id,n);
+}
+async function takeSet(id,n){
   await flush(id);                  // a take belongs to the words on screen
   await api('/api/chunk',{name:DOC.name,id,seed:n});
   await syncCards();
   const now=DOC.chunks.find(x=>x.id===id);
   if(now&&now.ready){ $('s'+id).textContent=takeName(n)+' — already rendered'; playFull(id); }
-  else one(id);
+  else one(id,true);                // and speaks up the moment it arrives
+}
+async function takeHide(id,n,hide){
+  const c=DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const hid=new Set(c.hidden_takes||[]);
+  if(hide)hid.add(n); else hid.delete(n);
+  await api('/api/chunk',{name:DOC.name,id,hidden_takes:[...hid]});
+  if(hide&&n===(c.seed||0)){
+    // hiding the reading you are on: land on the nearest kept one and hear it
+    let m=n-1; while(m>0&&hid.has(m))m--;
+    if(hid.has(m)){ m=n+1; while(hid.has(m))m++; }
+    await takeSet(id,m);
+  }else await syncCards();
 }
 
 // "runs on" — no rest before this card. Splitting a sentence so a phrase can
@@ -3274,7 +3324,7 @@ async function ensureProfSaved(){
     await saveProf();
 }
 
-async function one(id){
+async function one(id,audition){
   await ensureProfSaved();
   const b=$('rb'+id); b.classList.add('busy'); b.textContent='rendering…';
   $('s'+id).textContent='';
@@ -3282,7 +3332,7 @@ async function one(id){
   await flush(id);
   const r=await api('/api/render',{name:DOC.name,id,force:true});
   if(r.error){ fail(id,r.error); return; }
-  JOBS[r.job]={id,kind:'render'};
+  JOBS[r.job]={id,kind:'render',play:!!audition};
   $('s'+id).textContent='queued — carry on, it renders in the background';
   pollJobs(); }
 
@@ -4278,7 +4328,12 @@ async function pollJobs(){
         if(j.kind==='preview'){
           if(s)s.textContent=`previewed ${j.chars} of ${j.of} chars · ${j.seconds}s`;
           if(mine.play)playHash(j.hash); }
-        else if(s)s.textContent=`rendered in ${j.seconds}s`;
+        else{
+          if(s)s.textContent=`rendered in ${j.seconds}s`;
+          // a freshly rolled take speaks the moment it lands — the silence
+          // here is what made the ⟳ button feel like it did nothing
+          if(mine.play)playHash(j.hash);
+        }
       }
     }
   }

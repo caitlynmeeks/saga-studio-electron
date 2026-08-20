@@ -616,6 +616,10 @@ def paste_card(src):
         seed = int(_num(src.get("seed"), 0, 0, 10 ** 6))
         if seed:
             c["seed"] = seed
+        hs = [int(x) for x in (src.get("hidden_takes") or [])
+              if isinstance(x, (int, float)) and 0 <= int(x) < 10 ** 6]
+        if hs:
+            c["hidden_takes"] = sorted(set(hs))
     else:
         c = {"id": 0, "text": normalise(str(src.get("text") or "")),
              # CARD_PARAMS, not DEFAULTS: a card's per-card delivery and its
@@ -629,6 +633,10 @@ def paste_card(src):
         seed = int(_num(src.get("seed"), 0, 0, 10 ** 6))
         if seed:
             c["seed"] = seed
+        hs = [int(x) for x in (src.get("hidden_takes") or [])
+              if isinstance(x, (int, float)) and 0 <= int(x) < 10 ** 6]
+        if hs:
+            c["hidden_takes"] = sorted(set(hs))
         height = int(_num(src.get("height"), 0, 0, 4000))
         if height:
             c["height"] = height
@@ -3344,6 +3352,40 @@ class H(BaseHTTPRequestHandler):
             # fetched once and cached in the page: 646 entries is too much to
             # send with every /api/state, and it never changes while we run
             return self._send(200, {"languages": languages()})
+        if u.path == "/api/takes":
+            # Every reading this card has on disk, for the take menu. The
+            # files are the truth: nothing records how far a card was ever
+            # rolled, so probe a window of seeds past everything still
+            # referenced and report which hashes exist. A take orphaned by a
+            # text edit simply stops appearing — accurate, since its words
+            # are no longer these words.
+            doc = load(q.get("name", [""])[0])
+            if not doc:
+                return self._send(404, {"error": "no such project"})
+            cid = int(q.get("id", ["-1"])[0])
+            c = next((x for x in doc["chunks"] if x["id"] == cid), None)
+            if c is None or not is_renderable(c):
+                return self._send(400, {"error": "that card does not render"})
+            cur = int(c.get("seed") or 0)
+            hidden = sorted({int(h) for h in (c.get("hidden_takes") or [])})
+            top = max([cur, 24] + [h for h in hidden]) + 8
+            probe = dict(c)
+            takes = []
+            for n in range(0, top + 1):
+                if n:
+                    probe["seed"] = n
+                else:
+                    probe.pop("seed", None)
+                f = AUDIO / f"{chunk_hash(probe, doc)}.wav"
+                have = f.exists()
+                # unrendered seeds are only worth naming when something
+                # still points at them: the current pick, or a hidden mark
+                if have or n == cur or n in hidden:
+                    takes.append({"take": n, "ready": have,
+                                  **({"secs": round(clip_secs(f), 2)}
+                                     if have else {})})
+            return self._send(200, {"takes": takes, "current": cur,
+                                    "hidden": hidden})
         if u.path == "/api/doc":
             doc = load(q.get("name", [""])[0])
             if not doc:
@@ -3910,6 +3952,17 @@ class H(BaseHTTPRequestHandler):
                             c["params"] = got
                         if "seed" in d:            # which take of this card to speak
                             c["seed"] = max(0, int(d["seed"] or 0))
+                        if "hidden_takes" in d:
+                            # takes the menu keeps out of sight. Presentation
+                            # only — never hashed, and the files stay on disk,
+                            # so bringing one back costs nothing.
+                            hs = sorted({int(x) for x in (d["hidden_takes"] or [])
+                                         if isinstance(x, (int, float))
+                                         and 0 <= int(x) < 10 ** 6})
+                            if hs:
+                                c["hidden_takes"] = hs
+                            else:
+                                c.pop("hidden_takes", None)
                         # audio-card fields; clamp here so a stray value can
                         # never put a negative duration on the timeline
                         if "clip" in d:
