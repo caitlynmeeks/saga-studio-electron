@@ -126,7 +126,6 @@ body.mirror #popin{display:inline-block}
   <span class="vol" title="volume">🔊<input type="range" id="vol" min="0" max="100" value="100"
     oninput="setVol(this.value)"></span>
   <button id="ccb" class="lit" onclick="toggleCC()" title="subtitles on / off">CC</button>
-  <button id="twb" onclick="toggleTW()" title="typewriter captions — revealed at the pace of the audio">⌨</button>
   <button onclick="fullScreen()" title="full screen">⛶</button>
   <button id="popin" onclick="popIn()"
     title="Close the stage — the story pauses, and the editor’s Stage button reopens it">×</button>
@@ -170,11 +169,13 @@ const AUDIO=new Audio();
 AUDIO.addEventListener('timeupdate',tick);
 
 // ── the viewer's knobs ────────────────────────────────────
-// The same controls the exported web player wears: volume, captions, the
-// typewriter veto, full screen — remembered per browser. Captions and the
-// typewriter are painted by THIS window, so those toggles act locally in
-// every mode; the sound lives with whoever owns playback, so a mirror
-// forwards volume to the embed instead of touching its own silent AUDIO.
+// The same controls the exported web player wears: volume, captions, full
+// screen — remembered per browser. Captions are painted by THIS window, so
+// CC acts locally in every mode; the sound lives with whoever owns
+// playback, so a mirror forwards volume to the embed instead of touching
+// its own silent AUDIO. Here CC starts ON — the author writes against the
+// words — where the web player starts quiet. The typewriter is the
+// author's design and simply plays as written.
 let CC=true, TW=true;
 const pref=(k,v)=>{ try{ localStorage.setItem('saga.stage.'+k,v) }catch(e){} };
 function setVol(v){ pref('vol',v);
@@ -185,7 +186,6 @@ function toggleCC(){ CC=!CC; $('ccb').classList.toggle('lit',CC); pref('cc',CC?'
   // back on: forget the standing keys and ask the embed to re-send the wall,
   // so the words return at once instead of at the next page turn
   else if(MIRROR){ MCAP=' '; MFX=' '; say({type:'hello'}); } }
-function toggleTW(){ TW=!TW; $('twb').classList.toggle('lit',TW); pref('tw',TW?'1':'0'); }
 function fullScreen(){
   if(document.fullscreenElement)document.exitFullscreen();
   else document.documentElement.requestFullscreen().catch(()=>{}); }
@@ -193,8 +193,7 @@ try{
   const v0=localStorage.getItem('saga.stage.vol');
   if(v0!=null&&v0!==''){ $('vol').value=v0; AUDIO.volume=v0/100; }
   const c0=localStorage.getItem('saga.stage.cc'); if(c0!=null)CC=c0==='1';
-  const w0=localStorage.getItem('saga.stage.tw'); if(w0!=null)TW=w0==='1';
-  $('ccb').classList.toggle('lit',CC); $('twb').classList.toggle('lit',TW);
+  $('ccb').classList.toggle('lit',CC);
 }catch(e){}
 
 const BC='BroadcastChannel' in window?new BroadcastChannel('saga-stage'):null;

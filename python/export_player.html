@@ -99,8 +99,7 @@ background:var(--chrome);border-top:1px solid var(--line);font-size:12px}
   <button onclick="story()" title="back to the top">⟲</button>
   <span class="vol" title="volume">🔊<input type="range" id="vol" min="0" max="100" value="100"
     oninput="setVol(this.value)"></span>
-  <button id="ccb" class="lit" onclick="toggleCC()" title="subtitles on / off">CC</button>
-  <button id="twb" onclick="toggleTW()" title="typewriter captions — revealed at the pace of the audio">⌨</button>
+  <button id="ccb" onclick="toggleCC()" title="subtitles on / off">CC</button>
   <button onclick="fullScreen()" title="full screen">⛶</button>
   <button id="shb" onclick="share()" title="share this story">↗ share</button>
 </div>
@@ -169,18 +168,16 @@ function show(c){
   }
 }
 // ── the control bar ───────────────────────────────────────
-// The knobs a viewer expects of a player: volume, captions, the typewriter,
-// full screen, share. Remembered per browser — a story reopened tomorrow
-// sounds and reads the way it was left.
-// TW honours the story's typewriter design (its setting, card overrides
-// included); unlit, every caption is plain. The author decides the default,
-// the viewer keeps the veto.
-let CC=true, TW=true, TYPER=null;
+// The knobs a viewer expects of a player: volume, captions, full screen,
+// share. Remembered per browser — a story reopened tomorrow sounds and
+// reads the way it was left. Captions start OFF: the story is voiced, and
+// the words are there for whoever asks. The typewriter is the author's
+// design (story setting, card overrides) and simply plays as written.
+let CC=false, TW=true, TYPER=null;
 const pref=(k,v)=>{ try{ localStorage.setItem('saga.player.'+k,v) }catch(e){} };
 function setVol(v){ AUDIO.volume=v/100; pref('vol',v); }
 function toggleCC(){ CC=!CC; $('ccb').classList.toggle('lit',CC);
   if(!CC){ caption(''); fxcap(''); } pref('cc',CC?'1':'0'); }
-function toggleTW(){ TW=!TW; $('twb').classList.toggle('lit',TW); pref('tw',TW?'1':'0'); }
 function fullScreen(){
   if(document.fullscreenElement)document.exitFullscreen();
   else document.documentElement.requestFullscreen().catch(()=>{});
@@ -198,8 +195,7 @@ try{
   const v=localStorage.getItem('saga.player.vol');
   if(v!=null&&v!==''){ $('vol').value=v; AUDIO.volume=v/100; }
   const c=localStorage.getItem('saga.player.cc'); if(c!=null)CC=c==='1';
-  const w=localStorage.getItem('saga.player.tw'); if(w!=null)TW=w==='1';
-  $('ccb').classList.toggle('lit',CC); $('twb').classList.toggle('lit',TW);
+  $('ccb').classList.toggle('lit',CC);
 }catch(e){}
 
 let CAPST={txt:'',chain:false}, CAPQ=[], CAPI=-1;
@@ -258,6 +254,8 @@ async function story(){
   const tok=++TOKEN;
   hideChooser();
   caption(''); fxcap(''); titleClear();   // the last ride's words do not open this one
+  show(null);   // and neither does its picture: a restart mid-scene fades the
+                // wall to black, and the first visual returns at its own moment
   CAPST={txt:'',chain:false}; CAPQ=[]; CAPI=-1;   // a fresh ride, a fresh block
   await SagaPlay.walk(CH,{
     playRun:(from,upto)=>playChain(tok,from,upto),
