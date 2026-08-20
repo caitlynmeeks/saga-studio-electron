@@ -81,7 +81,7 @@ def card_view(c):
                    "ready"),
         "audio": ("clip", "mode", "after", "gain", "fade", "tags", "when"),
         "silence": ("secs",),
-        "visual": ("media", "tags", "when"),
+        "visual": ("media", "note", "tags", "when"),
         "choice": ("options", "auto", "tags", "when"),
         "group": ("gname", "tags"),
     }.get(kind, ("text",))
@@ -139,6 +139,7 @@ def t_overview(a):
                     "omnivoice": bool(s.get("omnivoice")),
                     "kokoro": bool(s.get("kokoro"))},
         "kokoro_presets": kv,
+        "image_gen": bool(s.get("nanobanana")),
     }
 
 
@@ -293,6 +294,19 @@ def t_render_story(a):
                                 "poll story_status(), it can take minutes"}
 
 
+def t_generate_image(a):
+    prompt = (a.get("prompt") or "").strip()
+    if not prompt:
+        raise ToolError("a prompt is needed — describe the picture to paint")
+    r = api("/api/media/generate", {"prompt": prompt,
+                                    "media": a.get("name") or "",
+                                    "aspect": a.get("aspect") or ""})
+    return {"media": r["media"],
+            "note": "in the media pool — show it by setting `media` on a "
+                    "visual card, and keep the prompt in that card's note "
+                    "so a variant can be painted later"}
+
+
 def t_story_status(a):
     doc = doc_of(a.get("story"))
     render = [c for c in doc.get("chunks", [])
@@ -406,6 +420,19 @@ TOOLS = [
     ("story_status", "How rendered a story is: card counts, which ids are "
      "stale, whether a bake is running.",
      _schema({"story": STR}, ["story"]), t_story_status),
+    ("generate_image", "Paint a NEW image into the media pool with the "
+     "studio's image model (only when overview() says image_gen — it uses "
+     "the author's own key). Costs real money and ~15 seconds per picture. "
+     "Returns the media name to set on a visual card. Never overwrites "
+     "existing media.",
+     _schema({"prompt": {**STR, "description":
+                         "what to paint — subject, style, mood, light"},
+              "name": {**STR, "description": "media name to file it under "
+                       "(lowercase words and dashes, e.g. elegy8-gaze)"},
+              "aspect": {**STR,
+                         "enum": ["16:9", "1:1", "9:16", "4:3", "3:4", "21:9"],
+                         "description": "default 16:9, the stage's shape"}},
+             ["prompt"]), t_generate_image),
 ]
 
 

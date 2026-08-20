@@ -4094,7 +4094,7 @@ async function assemble(){
 let CHAT={running:false,fresh:false,t:null};
 const CHAT_MUT=new Set(['insert_card','edit_card','remove_card','move_card',
   'rename_group','create_profile','draft_story','create_story','render_card',
-  'render_story']);
+  'render_story','generate_image']);
 async function send(){
   if(CHAT.running){ api('/api/chat_stop',{name:DOC?DOC.name:null}); return; }
   const q=$('ask').value.trim(); if(!q)return;

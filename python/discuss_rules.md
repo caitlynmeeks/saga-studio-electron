@@ -64,6 +64,17 @@ Rendering costs real compute. Render one card to check a casting
 (`render_card`), not the whole story; `render_story` only when the author
 asks for it. Both run in the background — `story_status` reports progress.
 
+## Illustration
+
+`generate_image` paints a picture into the media pool — only when
+`overview()` says `image_gen`, and it spends the author's money: cents per
+picture, so illustrate a whole story only when asked. Write the prompt
+yourself — subject, style, mood, light — and keep one consistent style
+across a story's pictures. File each under a speaking name
+(`elegy8-creature-gaze`), point a visual card at it (`media`), and put the
+exact prompt in that card's `note` so a variant can be painted later.
+Default 16:9 fits the stage.
+
 ## Style
 
 - Be brief and concrete; the panel is narrow. No headings, no long lists.

@@ -729,6 +729,95 @@ def media_of(doc):
             if c.get("type") == "visual" and c.get("media")}
 
 
+# Nanobanana — Gemini's image model, the studio's illustrator on demand. The
+# key is the author's own (aistudio.google.com) and lives beside the library
+# rather than in the environment, because both launches — classic and desktop
+# app — see the library, and only one of them sees a shell. Read fresh on
+# every call, so pasting a key in works without a restart.
+GEMINI_KEY_FILE = ROOT / "gemini_key.txt"
+NB_MODEL = os.environ.get("SAGA_IMAGE_MODEL", "gemini-2.5-flash-image")
+NB_ASPECTS = ("16:9", "1:1", "9:16", "4:3", "3:4", "21:9")
+
+
+def gemini_key():
+    k = os.environ.get("GEMINI_API_KEY", "")
+    if not k:
+        try:
+            k = GEMINI_KEY_FILE.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+    return k.strip()
+
+
+def generate_media(prompt, stem="", aspect=""):
+    """Ask nanobanana for a picture and file it in the media pool.
+
+    Every generation is new bytes, so the upload route's dedupe has nothing
+    to say here; the never-overwrite rule holds exactly as it does there —
+    media is global, and replacing a name would change every episode showing
+    it. 16:9 unless asked otherwise: the stage and the animatic export are
+    widescreen, and a square picture would sit pillarboxed between them.
+    Returns the name the pool filed it under."""
+    import base64
+    import urllib.request, urllib.error
+    key = gemini_key()
+    if not key:
+        raise RuntimeError("no Gemini API key — paste one from "
+                           f"aistudio.google.com into {GEMINI_KEY_FILE}")
+    if not prompt.strip():
+        raise ValueError("an empty prompt paints nothing")
+    aspect = aspect or "16:9"
+    if aspect not in NB_ASPECTS:
+        raise ValueError(f"aspect must be one of: {', '.join(NB_ASPECTS)}")
+    body = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"imageConfig": {"aspectRatio": aspect}},
+    }).encode()
+    req = urllib.request.Request(
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{NB_MODEL}:generateContent",
+        data=body, headers={"Content-Type": "application/json",
+                            "x-goog-api-key": key})
+    try:
+        with urllib.request.urlopen(req, timeout=110) as r:
+            got = json.loads(r.read().decode())
+    except urllib.error.HTTPError as ex:
+        try:
+            msg = json.loads(ex.read().decode())["error"]["message"]
+        except Exception:
+            msg = f"the image service said {ex.code}"
+        raise RuntimeError(str(msg)[:300])
+    except urllib.error.URLError as ex:
+        raise RuntimeError(f"could not reach the image service: {ex.reason}")
+    parts = ((got.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+    data = next((p["inlineData"] for p in parts if "inlineData" in p), None)
+    if data is None:
+        # a refusal arrives as prose (or a bare block reason) — pass it on,
+        # it says what to rephrase
+        why = (next((p["text"] for p in parts if p.get("text")), "")
+               or (got.get("promptFeedback") or {}).get("blockReason")
+               or "no image came back")
+        raise RuntimeError(str(why)[:300])
+    img = base64.b64decode(data["data"])
+    ext = {"image/png": ".png", "image/jpeg": ".jpg",
+           "image/webp": ".webp"}.get(data.get("mimeType"), ".png")
+    stem = re.sub(r"[^a-z0-9_-]+", "-",
+                  (stem or "art").lower()).strip("-")[:40] or "art"
+    MEDIA.mkdir(parents=True, exist_ok=True)
+    taken = {p.stem for p in MEDIA.iterdir() if p.is_file()}
+    name = _free_name(taken, stem, "new")
+    fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".media-", suffix=ext)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(img)
+        dest = MEDIA / f"{name}{ext}"
+        os.replace(tmp, dest)              # same filesystem: tmp lives in ROOT
+        os.chmod(dest, 0o644)              # mkstemp makes it 0600
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    return name
+
+
 # ── takes ───────────────────────────────────────────────────────────────
 # A take is a performance you recorded, driving a voiced card. Like a clip it
 # is always a PCM wav this program wrote via ffmpeg, so wave can read its
@@ -3231,6 +3320,10 @@ class H(BaseHTTPRequestHandler):
                 # noticed on the next refresh. Whether that Claude is signed
                 # in is only knowable by asking, so the panel learns it then.
                 "claude": Path(claude_path()).exists(),
+                # whether generate_media has a key to paint with — like the
+                # claude check, fresh each time, so pasting one in works
+                # without a restart
+                "nanobanana": bool(gemini_key()),
                 "model": "warm" if _cb["warm"] else "cold"})
         if u.path == "/api/plugins":
             try:
@@ -3685,6 +3778,19 @@ class H(BaseHTTPRequestHandler):
             except (ValueError, RuntimeError) as ex:
                 return self._send(400, {"error": str(ex)})
             return self._send(200, {"ok": True, **engines_status()})
+        # Nanobanana: tens of seconds and library-only — it touches no doc, so
+        # it answers here with the other lockless routes and never blocks
+        # typing. Each thread is its own request, so parallel paintings are
+        # fine; the never-overwrite rule keeps their names from colliding.
+        if u.path == "/api/media/generate":
+            try:
+                mname = generate_media(str(d.get("prompt") or ""),
+                                       str(d.get("media") or ""),
+                                       str(d.get("aspect") or ""))
+            except (ValueError, RuntimeError) as ex:
+                return self._send(400, {"error": str(ex)})
+            return self._send(200, {"ok": True, "media": mname,
+                                    "kind": "image"})
         # Every mutating route needs a real project; without this a bad name
         # surfaces as an opaque 500 from subscripting None.
         if u.path not in ("/api/import", "/api/chat") and d.get("name") is not None:
