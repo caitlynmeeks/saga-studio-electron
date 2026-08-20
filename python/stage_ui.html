@@ -82,17 +82,23 @@ background:var(--chrome);border-top:1px solid var(--line);font-size:12px}
 border-radius:5px;padding:3px 11px;font:12px var(--mono);cursor:pointer}
 #bar button:hover{border-color:var(--green);color:var(--green)}
 .mut{color:var(--dim)}.warn{color:var(--amber)}
-/* embedded in the editor (the Game view): pure picture — the dock's own bar
-   carries the chrome. A popped-out mirror keeps a sliver of bar, worn as a
-   HEADER, for the one thing only it can offer: the way back in, top right. */
+.vol{display:flex;gap:5px;align-items:center;color:var(--dim)}
+.vol input{width:84px;accent-color:var(--green);background:none;border:0;padding:0}
+#bar button.lit{border-color:var(--green);color:var(--green)}
+/* mid-ride, a wall with no picture yet is black ON PURPOSE — the house
+   wordmark is for an idle room, never for an opening scene */
+body.live #empty{display:none}
+/* embedded in the editor (the Game view): pure picture — the engine room
+   never shows and never needs chrome */
 body.embed{grid-template-rows:1fr}
 body.embed #bar{display:none}
 #popin{display:none}
-body.mirror{grid-template-rows:auto 1fr}
-body.mirror #bar{order:-1;border-top:0;border-bottom:1px solid var(--line)}
-body.mirror #room{order:1}
-body.mirror #bar>*{display:none}
-body.mirror #bar #popin{display:inline-block;margin-left:auto}
+/* the pop-out wears the full transport — the same knobs the exported web
+   player gives a viewer — plus the one thing only it can offer: the way
+   back in. Only the flags readout stays home: the walk that owns those
+   runs in the embed, and this window never sees them change. */
+body.mirror #vars{display:none}
+body.mirror #popin{display:inline-block}
 </style>
 </head>
 <body>
@@ -109,7 +115,12 @@ body.mirror #bar #popin{display:inline-block;margin-left:auto}
   <span id="vars" class="mut" style="font-size:11px"></span>
   <span id="clock" class="mut"></span>
   <button id="playb" onclick="toggle()">▶ Play</button>
-  <button onclick="playFrom(null)" title="back to the top">⟲ From Start</button>
+  <button onclick="playFrom(null)" title="back to the top">⟲</button>
+  <span class="vol" title="volume">🔊<input type="range" id="vol" min="0" max="100" value="100"
+    oninput="setVol(this.value)"></span>
+  <button id="ccb" class="lit" onclick="toggleCC()" title="subtitles on / off">CC</button>
+  <button id="twb" onclick="toggleTW()" title="typewriter captions — revealed at the pace of the audio">⌨</button>
+  <button onclick="fullScreen()" title="full screen">⛶</button>
   <button id="popin" onclick="popIn()"
     title="Close the stage — the story pauses, and the editor’s Stage button reopens it">×</button>
 </div>
@@ -151,21 +162,59 @@ let SHOWN=null;            // the visual currently on the room's wall
 const AUDIO=new Audio();
 AUDIO.addEventListener('timeupdate',tick);
 
+// ── the viewer's knobs ────────────────────────────────────
+// The same controls the exported web player wears: volume, captions, the
+// typewriter veto, full screen — remembered per browser. Captions and the
+// typewriter are painted by THIS window, so those toggles act locally in
+// every mode; the sound lives with whoever owns playback, so a mirror
+// forwards volume to the embed instead of touching its own silent AUDIO.
+let CC=true, TW=true;
+const pref=(k,v)=>{ try{ localStorage.setItem('saga.stage.'+k,v) }catch(e){} };
+function setVol(v){ pref('vol',v);
+  if(MIRROR)say({type:'vol',to:'embed',v:+v});
+  else AUDIO.volume=v/100; }
+function toggleCC(){ CC=!CC; $('ccb').classList.toggle('lit',CC); pref('cc',CC?'1':'0');
+  if(!CC){ $('caption').classList.remove('on'); $('fxcap').classList.remove('on'); }
+  // back on: forget the standing keys and ask the embed to re-send the wall,
+  // so the words return at once instead of at the next page turn
+  else if(MIRROR){ MCAP=' '; MFX=' '; say({type:'hello'}); } }
+function toggleTW(){ TW=!TW; $('twb').classList.toggle('lit',TW); pref('tw',TW?'1':'0'); }
+function fullScreen(){
+  if(document.fullscreenElement)document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(()=>{}); }
+try{
+  const v0=localStorage.getItem('saga.stage.vol');
+  if(v0!=null&&v0!==''){ $('vol').value=v0; AUDIO.volume=v0/100; }
+  const c0=localStorage.getItem('saga.stage.cc'); if(c0!=null)CC=c0==='1';
+  const w0=localStorage.getItem('saga.stage.tw'); if(w0!=null)TW=w0==='1';
+  $('ccb').classList.toggle('lit',CC); $('twb').classList.toggle('lit',TW);
+}catch(e){}
+
 const BC='BroadcastChannel' in window?new BroadcastChannel('saga-stage'):null;
 const say=m=>{ if(BC)BC.postMessage({...m,name:NAME}); };
 // what is on the wall right now — kept whole so a mirror that arrives late
 // (or pops out mid-scene) gets the full picture, not just the next change
-let LASTF={media:null,kind:'',cap:'',fx:'',opts:null,tt:'',tsecs:0};
+let LASTF={media:null,kind:'',cap:'',fx:'',opts:null,tt:'',tsecs:0,live:0};
 const sayFrame=patch=>{ if(!EMBED)return;
   Object.assign(LASTF,patch||{}); say({type:'frame',...LASTF}); };
 if(BC)BC.onmessage=e=>{
   const m=e.data||{};
-  if(m.type==='hello'){ if(EMBED)sayFrame(); return; }  // a late mirror gets the wall
+  if(m.type==='hello'){ if(EMBED){ sayFrame();
+    say({type:'state',playing:!AUDIO.paused}); } return; }  // a late mirror gets the wall
   if(m.type==='frame'&&!EMBED)return void mirror(m);   // an owner is painting
   if(m.type==='choose')return void(CHOOSE&&CHOOSE(m.i));
-  if(MIRROR)return;                    // a mirror obeys no transport of its own
+  if(MIRROR){
+    // the mirror's share of the bar: the embed's play state, clock and
+    // title — everything else it shows arrives as frames, and it still
+    // obeys no transport of its own
+    if(m.type==='state')$('playb').textContent=m.playing?'⏸ Pause':'▶ Play';
+    if(m.type==='clock')$('clock').textContent=m.s||'';
+    if(m.type==='open'&&m.name&&m.name!==NAME){ NAME=m.name; load(); }
+    return;
+  }
   if(m.type==='open'&&m.name){ if(m.name!==NAME)switchStory(m.name); else load(); }
   if(!EMBED&&m.to==='embed')return;    // addressed transport is the embed's alone
+  if(m.type==='vol')return void(AUDIO.volume=Math.max(0,Math.min(1,(+m.v||0)/100)));
   if(m.type==='cur')idleShow(m.card);
   if(m.type==='stop')stop();
   if(m.type==='play'){
@@ -202,6 +251,10 @@ let MMEDIA=' ', MCAP=' ', MFX=' ', MOPTS=' ', MTT=' ';
 function mirror(m){
   if(!MIRROR){ MIRROR=true; document.body.classList.add('mirror'); stop();
     $('empty').textContent='Nothing on stage yet — this window mirrors the editor’s stage'; }
+  // every frame names the embed's episode: adopt it, so this window's own
+  // transport never asks the embed to switch back to a story it left
+  if(m.name&&m.name!==NAME){ NAME=m.name; load(); }
+  if('live'in m)document.body.classList.toggle('live',!!m.live);
   if('media'in m&&m.media!==MMEDIA){ MMEDIA=m.media; showMedia(m.media,m.kind); }
   if('tt'in m&&(m.tt||'')!==MTT){ MTT=m.tt||'';
     const el=$('titlecap');
@@ -224,21 +277,28 @@ function mirror(m){
   }
 }
 
-async function load(){
+async function load(curtain){
   if(!NAME){ $('title').textContent='No episode — open one in the studio'; return; }
   DOC=await api('/api/doc?name='+encodeURIComponent(NAME));
   if(!DOC||DOC.error){ DOC=null; $('title').innerHTML=
     '<span class="warn">could not open “'+esc(NAME)+'”</span>'; return; }
   $('title').textContent=DOC.title;
-  // show the episode's first visual as the curtain, so the room is never a
-  // black wall with a play button in front of it — but never stomp the wall
-  // mid-ride: a refresh while playing is about the words, not the picture
-  if(AUDIO.paused){
-    const first=DOC.chunks.find(c=>c.type==='visual'&&c.ready);
-    show(first||null);
-  }
+  // the idle curtain is the story's OPENING look and nothing more: a visual
+  // that leads the deck. The first picture from deeper in the sequence must
+  // never leak backwards onto the wall — a title card would play over
+  // scenery meant for minutes later — so a story that opens on words idles
+  // on the dark room instead. Never stomp the wall mid-ride: a refresh
+  // while playing is about the words, not the picture; and a mirror's wall
+  // belongs to the embed's frames alone.
+  if(curtain!==false&&!MIRROR&&AUDIO.paused)show(govVis(0));
 }
 const card=id=>DOC&&DOC.chunks.find(c=>c.id===id);
+// the visual that governs the card at index k: the last ready visual at or
+// before it — the picture that card's moment stands in front of
+const govVis=k=>{ let v=null;
+  if(DOC)for(let i=0;i<=k&&i<DOC.chunks.length;i++){ const x=DOC.chunks[i];
+    if(x.type==='visual'&&x.ready)v=x; }
+  return v; };
 
 function show(c){
   // same card, same picture — but a card REPAINTED during a pause keeps its
@@ -292,15 +352,15 @@ function caption(text,secs,from,tw,sfx){
   const el=$('caption');
   if(TYPER){ TYPER(); TYPER=null; }
   sayFrame({cap:text||'',secs,from,tw:!!tw});
-  if(!text)return void el.classList.remove('on');
+  if(!text||!CC)return void el.classList.remove('on');
   el.classList.add('on');
-  if(tw&&secs>0)TYPER=SagaPlay.typeCaption(el,text,secs,from||0,sfx?keyclick:null);
+  if(TW&&tw&&secs>0)TYPER=SagaPlay.typeCaption(el,text,secs,from||0,sfx?keyclick:null);
   else el.textContent=text;
 }
 function fxcap(t){
   const el=$('fxcap');
   sayFrame({fx:t||''});
-  if(!t)return void el.classList.remove('on');
+  if(!t||!CC)return void el.classList.remove('on');
   el.textContent=t; el.classList.add('on');
 }
 
@@ -360,7 +420,7 @@ async function story(fromId){
   // the server and is always current — but captions, choices and visuals are
   // read from THIS copy, and playing from a snapshot taken when the window
   // opened meant an edited subtitle never reached the stage until a reload.
-  await load();
+  await load(false);
   if(!DOC||tok!==TOKEN)return;
   // From the top, the slate is clean. From a card, the flags of the LAST
   // ride carry over — which is what testing wants: play through making
@@ -370,12 +430,21 @@ async function story(fromId){
   paintVars();
   let start=0;
   if(fromId!=null){ const k=DOC.chunks.findIndex(c=>c.id===fromId); if(k>=0)start=k; }
+  // the ride opens on the visual that governs its starting card — or on
+  // black, which is what a title card or an opening line deserves to
+  // stand against when its own picture has not yet had its moment
+  show(govVis(start));
+  setLive(true);
   await SagaPlay.walk(DOC.chunks,{
     playRun:(from,upto)=>playRun(tok,from,upto),
     ask:(opts,c)=>ask(tok,opts,c),
     onEnd:reason=>{ if(tok===TOKEN)ended(reason); },
   },VARS,start);
 }
+
+// live = a ride is on (paused counts): the dark room's wordmark steps out of
+// the way, because mid-ride black is a moment on purpose, not an empty house
+function setLive(on){ document.body.classList.toggle('live',!!on); sayFrame({live:on?1:0}); }
 
 function playRun(tok,from,upto){
   return new Promise(res=>{
@@ -393,7 +462,7 @@ function playRun(tok,from,upto){
       AUDIO.onended=()=>{ RUNOFF=null; res(tok===TOKEN); };
       AUDIO.src='/api/book_audio?name='+encodeURIComponent(NAME)+'&t='+Date.now();
       AUDIO.play().then(()=>{ PEND=null; })            // sound granted: wish spent
-        .catch(()=>{ RUNOFF=null; res(false); });
+        .catch(()=>{ RUNOFF=null; setLive(false); res(false); });
       $('playb').textContent='⏸ Pause';
       say({type:'state',playing:true});
     })();
@@ -435,6 +504,7 @@ function paintVars(){
 }
 
 function ended(reason){
+  setLive(false);
   $('playb').textContent='▶ Play';
   say({type:'state',playing:false});
   caption(''); fxcap(''); titleClear();
@@ -454,6 +524,8 @@ function pause(){
   say({type:'stopped',card:MARKS[MARKI]?MARKS[MARKI].id:null});
 }
 function toggle(){
+  // the mirror's button drives the embed — one clock, one voice
+  if(MIRROR)return void say({type:'toggle',to:'embed'});
   if(!AUDIO.paused)return pause();
   if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended&&RUNOFF){
     AUDIO.play(); $('playb').textContent='⏸ Pause'; return;   // resume the run
@@ -462,6 +534,7 @@ function toggle(){
 }
 function stop(){
   TOKEN++;
+  setLive(false);
   caption(''); fxcap(''); titleClear();
   if(RUNOFF){ const f=RUNOFF; RUNOFF=null; f(); }
   if(ASKOFF){ const f=ASKOFF; ASKOFF=null; f(); }
@@ -479,7 +552,9 @@ function switchStory(n){
   VARS={}; PEND=null; paintVars();
   NAME=n; load();
 }
-function playFrom(from){ story(from); }
+function playFrom(from){
+  if(MIRROR)return void say({type:'play',to:'embed'});
+  story(from); }
 
 // the viewfinder: idle OR PAUSED, the stage shows the moment of the card
 // being edited — its governing visual and its words — so writing happens
@@ -493,10 +568,7 @@ async function idleShow(id){
   if(d&&!d.error)DOC=d;
   if(!DOC)return;
   const k=DOC.chunks.findIndex(c=>c.id===id); if(k<0)return;
-  let vis=null;
-  for(let i=0;i<=k;i++){ const x=DOC.chunks[i];
-    if(x.type==='visual'&&x.ready)vis=x; }
-  show(vis||null);
+  show(govVis(k));
   const c=DOC.chunks[k], kind=c.type||'speech';
   if(kind==='title'){
     // writing a title against the wall it will stand on: shown at once,
@@ -518,6 +590,7 @@ async function idleShow(id){
 function tick(){
   const t=AUDIO.currentTime;
   $('clock').textContent=fmt(t)+(AUDIO.duration?' / '+fmt(AUDIO.duration):'');
+  if(EMBED)say({type:'clock',s:$('clock').textContent});
   let i=MARKI<0?0:MARKI;
   while(i+1<MARKS.length&&MARKS[i+1].at<=t)i++;
   if(!MARKS.length)return;
