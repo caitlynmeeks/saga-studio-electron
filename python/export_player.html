@@ -20,11 +20,18 @@ autoplay policy everywhere, including iOS.
 --dim:#6d7d75;--green:#7fd88f;--amber:#e8b45c;
 --mono:ui-monospace,SFMono-Regular,Menlo,monospace}
 *{box-sizing:border-box;margin:0}
+/* black to the roots: no repaint, no layer churn, no fullscreen backdrop
+   may ever glint white between two pictures */
+html{background:#000}
 body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--mono);height:100vh;
 height:100dvh;display:grid;grid-template-rows:1fr auto}
-#room{position:relative;overflow:hidden;min-height:0}
+#room{position:relative;overflow:hidden;min-height:0;background:#000}
+/* a picture arrives invisible and DISSOLVES in over the one still hanging —
+   the old only comes down once the new is fully on, so the wall never dips
+   to black (or worse) between two shots */
 #room img,#room video{position:absolute;inset:0;width:100%;height:100%;
-object-fit:contain;background:#000}
+object-fit:contain;background:#000;opacity:0;transition:opacity .45s ease}
+#room img.on,#room video.on{opacity:1}
 /* the words, the sound line, the chooser and the gate all ride above
    whatever picture is on the wall, whatever order it arrived in */
 #caption,#fxcap,#chooser,#gate{z-index:1}
@@ -114,21 +121,52 @@ const AUDIO=new Audio();
 AUDIO.addEventListener('timeupdate',tick);
 let MARKS=[],MARKI=-1,SHOWN=null,TOKEN=0,RUNOFF=null,ASKOFF=null;
 
+// The wall never blinks: the standing picture stays up while the next one
+// loads and DECODES off-screen, is dissolved in on top, and only then is
+// the old struck. MSEQ is the wall's clock — a swap that finishes loading
+// after a newer one began quietly lets go, and a picture that fails to
+// arrive changes nothing at all.
+let MSEQ=0;
 function show(c){
   if(SHOWN&&c&&SHOWN.id===c.id)return;
   const url=c?GRAPH.media[c.media]:null;
   if(c&&!url)return;              // a visual with no packed file changes nothing
   SHOWN=c||null;
-  const room=$('room');
-  room.querySelectorAll('img,video').forEach(el=>el.remove());
-  if(!c)return;
+  const room=$('room'), seq=++MSEQ;
+  const strike=keep=>room.querySelectorAll('img,video')
+    .forEach(el=>{ if(el!==keep)el.remove(); });
+  if(!c){
+    room.querySelectorAll('img,video').forEach(el=>el.classList.remove('on'));
+    setTimeout(()=>{ if(seq===MSEQ)strike(null); },500);
+    return;
+  }
   let el;
+  const hang=()=>{
+    if(seq!==MSEQ)return void el.remove();   // a newer picture won the wall
+    room.insertBefore(el,$('caption'));
+    void el.offsetWidth;        // commit opacity 0 first, so .on transitions
+    el.classList.add('on');     // (no rAF — an occluded window never fires it)
+    setTimeout(()=>{ if(seq===MSEQ)strike(el); },520);
+  };
   if(c.mediakind==='video'){
     el=document.createElement('video');
     el.src=url; el.muted=true; el.playsInline=true; el.setAttribute('playsinline','');
-    el.play().catch(()=>{});
-  }else{ el=document.createElement('img'); el.src=url; }
-  room.insertBefore(el,$('caption'));
+    el.addEventListener('loadeddata',()=>{ hang(); el.play().catch(()=>{}); },{once:true});
+    el.addEventListener('error',()=>el.remove(),{once:true});
+  }else{
+    el=document.createElement('img');
+    // decode() is preferred (the picture is paint-ready before it hangs) but
+    // never trusted alone — a decode that dawdles must not strand the wall
+    // on the old shot, so the load event plus a beat is the backstop either
+    // way, and a picture that never arrives simply never hangs.
+    let hung=false;
+    const settle=()=>{ if(hung)return; hung=true;
+      if(el.complete&&el.naturalWidth)hang(); else el.remove(); };
+    el.addEventListener('load',()=>setTimeout(settle,60),{once:true});
+    el.addEventListener('error',settle,{once:true});
+    el.src=url;
+    if(el.decode)el.decode().then(settle,()=>{});
+  }
 }
 // ── the control bar ───────────────────────────────────────
 // The knobs a viewer expects of a player: volume, captions, the typewriter,
