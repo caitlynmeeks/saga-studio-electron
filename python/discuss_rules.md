@@ -33,7 +33,9 @@ the story rather than trusting remembered ids.**
   jump anchors. `sub` is what the screen shows when it differs from what is
   spoken. `when` (`met_gertie`, `!brave`, `coins>=3`) skips the card when it
   fails. `runon: true` removes the rest before the card, for a sentence
-  split across two cards.
+  split across two cards. A standalone ` // ` in the text (or the sub) is a
+  caption break: the pieces are shown one after another, paced across the
+  card's audio, and the voice never reads it. Use it to pace a poem's lines.
 - **group** — a named bar (`gname`); the cards after it that belong to it
   form a scene. Name it when inserting (pass `gname`) or later with
   `rename_group` — never via edit_card. A tagged group is a jump
@@ -48,7 +50,10 @@ the story rather than trusting remembered ids.**
   `gain`, `fade` as percentages.
 - **silence** — a timed rest (`secs`).
 - **visual** — a picture or film from the media pool, shown until the next
-  visual.
+  visual. `ref` names a reference image for `generate_image`.
+- **title** — words on the wall with nobody speaking: `text` (line breaks
+  hold), `secs` to hold, `fade` `[in, out]` in seconds. All three are
+  silence on the audio timeline.
 - **voiced** — spoken from the author's own recorded performance. You cannot
   record, so never insert one; leave existing ones alone unless asked.
 
@@ -70,9 +75,11 @@ asks for it. Both run in the background — `story_status` reports progress.
 `overview()` says `image_gen`, and it spends the author's money: cents per
 picture, so illustrate a whole story only when asked. Write the prompt
 yourself — subject, style, mood, light — and keep one consistent style
-across a story's pictures. File each under a speaking name
-(`elegy8-creature-gaze`), point a visual card at it (`media`), and put the
-exact prompt in that card's `note` so a variant can be painted later.
+across a story's pictures: paint the first image, then pass its media name
+as `ref` on every later call so the model holds the set to one cast. File
+each under a speaking name (`elegy8-creature-gaze`), point a visual card at
+it (`media`), and put the exact prompt in that card's `note` so a variant
+can be painted later — the author's own ✨ button repaints from that note.
 Default 16:9 fits the stage.
 
 ## Style

@@ -176,6 +176,14 @@ const SagaPlay = (() => {
   }
 
   function pages (t) {
+    // A standalone // is the author's own page break: they pace the line
+    // themselves, and each piece is a page exactly as written, shown in
+    // turn across the card's audio. Only a // with space (or an edge) on
+    // both sides counts, so a URL in the prose keeps its slashes. Without
+    // any, a paragraph packs itself into sentence pages as it always has.
+    if (/(?:^|\s)\/\/(?:\s|$)/.test(t)) {
+      return t.split(/(?:^|\s)\/\/(?:\s|$)/).map(s => s.trim()).filter(Boolean)
+    }
     const out = []
     let cur = ''
     for (const s of sentences(t)) {
@@ -200,7 +208,9 @@ const SagaPlay = (() => {
       return [{ at, secs: dur, text: '', from: 0 }]
     }
     const ps = pages(text)
-    const total = text.length || 1
+    // the pages' own lengths, not the raw text's: manual breaks leave their
+    // // marks out of the pages, and those characters deserve no time
+    const total = ps.reduce((n, p) => n + p.length, 0) || 1
     const evs = []
     let cum = 0
     for (const p of ps) {
@@ -217,6 +227,17 @@ const SagaPlay = (() => {
     return evs
   }
 
-  return { applySet, passes, findTag, runEnd, walk, segments, typeCaption, captions }
+  // The title card's clock: where its fade-in, hold and fade-out fall on
+  // the timeline — the same arithmetic the mixdown used to cut its silence,
+  // so the picture and the quiet can never drift apart.
+  function titlePlan (card, at) {
+    const f = card.fade || []
+    const fi = Math.max(0, +(f[0] != null ? f[0] : 0.6))
+    const fo = Math.max(0, +(f[1] != null ? f[1] : 0.6))
+    const hold = Math.max(0, +(card.secs != null ? card.secs : 3))
+    return { at, fi, hold, fo, end: at + fi + hold + fo, text: card.text || '' }
+  }
+
+  return { applySet, passes, findTag, runEnd, walk, segments, typeCaption, captions, titlePlan }
 })()
 if (typeof module !== 'undefined') module.exports = SagaPlay

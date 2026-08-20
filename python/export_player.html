@@ -42,6 +42,14 @@ padding:0 8vw;font-size:clamp(12px,1.7vw,17px);font-style:italic;
 color:#cfd6d3;text-shadow:0 1px 3px #000,0 0 12px #000;
 opacity:0;transition:opacity .3s}
 #fxcap.on{opacity:.85}
+/* the title card: big words centred on the wall, faded by the audio clock —
+   the transition duration is set per phase from the card's own fade times */
+#titlecap{position:absolute;inset:0;display:flex;align-items:center;
+justify-content:center;text-align:center;padding:0 10vw;white-space:pre-line;
+font-size:clamp(20px,4.5vw,44px);line-height:1.5;letter-spacing:.04em;
+color:var(--bright);text-shadow:0 2px 6px #000,0 0 24px #000;
+opacity:0;z-index:1;pointer-events:none;transition:opacity .3s}
+#titlecap.on{opacity:1}
 #gate{position:absolute;inset:0;display:flex;flex-direction:column;gap:18px;
 align-items:center;justify-content:center;background:#000d}
 #gate h1{font-size:clamp(18px,3vw,30px);color:var(--bright);letter-spacing:.06em;
@@ -71,6 +79,7 @@ background:var(--chrome);border-top:1px solid var(--line);font-size:12px}
 <body>
 <div id="room">
   <div id="fxcap"></div>
+  <div id="titlecap"></div>
   <div id="caption"></div>
   <div id="chooser"></div>
   <div id="gate"><h1 id="gtitle"></h1><button onclick="begin()">▶ begin</button></div>
@@ -184,13 +193,33 @@ function caption(t,secs,from,tw,sfx){ const el=$('caption');
 function fxcap(t){ const el=$('fxcap');
   if(!t||!CC)return void el.classList.remove('on');
   el.textContent=t; el.classList.add('on'); }
+// the title card, driven by the audio clock exactly as in the studio's
+// stage: TITLEQ is SagaPlay.titlePlan's arithmetic — the same seconds the
+// mixdown cut as silence — and pausing the clock holds the title where it is
+let TITLEQ=null, TPHASE='';
+function titleClear(){ TITLEQ=null; TPHASE='';
+  const el=$('titlecap'); el.style.transitionDuration='.2s'; el.classList.remove('on'); }
+function titleTick(t){
+  if(!TITLEQ)return;
+  const q=TITLEQ;
+  const ph=t<q.at?'off':t<q.at+q.fi?'in':t<q.at+q.fi+q.hold?'hold'
+    :t<q.end?'out':'off';
+  if(ph===TPHASE)return;
+  TPHASE=ph;
+  const el=$('titlecap');
+  if(ph==='off'){ el.style.transitionDuration='.2s'; el.classList.remove('on');
+    if(t>=q.end)TITLEQ=null; return; }
+  el.style.transitionDuration=Math.max(.01,ph==='in'?q.fi:ph==='out'?q.fo:.01)+'s';
+  if(ph==='out')el.classList.remove('on');
+  else{ el.textContent=q.text; el.classList.add('on'); }
+}
 
 function begin(){ $('gate').style.display='none'; story(); }
 
 async function story(){
   const tok=++TOKEN;
   hideChooser();
-  caption(''); fxcap('');   // the last ride's words do not open this one
+  caption(''); fxcap(''); titleClear();   // the last ride's words do not open this one
   CAPST={txt:'',chain:false}; CAPQ=[]; CAPI=-1;   // a fresh ride, a fresh block
   await SagaPlay.walk(CH,{
     playRun:(from,upto)=>playChain(tok,from,upto),
@@ -222,6 +251,7 @@ function playOne(tok,seg){
     if(tok!==TOKEN)return res(false);
     MARKS=seg.marks||[]; MARKI=-1;
     CAPQ=[]; CAPI=-1;                 // a new stretch, a new page plan
+    titleClear();                     // and no title carried over from the last
     RUNOFF=()=>res(false);
     AUDIO.onended=()=>{ RUNOFF=null; res(tok===TOKEN); };
     AUDIO.onerror=()=>{ RUNOFF=null; res(tok===TOKEN); };
@@ -247,7 +277,7 @@ function hideChooser(){ const ch=$('chooser');
   ch.classList.remove('on'); ch.onclick=null; $('room').classList.remove('choosing'); ASKOFF=null; }
 function ended(){
   $('playb').textContent='▶ play';
-  caption(''); fxcap('');
+  caption(''); fxcap(''); titleClear();
   const ch=$('chooser');
   ch.innerHTML='<button onclick="story()">⟲ once more</button>';
   ch.classList.add('on'); $('room').classList.add('choosing');
@@ -275,6 +305,7 @@ function tick(){
     if(vis)show(vis);
     const dur=(i+1<MARKS.length?MARKS[i+1].at:(AUDIO.duration||t))-MARKS[i].at;
     const kind=c.type||'speech';
+    if(kind==='title'){ TITLEQ=SagaPlay.titlePlan(c,MARKS[i].at); TPHASE=''; }
     if((kind==='audio'||kind==='silence')&&c.sub){
       fxcap(c.sub);       // the sound's line; pushed aside by the next words
     }else{
@@ -295,6 +326,7 @@ function pageTick(t){
     const ev=CAPQ[CAPI];
     caption(ev.text,ev.secs,ev.from,ev.tw,ev.sfx);
   }
+  titleTick(t);         // the title's phases turn on the same clock as pages
 }
 const fmt=s=>{ s=Math.floor(s||0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
 document.addEventListener('keydown',e=>{ if(e.key===' '){ e.preventDefault(); toggle(); } });

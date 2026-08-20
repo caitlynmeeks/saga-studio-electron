@@ -240,6 +240,16 @@ def normalise(t):
     return re.sub(r"[ \t]+", " ", t)
 
 
+def spoken_text(t):
+    """What the booth is fed. The scene mark ❦ is silent, and so is a
+    standalone // — the author's manual caption break, which paces the words
+    on the screen (see player.js pages()) and must never be read aloud.
+    Only a // with space (or an edge) on both sides counts, so a URL in the
+    prose keeps its slashes."""
+    t = t.replace("❦", " ")
+    return re.sub(r"(?:(?<=\s)|^)//(?=\s|$)", " ", t).strip()
+
+
 def split_chunks(text, cap=280):
     """Sentence-first, then clauses, then words. Chatterbox degrades past ~40s
     of audio per call, so no chunk may exceed the cap."""
@@ -596,6 +606,20 @@ def paste_card(src):
         c = {"id": 0, "type": "visual",
              "media": re.sub(r"[^a-z0-9_-]", "", str(src.get("media") or "")),
              "note": ""}
+        if src.get("ref"):                 # the generate button's reference
+            c["ref"] = re.sub(r"[^a-z0-9_-]", "", str(src["ref"]))
+        gen = [re.sub(r"[^a-z0-9_-]", "", str(x))
+               for x in (src.get("gen") or []) if str(x or "").strip()]
+        if gen:                            # its painted variants, names only
+            c["gen"] = gen[:40]
+    elif kind == "title":
+        fade = list(src.get("fade") or [])[:2] + [0.6, 0.6]
+        c = {"id": 0, "type": "title",
+             "text": normalise(str(src.get("text") or "")),
+             "secs": _num(src.get("secs"), 3.0, 0.0, 600.0),
+             "fade": [_num(fade[0], 0.6, 0.0, 30.0),
+                      _num(fade[1], 0.6, 0.0, 30.0)],
+             "note": ""}
     elif kind == "choice":
         c = {"id": 0, "type": "choice", "auto": bool(src.get("auto")),
              "options": clean_options(src.get("options")), "note": ""}
@@ -757,7 +781,7 @@ def gemini_key():
     return k.strip()
 
 
-def generate_media(prompt, stem="", aspect=""):
+def generate_media(prompt, stem="", aspect="", ref=""):
     """Ask nanobanana for a picture and file it in the media pool.
 
     Every generation is new bytes, so the upload route's dedupe has nothing
@@ -765,7 +789,9 @@ def generate_media(prompt, stem="", aspect=""):
     media is global, and replacing a name would change every episode showing
     it. 16:9 unless asked otherwise: the stage and the animatic export are
     widescreen, and a square picture would sit pillarboxed between them.
-    Returns the name the pool filed it under."""
+    `ref` names a picture already in the pool to send along as a reference —
+    the model matches its style or subject, which is how a cast of images
+    stays one cast. Returns the name the pool filed it under."""
     import base64
     import urllib.request, urllib.error
     key = gemini_key()
@@ -777,8 +803,20 @@ def generate_media(prompt, stem="", aspect=""):
     aspect = aspect or "16:9"
     if aspect not in NB_ASPECTS:
         raise ValueError(f"aspect must be one of: {', '.join(NB_ASPECTS)}")
+    parts = []
+    if ref:
+        try:
+            rf = media_file(ref)
+        except FileNotFoundError:
+            raise ValueError(f'no media "{ref}" to use as a reference')
+        if rf.suffix.lower() not in IMG_EXT:
+            raise ValueError("only a picture can be a reference — not film")
+        parts.append({"inlineData": {
+            "mimeType": MEDIA_MIME.get(rf.suffix.lower(), "image/png"),
+            "data": base64.b64encode(rf.read_bytes()).decode()}})
+    parts.append({"text": prompt})
     body = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [{"parts": parts}],
         "generationConfig": {"imageConfig": {"aspectRatio": aspect}},
     }).encode()
     req = urllib.request.Request(
@@ -2290,7 +2328,7 @@ def render_kokoro(c, doc, force=False):
     if dest.exists() and not force:
         return h, True
     p = params_for(c, doc)
-    spoken = c["text"].replace("❦", " ").strip()      # scene mark: silent
+    spoken = spoken_text(c["text"])       # ❦ and // are for the screen
     tmp = dest.with_name(dest.stem + ".tmp.wav")
     try:
         if _nothing_to_say(spoken):
@@ -2315,7 +2353,7 @@ def render_omnivoice(c, doc, force=False):
     if dest.exists() and not force:
         return h, True
     p = params_for(c, doc)
-    spoken = c["text"].replace("❦", " ").strip()      # scene mark: silent
+    spoken = spoken_text(c["text"])       # ❦ and // are for the screen
     tmp = dest.with_name(dest.stem + ".tmp.wav")
     try:
         if _nothing_to_say(spoken):
@@ -2352,7 +2390,7 @@ def render(c, doc, force=False):
     if dest.exists() and not force:
         return h, True
     p = params_for(c, doc)
-    spoken = c["text"].replace("❦", " ").strip()      # scene mark: silent
+    spoken = spoken_text(c["text"])       # ❦ and // are for the screen
     tmp = dest.with_name(dest.stem + ".tmp.wav")
     try:
         if _nothing_to_say(spoken):
@@ -2373,7 +2411,7 @@ def render_preview(c, doc, force=False, text=None):
     only real speedup is less text. Same voice and parameters as the full
     render, so what you hear is exactly what the bake will say."""
     p = params_for(c, doc)
-    spoken = (text if text is not None else c["text"]).replace("❦", " ").strip()
+    spoken = spoken_text(text if text is not None else c["text"])
     if p["engine"] == "chatterbox":         # as chunk_hash: default stays unmarked
         k = [spoken, p["voice"], p["exag"], p["cfg"], p["temp"], p["rep"],
              "prev", int(c.get("seed") or 0)]
@@ -2653,6 +2691,16 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
             cursor += max(0.0, float(c.get("secs", 1.0)))
             last_gap = 0.0                    # the silence *is* the rest
             continue
+        if kind == "title":
+            # a title card holds the screen while the mix holds its breath:
+            # fade in + hold + fade out, all silence on the timeline. The
+            # display is the stage's business; the seconds are the mix's.
+            note(c)
+            fi, fo = (list(c.get("fade") or []) + [0.6, 0.6])[:2]
+            cursor += (max(0.0, float(fi)) + max(0.0, float(c.get("secs", 3.0)))
+                       + max(0.0, float(fo)))
+            last_gap = 0.0                    # its quiet is its own rest
+            continue
         if kind == "audio":
             f = CLIPS / f"{c.get('clip', '')}.wav"
             if not c.get("clip") or not f.exists():
@@ -2877,6 +2925,55 @@ def still_of(src, height):
     return dest
 
 
+def _title_font():
+    """A real font file for drawtext — fontconfig is often left out of ffmpeg
+    builds, so a name is not enough and a path is probed instead."""
+    for p in ("/System/Library/Fonts/Helvetica.ttc",
+              "/System/Library/Fonts/Supplemental/Arial.ttf",
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+              "C:/Windows/Fonts/arial.ttf"):
+        if Path(p).exists():
+            return p
+    return None
+
+
+def title_frame(text, height):
+    """A title card as a video-ready frame: white words on black, centred,
+    cached content-addressed like stills. drawtext reads the words from a
+    file, so no card can break the filter with a quote or a colon. No font
+    on this machine means no frame — the caller lets the wall stand rather
+    than failing the whole export over typography."""
+    font = _title_font()
+    if font is None:
+        raise RuntimeError("no font for a title frame")
+    w, h = height * 16 // 9, height
+    key = hashlib.sha256(f"title|{text}|{h}".encode()).hexdigest()[:20]
+    dest = STILLS / f"{key}.png"
+    if dest.exists():
+        return dest
+    STILLS.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.stem + ".tmp.png")
+    fd, tf = tempfile.mkstemp(dir=ROOT, suffix=".txt")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+             "-f", "lavfi", "-i", f"color=black:s={w}x{h}",
+             "-vf", (f"drawtext=textfile='{tf}':fontfile='{font}'"
+                     f":fontcolor=white:fontsize={h // 12}"
+                     ":x=(w-text_w)/2:y=(h-text_h)/2"),
+             "-frames:v", "1", str(tmp)], capture_output=True, text=True)
+        if r.returncode:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError("ffmpeg could not draw the title: "
+                               + (r.stderr or "").strip()[-200:])
+        tmp.rename(dest)
+    finally:
+        Path(tf).unlink(missing_ok=True)
+    return dest
+
+
 def black_frame(height):
     """The wall before the first visual."""
     w, h = height * 16 // 9, height
@@ -2910,14 +3007,30 @@ def publish_video(name, height=1080):
     sf.write(str(wav), full, sr, subtype="FLOAT")
     byid = {c["id"]: c for c in doc["chunks"]}
     frames = []
+    wall = None                            # the still a title interrupts
     for m in marks:
         c = byid.get(m["id"])
-        if not c or c.get("type") != "visual" or not c.get("media"):
+        if not c:
             continue
-        try:
-            frames.append((m["at"], still_of(media_file(c["media"]), height)))
-        except FileNotFoundError:
-            continue                       # a visual with no file shows nothing
+        if c.get("type") == "visual" and c.get("media"):
+            try:
+                wall = still_of(media_file(c["media"]), height)
+            except FileNotFoundError:
+                continue                   # a visual with no file shows nothing
+            frames.append((m["at"], wall))
+        elif c.get("type") == "title":
+            # the animatic states the title plain for its whole span — the
+            # stage and the web story fade it; a storyboard just says it —
+            # and the standing visual returns when the span ends
+            fi, fo = (list(c.get("fade") or []) + [0.6, 0.6])[:2]
+            dur = (max(0.0, float(fi)) + max(0.0, float(c.get("secs", 3.0)))
+                   + max(0.0, float(fo)))
+            try:
+                frames.append((m["at"], title_frame(c.get("text") or "", height)))
+            except RuntimeError as ex:
+                print(f"title frame skipped: {ex}", flush=True)
+                continue                   # no font: the wall stands
+            frames.append((m["at"] + dur, wall or black_frame(height)))
     if not frames or frames[0][0] > 0:
         frames.insert(0, (0.0, black_frame(height)))
     lines = ["ffconcat version 1.0"]
@@ -2951,6 +3064,11 @@ def _export_chunk(c):
     out = {"id": c["id"], "type": c.get("type", "speech")}
     if is_speech(c):
         out["text"] = c["text"]
+    if c.get("type") == "title":
+        # the words ARE the picture here, and the player needs the clock too
+        out["text"] = c.get("text") or ""
+        out["secs"] = float(c.get("secs", 3.0))
+        out["fade"] = (list(c.get("fade") or []) + [0.6, 0.6])[:2]
     for k in ("tags", "when", "auto", "mute", "media", "mediakind", "sub", "chain"):
         if c.get(k):
             out[k] = c[k]
@@ -3430,7 +3548,7 @@ class H(BaseHTTPRequestHandler):
                     c["ready"] = True          # nothing to render, ever
                     c.setdefault("options", [])
                     c.setdefault("auto", False)
-                else:                          # silence has nothing to render
+                else:              # silence and titles have nothing to render
                     c["ready"] = True
             return self._send(200, doc)
         if u.path == "/api/engines":
@@ -3828,7 +3946,8 @@ class H(BaseHTTPRequestHandler):
             try:
                 mname = generate_media(str(d.get("prompt") or ""),
                                        str(d.get("media") or ""),
-                                       str(d.get("aspect") or ""))
+                                       str(d.get("aspect") or ""),
+                                       str(d.get("ref") or ""))
             except (ValueError, RuntimeError) as ex:
                 return self._send(400, {"error": str(ex)})
             return self._send(200, {"ok": True, "media": mname,
@@ -3969,6 +4088,21 @@ class H(BaseHTTPRequestHandler):
                             c["clip"] = re.sub(r"[^a-z0-9_-]", "", d["clip"] or "")
                         if "media" in d:       # visual-card pointer, clip-shaped
                             c["media"] = re.sub(r"[^a-z0-9_-]", "", d["media"] or "")
+                        if "ref" in d:         # generate's reference image
+                            c["ref"] = re.sub(r"[^a-z0-9_-]", "", d["ref"] or "")
+                            if not c["ref"]:
+                                c.pop("ref", None)
+                        if "gen" in d:
+                            # the variants painted for this visual card —
+                            # names into the pool, presentation bookkeeping
+                            # only: the files themselves are never deleted
+                            gen = [re.sub(r"[^a-z0-9_-]", "", str(x))
+                                   for x in (d["gen"] or [])
+                                   if str(x or "").strip()][:40]
+                            if gen:
+                                c["gen"] = gen
+                            else:
+                                c.pop("gen", None)
                         if d.get("mode") in ("full", "after"):
                             c["mode"] = d["mode"]
                         if "after" in d:
@@ -3976,9 +4110,16 @@ class H(BaseHTTPRequestHandler):
                         if "gain" in d:
                             c["gain"] = max(0.0, min(200.0, float(d["gain"])))
                         if "fade" in d:
-                            lo, hi = (list(d["fade"]) + [0, 100])[:2]
-                            lo = max(0.0, min(100.0, float(lo)))
-                            c["fade"] = [lo, max(lo, min(100.0, float(hi)))]
+                            if c.get("type") == "title":
+                                # seconds here, not percentages: [in, out] of
+                                # the title's fades, and out never chases in
+                                fi, fo = (list(d["fade"]) + [0.6, 0.6])[:2]
+                                c["fade"] = [max(0.0, min(30.0, float(fi))),
+                                             max(0.0, min(30.0, float(fo)))]
+                            else:
+                                lo, hi = (list(d["fade"]) + [0, 100])[:2]
+                                lo = max(0.0, min(100.0, float(lo)))
+                                c["fade"] = [lo, max(lo, min(100.0, float(hi)))]
                         if "secs" in d:            # silence-card length
                             c["secs"] = max(0.0, float(d["secs"] or 0))
                         # voiced-card fields. `perf` is a checksum this program
@@ -4014,6 +4155,11 @@ class H(BaseHTTPRequestHandler):
                     c = {"id": 0, "type": "silence", "secs": 1.0, "note": ""}
                 elif kind == "visual":
                     c = {"id": 0, "type": "visual", "media": "", "note": ""}
+                elif kind == "title":
+                    # words on the wall with nobody speaking: fade in, hold,
+                    # fade out — all three are seconds of silence in the mix
+                    c = {"id": 0, "type": "title", "text": "", "secs": 3.0,
+                         "fade": [0.6, 0.6], "note": ""}
                 elif kind == "choice":
                     # two blank options, because a choice is usually a fork —
                     # and a chooser with one button is a button

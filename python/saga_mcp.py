@@ -81,7 +81,8 @@ def card_view(c):
                    "ready"),
         "audio": ("clip", "mode", "after", "gain", "fade", "tags", "when"),
         "silence": ("secs",),
-        "visual": ("media", "note", "tags", "when"),
+        "visual": ("media", "ref", "note", "tags", "when"),
+        "title": ("text", "secs", "fade", "tags", "when"),
         "choice": ("options", "auto", "tags", "when"),
         "group": ("gname", "tags"),
     }.get(kind, ("text",))
@@ -169,8 +170,8 @@ def t_create_story(a):
 
 EDIT_FIELDS = ("text", "note", "tags", "sub", "label", "when", "runon",
                "mute", "profile", "options", "auto", "params", "seed",
-               "clip", "media", "mode", "after", "gain", "fade", "secs",
-               "chain", "tw", "twsfx")
+               "clip", "media", "ref", "mode", "after", "gain", "fade",
+               "secs", "chain", "tw", "twsfx")
 
 
 def _fields(a):
@@ -300,7 +301,8 @@ def t_generate_image(a):
         raise ToolError("a prompt is needed — describe the picture to paint")
     r = api("/api/media/generate", {"prompt": prompt,
                                     "media": a.get("name") or "",
-                                    "aspect": a.get("aspect") or ""})
+                                    "aspect": a.get("aspect") or "",
+                                    "ref": a.get("ref") or ""})
     return {"media": r["media"],
             "note": "in the media pool — show it by setting `media` on a "
                     "visual card, and keep the prompt in that card's note "
@@ -352,9 +354,14 @@ CARD_FIELD_PROPS = {
     "clip": {**STR, "description": "audio-card clip name"},
     "mode": {**STR, "enum": ["full", "after"]},
     "after": NUM, "gain": NUM,
-    "fade": {"type": "array", "items": NUM},
-    "secs": {**NUM, "description": "silence length"},
+    "fade": {"type": "array", "items": NUM, "description":
+             "audio card: [in, out] as PERCENTAGES of the clip; "
+             "title card: [in, out] fades in SECONDS"},
+    "secs": {**NUM, "description": "silence length, or a title card's hold"},
     "media": {**STR, "description": "visual-card media name"},
+    "ref": {**STR, "description": "visual-card reference image (a media "
+            "name) — generate_image matches its style, keeping a story's "
+            "pictures one cast"},
 }
 
 TOOLS = [
@@ -374,11 +381,13 @@ TOOLS = [
      "Born as a draft the author keeps or discards.",
      _schema({"title": STR, "text": STR}, ["title", "text"]), t_create_story),
     ("insert_card", "Insert a card at position `at` (0 = top) in a DRAFT. "
-     "kind: text, audio, silence, visual, choice, or group. Any card fields "
-     "may be set in the same call; a group takes its name via `gname`.",
+     "kind: text, audio, silence, visual, title (words on screen with "
+     "nobody speaking — fade in/out in `fade` seconds, hold in `secs`, all "
+     "silence on the timeline), choice, or group. Any card fields may be "
+     "set in the same call; a group takes its name via `gname`.",
      _schema({"story": STR, "at": INT,
               "kind": {**STR, "enum": ["text", "audio", "silence", "visual",
-                                       "choice", "group"]},
+                                       "title", "choice", "group"]},
               "gname": {**STR, "description": "the group's name (kind group "
                         "only); errors if a group of that name exists"},
               "group": {**STR, "description":
@@ -431,7 +440,11 @@ TOOLS = [
                        "(lowercase words and dashes, e.g. elegy8-gaze)"},
               "aspect": {**STR,
                          "enum": ["16:9", "1:1", "9:16", "4:3", "3:4", "21:9"],
-                         "description": "default 16:9, the stage's shape"}},
+                         "description": "default 16:9, the stage's shape"},
+              "ref": {**STR, "description": "a media name to send as a "
+                      "reference image — the model matches its style or "
+                      "subject; paint one image first, then pass it here "
+                      "for every other card so the set stays one cast"}},
              ["prompt"]), t_generate_image),
 ]
 

@@ -2235,6 +2235,7 @@ function cardHTML(c){
     :c.type==='silence'?silenceCard(c)
     :c.type==='voiced'?voicedCard(c)
     :c.type==='visual'?visualCard(c)
+    :c.type==='title'?titleCard(c)
     :c.type==='choice'?choiceCard(c):speechCard(c);
 }
 // ── collapsed cards ───────────────────────────────────────
@@ -2291,6 +2292,7 @@ const insBar=at=>`<div class="ins">
     <button onclick="insertCard(${at},'voiced',event)" title="insert a card spoken by you, in a character's voice">+ ◎ Voiced</button>
     <button onclick="insertCard(${at},'audio',event)" title="insert a music / sound-effect card here">+ ♪ Audio</button>
     <button onclick="insertCard(${at},'visual',event)" title="insert a picture or film — the stage shows it from here until the next visual">+ ⛶ Visual</button>
+    <button onclick="insertCard(${at},'title',event)" title="insert a title — words on the wall with nobody speaking: fade in, hold, fade out, all silence on the timeline">+ 𝐓 Title</button>
     <button onclick="insertCard(${at},'choice',event)" title="insert a choice — the stage stops here and asks; the audiobook walks straight past">+ ⑂ Choice</button>
     <button onclick="insertCard(${at},'group',event)" title="insert a group — a scene with a bar of its own, empty until cards join it; tag the bar and a choice can jump to it">+ ⊞ Group</button>
     <button onclick="insertCard(${at},'silence',event)" title="insert a timed pause here">+ Silence</button>
@@ -2606,6 +2608,24 @@ function visualCard(c){
           esc(m.name)}${m.kind==='video'?' (film)':''}</option>`).join('')}
       </select>
       <button onclick="pickMedia(${c.id})">Import a File…</button>
+      ${(c.gen||[]).length?`<button onclick="genMenu(event,${c.id})"
+        title="the variants painted for this card — choose one, drop one, paint another">${
+        (c.gen||[]).length} variant${(c.gen||[]).length===1?'':'s'} ▾</button>`:''}
+    </div>
+    <div class="arow">
+      <input id="vp${c.id}" value="${esc(c.note||'')}" style="flex:1"
+        placeholder="${STATE.nanobanana?'what to paint — subject, style, mood, light':'the paint prompt — needs a Gemini key (hover ✨)'}"
+        onblur="setCard(${c.id},{note:this.value})"${c.locked?' readonly':''}>
+      <select onchange="setCard(${c.id},{ref:this.value})" style="max-width:120px"
+        title="optional reference image — the model matches its style or subject, which keeps a story's pictures one cast">
+        <option value="">no reference</option>
+        ${media.filter(m=>m.kind!=='video').map(m=>`<option value="${esc(m.name)}" ${
+          m.name===c.ref?'selected':''}>ref: ${esc(m.name)}</option>`).join('')}
+      </select>
+      <button id="gb${c.id}" class="pri" onclick="genImage(${c.id})" ${STATE.nanobanana?'':'disabled'}
+        title="${STATE.nanobanana
+          ?'paint this card with nanobanana — every press is a NEW variant, a few cents and ~15s each'
+          :'no Gemini API key — paste one from aistudio.google.com into gemini_key.txt in your library folder, no restart needed'}">✨ ${c.media?'Repaint':'Paint'}</button>
     </div>
     <div class="arow">${show}</div>
     ${(SUBS.has(c.id)||c.sub)?subRow(c):''}
@@ -2615,6 +2635,108 @@ function visualCard(c){
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
+}
+
+// ── painting visuals ──────────────────────────────────────
+// The ✨ button is the take stepper's cousin: every press paints a NEW
+// variant into the media pool (never overwriting — pool law), points the
+// card at it and remembers the name in c.gen. The variants menu is where
+// you choose between them, drop the ones that are off (the file stays in
+// the pool; only the shortlist forgets it) and paint another. The prompt
+// lives in the card's note — the same place the discuss agent keeps its
+// prompts, so a card is repaintable whoever painted it first.
+async function genImage(id){
+  const c=DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const inp=$('vp'+id), prompt=((inp?inp.value:c.note)||'').trim();
+  if(!prompt){
+    $('status').textContent='write the prompt first — ✨ paints what the prompt says';
+    if(inp)inp.focus();
+    return;
+  }
+  if(prompt!==(c.note||''))await api('/api/chunk',{name:DOC.name,id,note:prompt});
+  const b=$('gb'+id); if(b){ b.disabled=true; b.textContent='✨ painting…'; }
+  $('s'+id).textContent='nanobanana is painting — about 15 seconds';
+  const stem=(c.media||'').replace(/-new(-\d+)?$/,'')||(DOC.name+'-'+id);
+  const r=await api('/api/media/generate',{prompt,media:stem,ref:c.ref||''});
+  if(r.error){
+    if(b){ b.disabled=false; b.textContent='✨ '+(c.media?'Repaint':'Paint'); }
+    $('s'+id).innerHTML=`<span style="color:var(--red)">${esc(r.error)}</span>`;
+    return;
+  }
+  const gen=(c.gen||[]).slice();
+  if(c.media&&!gen.includes(c.media))gen.unshift(c.media);
+  gen.push(r.media);
+  await api('/api/chunk',{name:DOC.name,id,media:r.media,gen});
+  refresh();                       // the pool has a picture more than it did
+  open_(DOC.name,true,id);
+  $('status').textContent=`“${r.media}” painted — the variants menu holds the others`;
+}
+async function genMenu(e,id){
+  const c=DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const gen=c.gen||[];
+  const items=gen.map(n=>({label:(n===c.media?'● ':'  ')+n,
+    run:()=>setCard(id,{media:n},true)}));
+  items.push('-');
+  items.push({label:'✨ paint another variant',run:()=>genImage(id)});
+  if(c.media&&gen.includes(c.media)&&gen.length>1)
+    items.push({label:`✕ drop “${c.media}” — it's off`,danger:true,
+      run:()=>dropVariant(id)});
+  openCtx(e,items);
+}
+async function dropVariant(id){
+  const c=DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const gen=(c.gen||[]).filter(n=>n!==c.media);
+  await setCard(id,{gen,media:gen[gen.length-1]||''},true);
+  $('status').textContent='dropped from the shortlist — the file itself stays in the media pool';
+}
+
+// A title card: words on the wall with nobody speaking — fade in, hold,
+// fade out, and all three are seconds of silence on the audio timeline,
+// which is what makes it a card and not a decoration: the book breathes
+// while the screen speaks. Line breaks in the words hold on the stage.
+function titleCard(c){
+  const fade=c.fade||[0.6,0.6], hold=c.secs==null?3:c.secs;
+  const total=(parseFloat(fade[0])||0)+(parseFloat(hold)||0)+(parseFloat(fade[1])||0);
+  return `
+   <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
+     onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
+    <div class="top">
+      ${grip(c.id)}${foldBtn(c)}
+      <span class="dot ready"></span>
+      <span>#${c.id}</span>
+      <span class="pill">𝐓 title</span>
+      <span class="mut">${esc((c.text||'').replace(/\s+/g,' ').trim().slice(0,40))||'no words yet'}</span>
+      ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${tagsUi(c)}
+      <span style="flex:1"></span>
+      ${runonBtn(c)}
+      ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
+    </div>
+    <div class="arow">
+      <textarea rows="2" placeholder="the words on the screen — line breaks hold"
+        style="flex:1;resize:vertical;min-height:40px"
+        onblur="setCard(${c.id},{text:this.value})"${c.locked?' readonly':''}>${esc(c.text||'')}</textarea>
+    </div>
+    <div class="arow">
+      <span class="lbl">fade in</span>
+      <input type="number" step="0.1" min="0" max="30" value="${fade[0]==null?0.6:fade[0]}" style="width:62px"
+        onchange="titleFade(${c.id},0,this.value)">
+      <span class="lbl" style="margin-left:8px">hold</span>
+      <input type="number" step="0.5" min="0" max="600" value="${hold}" style="width:62px"
+        onchange="setCard(${c.id},{secs:parseFloat(this.value)||0})">
+      <span class="lbl" style="margin-left:8px">fade out</span>
+      <input type="number" step="0.1" min="0" max="30" value="${fade[1]==null?0.6:fade[1]}" style="width:62px"
+        onchange="titleFade(${c.id},1,this.value)">
+      <span class="mut" style="font-size:11px;margin-left:8px">seconds — ${total.toFixed(1)}s of quiet on the timeline</span>
+    </div>
+   </div>`;
+}
+function titleFade(id,ix,v){
+  const c=DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const f=(c.fade||[0.6,0.6]).slice(0,2);
+  while(f.length<2)f.push(0.6);
+  f[ix]=parseFloat(v)||0;
+  setCard(id,{fade:f},true);
 }
 
 // Where interactive playback stops and asks. Each option is four things: what
@@ -3425,6 +3547,7 @@ async function del(id){
     :c.type==='silence'?`${c.secs==null?1:c.secs}s of silence`
     :c.type==='voiced'?`◎ voiced — ${c.perfname||'no recording yet'}`
     :c.type==='visual'?`⛶ visual — ${c.media||'nothing chosen'} (the file stays in the library)`
+    :c.type==='title'?`𝐓 title — “${(c.text||'').replace(/\s+/g,' ').trim().slice(0,40)||'no words yet'}”`
     :c.type==='choice'?`⑂ choice — ${(c.options||[]).length} option${(c.options||[]).length===1?'':'s'}`
     :c.type==='group'?`⊞ group “${c.gname||''}” — its cards stay, only the bar goes`
     :c.text.slice(0,90)+'…';
@@ -3587,6 +3710,7 @@ const clipLabel=c=>!c?'':
   :c.type==='silence'?`${c.secs==null?1:c.secs}s of silence`
   :c.type==='voiced'?`◎ ${c.perfname||'no recording'}`
   :c.type==='visual'?`⛶ ${c.media||'no visual'}`
+  :c.type==='title'?`𝐓 ${(c.text||'title').replace(/\s+/g,' ').trim().slice(0,30)}`
   :c.type==='choice'?`⑂ ${(c.options||[]).length} option${(c.options||[]).length===1?'':'s'}`
   :c.type==='group'?`⊞ ${c.gname||'group'}`
   :'“'+(c.text||'').replace(/\s+/g,' ').trim().slice(0,44)+((c.text||'').length>44?'…':'')+'”';
@@ -3608,7 +3732,10 @@ function cardClip(c){
   if(k.type==='audio')Object.assign(k,
     {clip:c.clip||'', mode:c.mode||'full', after:c.after, fade:c.fade, gain:c.gain});
   else if(k.type==='silence')k.secs=c.secs;
-  else if(k.type==='visual')k.media=c.media||'';
+  else if(k.type==='visual')Object.assign(k,
+    {media:c.media||'', ref:c.ref, gen:c.gen});
+  else if(k.type==='title')Object.assign(k,
+    {text:c.text||'', secs:c.secs, fade:c.fade});
   else if(k.type==='choice')Object.assign(k,
     {options:c.options||[], auto:!!c.auto});
   else if(k.type==='group')k.gname=c.gname||'Group';

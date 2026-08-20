@@ -40,7 +40,8 @@ text-align:center;padding:0 10vw;line-height:1.7}
 font-size:clamp(18px,3.2vw,30px);letter-spacing:.45em;padding-left:.45em;
 color:var(--fg);opacity:.14}
 #room:has(img,video) #empty,#room:has(#caption.on) #empty,
-#room:has(#fxcap.on) #empty,#room:has(#chooser.on) #empty{display:none}
+#room:has(#fxcap.on) #empty,#room:has(#chooser.on) #empty,
+#room:has(#titlecap.on) #empty{display:none}
 #caption{position:absolute;left:0;right:0;bottom:26px;text-align:center;
 padding:0 8vw;font-size:clamp(14px,2.2vw,21px);line-height:1.6;
 color:var(--bright);text-shadow:0 1px 3px #000,0 0 14px #000;
@@ -55,6 +56,14 @@ padding:0 8vw;font-size:clamp(12px,1.7vw,17px);font-style:italic;
 color:#cfd6d3;text-shadow:0 1px 3px #000,0 0 12px #000;
 opacity:0;transition:opacity .3s}
 #fxcap.on{opacity:.85}
+/* the title card: big words centred on the wall, faded by the audio clock —
+   the transition duration is set per phase from the card's own fade times */
+#titlecap{position:absolute;inset:0;display:flex;align-items:center;
+justify-content:center;text-align:center;padding:0 10vw;white-space:pre-line;
+font-size:clamp(20px,4.5vw,44px);line-height:1.5;letter-spacing:.04em;
+color:var(--bright);text-shadow:0 2px 6px #000,0 0 24px #000;
+opacity:0;z-index:1;pointer-events:none;transition:opacity .3s}
+#titlecap.on{opacity:1}
 /* The chooser floats OVER the room on a scrim rather than living beside it —
    a layout sibling would resize the stage every time choices came and went,
    and the picture popping larger and smaller is exactly the wrong drama. */
@@ -90,6 +99,7 @@ body.mirror #bar #popin{display:inline-block;margin-left:auto}
 <div id="room">
   <div id="empty"></div>
   <div id="fxcap"></div>
+  <div id="titlecap"></div>
   <div id="caption"></div>
   <div id="chooser"></div>
 </div>
@@ -145,7 +155,7 @@ const BC='BroadcastChannel' in window?new BroadcastChannel('saga-stage'):null;
 const say=m=>{ if(BC)BC.postMessage({...m,name:NAME}); };
 // what is on the wall right now — kept whole so a mirror that arrives late
 // (or pops out mid-scene) gets the full picture, not just the next change
-let LASTF={media:null,kind:'',cap:'',fx:'',opts:null};
+let LASTF={media:null,kind:'',cap:'',fx:'',opts:null,tt:'',tsecs:0};
 const sayFrame=patch=>{ if(!EMBED)return;
   Object.assign(LASTF,patch||{}); say({type:'frame',...LASTF}); };
 if(BC)BC.onmessage=e=>{
@@ -183,11 +193,16 @@ addEventListener('pagehide',()=>{ if(MIRROR&&!EMBED)say({type:'popped-bye'}); })
 // what a mirror does: paint whatever the owner says is on its wall. Frames
 // arrive whole, so each part repaints only when it actually changed — or a
 // caption tick elsewhere would restart the picture and the typewriter here
-let MMEDIA=' ', MCAP=' ', MFX=' ', MOPTS=' ';
+let MMEDIA=' ', MCAP=' ', MFX=' ', MOPTS=' ', MTT=' ';
 function mirror(m){
   if(!MIRROR){ MIRROR=true; document.body.classList.add('mirror'); stop();
     $('empty').textContent='Nothing on stage yet — this window mirrors the editor’s stage'; }
   if('media'in m&&m.media!==MMEDIA){ MMEDIA=m.media; showMedia(m.media,m.kind); }
+  if('tt'in m&&(m.tt||'')!==MTT){ MTT=m.tt||'';
+    const el=$('titlecap');
+    el.style.transitionDuration=Math.max(.01,m.tsecs||.3)+'s';
+    if(MTT){ el.textContent=MTT; el.classList.add('on'); }
+    else el.classList.remove('on'); }
   if('cap'in m){ const k=(m.cap||'')+'|'+(m.from||0);
     if(k!==MCAP){ MCAP=k; caption(m.cap,m.secs,m.from,m.tw,false); } }
   if('fx'in m&&(m.fx||'')!==MFX){ MFX=m.fx||''; fxcap(m.fx); }
@@ -282,6 +297,40 @@ function fxcap(t){
   el.textContent=t; el.classList.add('on');
 }
 
+// ── the title card ────────────────────────────────────────
+// Driven by the audio clock, never by timers: TITLEQ is the plan (from
+// SagaPlay.titlePlan — the same arithmetic as the mixdown's silence), and
+// each tick decides which phase the clock is in. Pausing pauses the clock,
+// so a held title stays held; the fades themselves are CSS transitions
+// whose durations are the card's own fade times.
+let TITLEQ=null, TPHASE='';
+function titleClear(){
+  TITLEQ=null; TPHASE='';
+  const el=$('titlecap');
+  el.style.transitionDuration='.2s'; el.classList.remove('on');
+  sayFrame({tt:'',tsecs:.2});
+}
+function titleTick(t){
+  if(!TITLEQ)return;
+  const q=TITLEQ;
+  const ph=t<q.at?'off':t<q.at+q.fi?'in':t<q.at+q.fi+q.hold?'hold'
+    :t<q.end?'out':'off';
+  if(ph===TPHASE)return;
+  TPHASE=ph;
+  const el=$('titlecap');
+  if(ph==='off'){
+    el.style.transitionDuration='.2s'; el.classList.remove('on');
+    sayFrame({tt:'',tsecs:.2});
+    if(t>=q.end)TITLEQ=null;
+    return;
+  }
+  const secs=ph==='in'?q.fi:ph==='out'?q.fo:.01;
+  el.style.transitionDuration=Math.max(.01,secs)+'s';
+  if(ph==='out'){ el.classList.remove('on'); sayFrame({tt:'',tsecs:q.fo}); }
+  else{ el.textContent=q.text; el.classList.add('on');
+        sayFrame({tt:q.text,tsecs:secs}); }
+}
+
 // ── the story ─────────────────────────────────────────────
 // SagaPlay.walk drives everything; this page only supplies the hooks. TOKEN
 // abandons a walk the moment a newer one starts — the old walk's pending
@@ -299,7 +348,7 @@ async function story(fromId){
   const tok=++TOKEN;
   PEND=fromId==null?null:fromId;
   hideChooser();
-  caption(''); fxcap('');   // the last ride's words do not open this one
+  caption(''); fxcap(''); titleClear();   // the last ride's words do not open this one
   // Fetch the document fresh for every ride. The audio is mixed per press by
   // the server and is always current — but captions, choices and visuals are
   // read from THIS copy, and playing from a snapshot taken when the window
@@ -332,6 +381,7 @@ function playRun(tok,from,upto){
       if(!r.ok)return res(true);
       MARKS=r.marks||[]; MARKI=-1;
       CAPQ=[]; CAPI=-1;               // a new stretch, a new page plan
+      titleClear();                   // and no title carried over from the last
       RUNOFF=()=>res(false);
       AUDIO.onended=()=>{ RUNOFF=null; res(tok===TOKEN); };
       AUDIO.src='/api/book_audio?name='+encodeURIComponent(NAME)+'&t='+Date.now();
@@ -380,7 +430,7 @@ function paintVars(){
 function ended(reason){
   $('playb').textContent='▶ Play';
   say({type:'state',playing:false});
-  caption(''); fxcap('');
+  caption(''); fxcap(''); titleClear();
   say({type:'stopped',card:MARKS[MARKI]?MARKS[MARKI].id:null});
   const ch=$('chooser');
   ch.innerHTML=(reason&&reason.startsWith('dangling:')
@@ -405,7 +455,7 @@ function toggle(){
 }
 function stop(){
   TOKEN++;
-  caption(''); fxcap('');
+  caption(''); fxcap(''); titleClear();
   if(RUNOFF){ const f=RUNOFF; RUNOFF=null; f(); }
   if(ASKOFF){ const f=ASKOFF; ASKOFF=null; f(); }
   AUDIO.pause(); hideChooser();
@@ -434,6 +484,18 @@ function idleShow(id){
     if(x.type==='visual'&&x.ready)vis=x; }
   show(vis||null);
   const c=DOC.chunks[k], kind=c.type||'speech';
+  if(kind==='title'){
+    // writing a title against the wall it will stand on: shown at once,
+    // no clock, no fade — the plan only runs during playback
+    TITLEQ=null; TPHASE='idle';
+    const el=$('titlecap');
+    el.style.transitionDuration='.15s'; el.textContent=c.text||'';
+    if(c.text)el.classList.add('on'); else el.classList.remove('on');
+    sayFrame({tt:c.text||'',tsecs:.15});
+    caption('',0,0,false,false); fxcap('');
+    return;
+  }
+  if(TPHASE==='idle')titleClear();   // clicking away takes the idle title down
   if((kind==='audio'||kind==='silence')&&c.sub){ caption('',0,0,false,false); fxcap(c.sub); }
   else{ fxcap('');
     caption(c.sub||(kind==='speech'?c.text:'')||'',0,0,false,false); }
@@ -459,6 +521,7 @@ function tick(){
     // booth was fed "tay-dee" — and it is the only words a voiced card has.
     const dur=(i+1<MARKS.length?MARKS[i+1].at:(AUDIO.duration||t))-MARKS[i].at;
     const kind=c.type||'speech';
+    if(kind==='title'){ TITLEQ=SagaPlay.titlePlan(c,MARKS[i].at); TPHASE=''; }
     if((kind==='audio'||kind==='silence')&&c.sub){
       // the sound's own line: it never touches the dialog caption or a
       // standing chain, and the next real words push it aside
@@ -486,6 +549,7 @@ function pageTick(t){
     const ev=CAPQ[CAPI];
     caption(ev.text,ev.secs,ev.from,ev.tw,ev.sfx);
   }
+  titleTick(t);         // the title's phases turn on the same clock as pages
 }
 const fmt=s=>{ s=Math.floor(s||0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
 
