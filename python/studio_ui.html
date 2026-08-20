@@ -903,8 +903,6 @@ async function open_(name,quiet,anchor){
   paintMinAll();
   if(!quiet)refresh();
   if(document.body.dataset.side==='publish')renderPublish();
-  const rd=DOC.chunks.filter(c=>c.ready).length;
-  $('dl').hidden=rd<DOC.chunks.length; $('dl').href='/api/download?name='+encodeURIComponent(name);
 }
 
 // ── voices & profiles ─────────────────────────────────────
@@ -3110,8 +3108,11 @@ async function syncCards(){
     const tkb=$('tkb'+c.id); if(tkb)tkb.disabled=!(c.seed||0);
     syncPrevBtn(c.id);
   }
-  const rd=DOC.chunks.filter(c=>c.ready).length;
-  $('dl').hidden=rd<DOC.chunks.length;
+  // #dl was the header's download link, retired when the publish tab took
+  // over — but these lines outlived it, and the null threw at the END of
+  // syncCards and mid-open_: every caller that awaited syncCards and then
+  // had more to do (takeSet rendering a fresh roll, above all) died there
+  // silently. The cards were already painted, so it looked like working.
   $('hdr').textContent=DOC.title+' · '+DOC.chunks.length+' chunks';
 }
 
@@ -3250,7 +3251,7 @@ function subRow(c){
   const chainable=!c.type||c.type==='voiced';
   return `<div class="arow subrow" id="sb${c.id}">
     <span class="lbl">shown</span>
-    <input value="${esc(c.sub||'')}" placeholder="${fx
+    <textarea rows="2" style="flex:1;resize:vertical;min-height:38px" placeholder="${fx
       ?'(Foghorn blowing) — a caption for the sound, for viewers with the sound off'
       :c.type==='voiced'
       ?'what the stage shows while this performance plays'
@@ -3258,8 +3259,8 @@ function subRow(c){
       ?'the question over the buttons — shown while the stage asks'
       :c.type==='visual'
       ?'a caption over this picture'
-      :'what the stage shows — the card’s text is what is spoken'}"
-      onchange="setCard(${c.id},{sub:this.value});paintSubBtn(${c.id})">
+      :'what the stage shows — the card’s text is what is spoken. A standalone // paces the pieces one after another'}"
+      onchange="setCard(${c.id},{sub:this.value});paintSubBtn(${c.id})">${esc(c.sub||'')}</textarea>
     ${!chainable?'':`<label class="mut" style="font-size:11px;white-space:nowrap"
       title="don’t clear this caption when the card ends — the next caption appends to it, one growing block across cards split for delivery. Silences and sound clips in between leave it standing.">
       <input type="checkbox" ${c.chain?'checked':''}
@@ -3290,14 +3291,14 @@ function toggleSub(id){
     const c=DOC&&DOC.chunks.find(x=>x.id===id);
     // a card WITH a subtitle or a chain keeps its row — emptying the field
     // and unticking are how those go away; hiding would look like losing them
-    if(c&&(c.sub||c.chain))return void row.querySelector('input').focus();
+    if(c&&(c.sub||c.chain))return void row.querySelector('textarea').focus();
     row.remove(); SUBS.delete(id); return;
   }
   const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
   SUBS.add(id);
   const act=document.querySelector('#c'+id+' .act');
   if(act)act.insertAdjacentHTML('beforebegin', subRow(c));
-  const inp=document.querySelector('#sb'+id+' input');
+  const inp=document.querySelector('#sb'+id+' textarea');
   if(inp){
     // Start from the spoken words: correcting "tay-dee" back to "Teide"
     // should be an edit, not a retype. NOT saved until you change it — a

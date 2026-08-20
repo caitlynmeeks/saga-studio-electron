@@ -177,9 +177,14 @@ if(BC)BC.onmessage=e=>{
     // the paused ride belongs to the old episode and must not speak for this one
     if(m.name&&m.name!==NAME){ switchStory(m.name); story(m.from==null?null:m.from); }
     else if(!AUDIO.paused)pause();
+    // the editor names the selected card, and play honours it even mid-pause:
+    // a resume replays from THAT card with a fresh document, so everything
+    // repainted or reworded during the pause is in the ride — resuming the
+    // stale premix was how an author could never see their own changes
+    else if(m.from!=null)story(m.from);
     else if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended&&RUNOFF){
       AUDIO.play(); $('playb').textContent='⏸ Pause'; say({type:'state',playing:true});
-    }else story(m.from==null?null:m.from);
+    }else story(null);
   }
   if(m.type==='pause'&&!AUDIO.paused)pause();
 };
@@ -236,7 +241,9 @@ async function load(){
 const card=id=>DOC&&DOC.chunks.find(c=>c.id===id);
 
 function show(c){
-  if(SHOWN&&c&&SHOWN.id===c.id)return;
+  // same card, same picture — but a card REPAINTED during a pause keeps its
+  // id and changes its media, and that change must reach the wall
+  if(SHOWN&&c&&SHOWN.id===c.id&&SHOWN.media===c.media)return;
   SHOWN=c||null;
   showMedia(c&&c.media,c&&c.mediakind);
   sayFrame({media:c?c.media:null,kind:c?c.mediakind:''});
@@ -474,10 +481,17 @@ function switchStory(n){
 }
 function playFrom(from){ story(from); }
 
-// the viewfinder: idle, the stage shows the moment of the card being edited —
-// its governing visual and its words — so writing happens against the picture
-function idleShow(id){
-  if(!AUDIO.paused||RUNOFF||ASKOFF||!DOC)return;
+// the viewfinder: idle OR PAUSED, the stage shows the moment of the card
+// being edited — its governing visual and its words — so writing happens
+// against the picture. Paused matters: stopping the ride to repaint a card
+// and then clicking it is exactly when the author needs the wall to show
+// the new picture, and the doc is refetched for the same reason — the
+// change being checked lives in a document this window has not seen yet.
+async function idleShow(id){
+  if(!NAME||!AUDIO.paused||ASKOFF)return;
+  const d=await api('/api/doc?name='+encodeURIComponent(NAME));
+  if(d&&!d.error)DOC=d;
+  if(!DOC)return;
   const k=DOC.chunks.findIndex(c=>c.id===id); if(k<0)return;
   let vis=null;
   for(let i=0;i<=k;i++){ const x=DOC.chunks[i];
