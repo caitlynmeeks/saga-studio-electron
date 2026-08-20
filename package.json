@@ -2,7 +2,7 @@
   "name": "saga-studio-desktop",
   "productName": "Saga Studio",
   "version": "0.1.0",
-  "description": "Saga Studio as a standalone desktop app \u2014 a local audiobook editor",
+  "description": "Saga Studio as a standalone desktop app — a local audiobook editor",
   "main": "main.js",
   "license": "MIT",
   "author": "Caitlyn Meeks",
@@ -13,7 +13,8 @@
     "dist": "electron-builder"
   },
   "devDependencies": {
-    "electron": "^43.4.0"
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "wtf.caity.sagastudio",
@@ -36,9 +37,18 @@
       "python/requirements.txt"
     ],
     "extraResources": [
-      { "from": "build/runtime/python", "to": "python" },
-      { "from": "build/runtime/uv", "to": "uv" },
-      { "from": "build/models", "to": "models" }
+      {
+        "from": "build/runtime/python",
+        "to": "python"
+      },
+      {
+        "from": "build/runtime/uv",
+        "to": "uv"
+      },
+      {
+        "from": "build/models",
+        "to": "models"
+      }
     ],
     "mac": {
       "category": "public.app-category.productivity",
