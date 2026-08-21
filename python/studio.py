@@ -95,6 +95,70 @@ ENGINES_DIR = Path(os.environ.get("SAGA_ENGINES")
                    or (Path.home() / "Library/Application Support/Saga Studio/engines"
                        if sys.platform == "darwin"
                        else Path.home() / ".saga-studio/engines")).expanduser()
+# Editor settings — the author's own arrangements: which model Discuss speaks
+# with, who paints the pictures, which apps a clip opens in for surgery. They
+# are per-MACHINE, kept beside the engines rather than in the library, because
+# a library travels (Export Everything, a copied folder) and an API key must
+# never travel with it.
+SETTINGS_FILE = Path(os.environ.get("SAGA_SETTINGS")
+                     or ENGINES_DIR.parent / "settings.json").expanduser()
+SETTINGS_DEFAULTS = {
+    # llm.provider: claude = the Claude Code sign-in already on this machine;
+    # anthropic = the same claude binary billed by API key; the rest speak the
+    # OpenAI chat shape, which is what LM Studio and llama.cpp serve locally.
+    "llm": {"provider": "claude", "model": "", "key": "", "url": ""},
+    "image": {"provider": "nanobanana", "key": "", "url": ""},
+    "apps": {"image": "", "audio": "", "video": ""},
+}
+LLM_PROVIDERS = ("claude", "anthropic", "lmstudio", "llamacpp", "openai",
+                 "custom")
+# where each OpenAI-shaped provider listens when the url field is left blank
+LLM_URLS = {"lmstudio": "http://127.0.0.1:1234/v1",
+            "llamacpp": "http://127.0.0.1:8080/v1",
+            "openai": "https://api.openai.com/v1"}
+
+
+def settings():
+    """Read fresh on every call, like gemini_key: a key pasted into the
+    Settings tab must work on the very next ask, not after a restart."""
+    out = json.loads(json.dumps(SETTINGS_DEFAULTS))
+    try:
+        got = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return out
+    for sec, vals in out.items():
+        g = got.get(sec)
+        if isinstance(g, dict):
+            for k in vals:
+                if isinstance(g.get(k), str):
+                    vals[k] = g[k].strip()
+    return out
+
+
+def save_settings(d):
+    """Merge what the page sent over what is known, never trusting shape, and
+    keep the file at 0600: it holds the author's keys."""
+    cur = settings()
+    for sec, vals in cur.items():
+        g = d.get(sec)
+        if isinstance(g, dict):
+            for k in vals:
+                if isinstance(g.get(k), str):
+                    vals[k] = g[k].strip()
+    if cur["llm"]["provider"] not in LLM_PROVIDERS:
+        cur["llm"]["provider"] = "claude"
+    if cur["image"]["provider"] not in ("nanobanana", "drawthings"):
+        cur["image"]["provider"] = "nanobanana"
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=SETTINGS_FILE.parent, prefix=".settings-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cur, f, indent=1)
+        os.replace(tmp, SETTINGS_FILE)
+        os.chmod(SETTINGS_FILE, 0o600)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    return cur
 
 
 def _engine_python(env, managed, classic):
@@ -788,8 +852,18 @@ def gemini_key():
     return k.strip()
 
 
+def image_ready():
+    """Whether generate_media can paint: a key for nanobanana, or Draw Things
+    chosen (whether its server is actually up is only knowable by asking,
+    which the first painting does)."""
+    st = settings()["image"]
+    if st["provider"] == "drawthings":
+        return True
+    return bool(st["key"] or gemini_key())
+
+
 def generate_media(prompt, stem="", aspect="", ref=""):
-    """Ask nanobanana for a picture and file it in the media pool.
+    """Ask the chosen illustrator for a picture and file it in the media pool.
 
     Every generation is new bytes, so the upload route's dedupe has nothing
     to say here; the never-overwrite rule holds exactly as it does there —
@@ -799,25 +873,97 @@ def generate_media(prompt, stem="", aspect="", ref=""):
     `ref` names a picture already in the pool to send along as a reference —
     the model matches its style or subject, which is how a cast of images
     stays one cast. Returns the name the pool filed it under."""
-    import base64
-    import urllib.request, urllib.error
-    key = gemini_key()
-    if not key:
-        raise RuntimeError("no Gemini API key — paste one from "
-                           f"aistudio.google.com into {GEMINI_KEY_FILE}")
     if not prompt.strip():
         raise ValueError("an empty prompt paints nothing")
     aspect = aspect or "16:9"
     if aspect not in NB_ASPECTS:
         raise ValueError(f"aspect must be one of: {', '.join(NB_ASPECTS)}")
+    st = settings()["image"]
+    if st["provider"] == "drawthings":
+        img, ext = _paint_drawthings(prompt, aspect, ref, st["url"])
+    else:
+        img, ext = _paint_nanobanana(prompt, aspect, ref,
+                                     st["key"] or gemini_key())
+    stem = re.sub(r"[^a-z0-9_-]+", "-",
+                  (stem or "art").lower()).strip("-")[:40] or "art"
+    MEDIA.mkdir(parents=True, exist_ok=True)
+    taken = {p.stem for p in MEDIA.iterdir() if p.is_file()}
+    name = _free_name(taken, stem, "new")
+    fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".media-", suffix=ext)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(img)
+        dest = MEDIA / f"{name}{ext}"
+        os.replace(tmp, dest)              # same filesystem: tmp lives in ROOT
+        os.chmod(dest, 0o644)              # mkstemp makes it 0600
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    return name
+
+
+def _ref_image(ref):
+    """A reference must be a picture already in the pool, never film."""
+    try:
+        rf = media_file(ref)
+    except FileNotFoundError:
+        raise ValueError(f'no media "{ref}" to use as a reference')
+    if rf.suffix.lower() not in IMG_EXT:
+        raise ValueError("only a picture can be a reference — not film")
+    return rf
+
+
+# Draw Things paints on this machine for free, through the A1111-compatible
+# HTTP API it serves when its "API Server" switch is on. Sizes rather than
+# ratios, because that is the shape its API takes; these are the SDXL-native
+# resolutions nearest each of the studio's aspects.
+DT_SIZES = {"16:9": (1344, 768), "1:1": (1024, 1024), "9:16": (768, 1344),
+            "4:3": (1152, 896), "3:4": (896, 1152), "21:9": (1536, 640)}
+
+
+def _paint_drawthings(prompt, aspect, ref, url):
+    import base64
+    import urllib.request, urllib.error
+    base = (url or "http://127.0.0.1:7860").rstrip("/")
+    w, h = DT_SIZES[aspect]
+    body = {"prompt": prompt, "width": w, "height": h}
+    route = "/sdapi/v1/txt2img"
+    if ref:
+        # img2img with the reference underneath: it keeps the bones of the
+        # picture and repaints the skin, the local cousin of a style match
+        route = "/sdapi/v1/img2img"
+        body["init_images"] = [base64.b64encode(_ref_image(ref)
+                                                .read_bytes()).decode()]
+        body["denoising_strength"] = 0.65
+    req = urllib.request.Request(base + route,
+                                 data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        # local diffusion takes what it takes; a big model on a quiet
+        # machine can want minutes
+        with urllib.request.urlopen(req, timeout=590) as r:
+            got = json.loads(r.read().decode())
+    except urllib.error.HTTPError as ex:
+        raise RuntimeError(f"Draw Things said {ex.code}. Is its API server "
+                           "switched on? (Draw Things settings, API Server)")
+    except urllib.error.URLError as ex:
+        raise RuntimeError(f"could not reach Draw Things at {base} "
+                           f"({ex.reason}). Start the app and switch on its "
+                           "HTTP API server, or fix the address in Settings.")
+    imgs = got.get("images") or []
+    if not imgs:
+        raise RuntimeError("Draw Things sent no image back")
+    return base64.b64decode(imgs[0].split(",")[-1]), ".png"
+
+
+def _paint_nanobanana(prompt, aspect, ref, key):
+    import base64
+    import urllib.request, urllib.error
+    if not key:
+        raise RuntimeError("no Gemini API key. Paste one from "
+                           "aistudio.google.com into the Settings tab.")
     parts = []
     if ref:
-        try:
-            rf = media_file(ref)
-        except FileNotFoundError:
-            raise ValueError(f'no media "{ref}" to use as a reference')
-        if rf.suffix.lower() not in IMG_EXT:
-            raise ValueError("only a picture can be a reference — not film")
+        rf = _ref_image(ref)
         parts.append({"inlineData": {
             "mimeType": MEDIA_MIME.get(rf.suffix.lower(), "image/png"),
             "data": base64.b64encode(rf.read_bytes()).decode()}})
@@ -851,24 +997,9 @@ def generate_media(prompt, stem="", aspect="", ref=""):
                or (got.get("promptFeedback") or {}).get("blockReason")
                or "no image came back")
         raise RuntimeError(str(why)[:300])
-    img = base64.b64decode(data["data"])
-    ext = {"image/png": ".png", "image/jpeg": ".jpg",
-           "image/webp": ".webp"}.get(data.get("mimeType"), ".png")
-    stem = re.sub(r"[^a-z0-9_-]+", "-",
-                  (stem or "art").lower()).strip("-")[:40] or "art"
-    MEDIA.mkdir(parents=True, exist_ok=True)
-    taken = {p.stem for p in MEDIA.iterdir() if p.is_file()}
-    name = _free_name(taken, stem, "new")
-    fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".media-", suffix=ext)
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(img)
-        dest = MEDIA / f"{name}{ext}"
-        os.replace(tmp, dest)              # same filesystem: tmp lives in ROOT
-        os.chmod(dest, 0o644)              # mkstemp makes it 0600
-    finally:
-        Path(tmp).unlink(missing_ok=True)
-    return name
+    return base64.b64decode(data["data"]), {
+        "image/png": ".png", "image/jpeg": ".jpg",
+        "image/webp": ".webp"}.get(data.get("mimeType"), ".png")
 
 
 # ── takes ───────────────────────────────────────────────────────────────
@@ -3234,6 +3365,75 @@ _chats_lock = threading.Lock()
 CHAT_IDLE_S = 300               # silence this long means wedged, not thinking
 CHAT_MAX_S = 1800               # and no single ask runs past half an hour
 
+# ── the agent's memory ──────────────────────────────────────────────────
+# What Discuss keeps between conversations, CLAUDE.md-style: one markdown
+# file in the library, because it is ABOUT these stories (a key is about a
+# machine and lives in settings; the distinction is the whole filing system).
+# Two kinds of entry share it: a journal the studio writes itself after any
+# ask that changed something, and notes the agent chooses to keep with its
+# `remember` tool. The whole file rides into every conversation's system
+# prompt, so the window must roll: oldest entries fall off once the file
+# outgrows NOTES_LIMIT. The author can read or prune it like any file.
+NOTES_FILE = ROOT / "agent_memory.md"
+NOTES_LIMIT = 12000             # characters carried; newest survive
+_notes_lock = threading.Lock()
+
+
+def agent_notes():
+    try:
+        return NOTES_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def note_append(entry):
+    """Append one `## `-headed entry, trimming whole entries from the top
+    once the file outgrows the window — never mid-entry."""
+    with _notes_lock:
+        cur = agent_notes()
+        cur = (cur + "\n\n" if cur else "") + entry.strip()
+        if len(cur) > NOTES_LIMIT:
+            tail = cur[-NOTES_LIMIT:]
+            cut = tail.find("\n## ")
+            if cut >= 0:
+                tail = tail[cut + 1:]
+            cur = tail
+        try:
+            NOTES_FILE.write_text(cur + "\n", encoding="utf-8")
+        except OSError:
+            pass
+
+
+# the tools whose landing is worth a journal line — the same set the editor
+# watches to live-reload the deck, minus render_card (a solo render is a
+# casting check, not a change worth remembering)
+CHAT_JOURNAL = {"insert_card", "edit_card", "remove_card", "move_card",
+                "rename_group", "create_profile", "draft_story",
+                "create_story", "render_story", "generate_image"}
+
+
+def _journal(project, question, actions):
+    """The studio's own diary of an ask that changed something: which story
+    was open, what was asked, what the agent's hands actually did. Written
+    here from the observed tool calls rather than trusted to the model, so
+    the memory of an edit can never be a hallucination of one."""
+    if not actions:
+        return
+
+    def brief(name, inp):
+        keep = [f"{k}={inp[k]}" for k in ("story", "title", "gname", "name",
+                                          "id", "at", "to", "profile")
+                if inp.get(k) not in (None, "")]
+        return name + (" (" + ", ".join(keep[:4]) + ")" if keep else "")
+
+    did = [brief(n, i) for n, i in actions[:14]]
+    if len(actions) > 14:
+        did.append(f"and {len(actions) - 14} more")
+    note_append("## " + time.strftime("%Y-%m-%d %H:%M")
+                + (f' · in "{project}"' if project else " · no story open")
+                + "\nAsked: " + " ".join(question.split())[:200]
+                + "\nDid: " + "; ".join(did))
+
 
 def _sessions():
     try:
@@ -3268,24 +3468,55 @@ def _chat_cmd(project, question, chunk_ids, fresh):
             ctx += (("Selected" if chunk_ids else "First") + " passages:\n\n"
                     + "\n\n".join(f"[card {c['id']}] {c['text']}" for c in sel)
                     + "\n\n")
-    cfg = {"mcpServers": {"saga": {
-        "type": "stdio", "command": sys.executable,
-        "args": [str(HERE / "saga_mcp.py")],
-        # the same secret the editor holds — the agent itself never sees it,
-        # having no shell to read the environment with
-        "env": {"SAGA_API": f"http://127.0.0.1:{PORT}",
-                "SAGA_TOKEN": TOKEN}}}}
+    st = settings()["llm"]
     rules = (HERE / "discuss_rules.md").read_text(encoding="utf-8")
-    cmd = [claude_path(), "-p", ctx + "The author says: " + question,
-           "--output-format", "stream-json", "--verbose",
-           "--include-partial-messages",
-           "--mcp-config", json.dumps(cfg),
-           "--allowedTools", "mcp__saga__*",
-           "--append-system-prompt", rules]
-    sid = None if fresh else _sessions().get(project or "")
-    if sid:
-        cmd += ["--resume", sid]
-    return cmd
+    notes = agent_notes()
+    if notes:
+        rules += ("\n\n## Your memory of this library\n"
+                  "Carried over from earlier conversations, oldest first. "
+                  "The journal entries were logged by the studio itself; "
+                  "when a note and the story disagree, trust the story:\n\n"
+                  + notes)
+    prompt = ctx + "The author says: " + question
+    if st["provider"] in ("claude", "anthropic"):
+        cfg = {"mcpServers": {"saga": {
+            "type": "stdio", "command": sys.executable,
+            "args": [str(HERE / "saga_mcp.py")],
+            # the same secret the editor holds — the agent itself never sees
+            # it, having no shell to read the environment with
+            "env": {"SAGA_API": f"http://127.0.0.1:{PORT}",
+                    "SAGA_TOKEN": TOKEN}}}}
+        cmd = [claude_path(), "-p", prompt,
+               "--output-format", "stream-json", "--verbose",
+               "--include-partial-messages",
+               "--mcp-config", json.dumps(cfg),
+               "--allowedTools", "mcp__saga__*",
+               "--append-system-prompt", rules]
+        if st["model"]:
+            cmd += ["--model", st["model"]]
+        sid = None if fresh else _sessions().get(project or "")
+        if sid:
+            cmd += ["--resume", sid]
+        env = None
+        if st["provider"] == "anthropic" and st["key"]:
+            # billed to the key rather than the machine's sign-in
+            env = {**os.environ, "ANTHROPIC_API_KEY": st["key"]}
+        return cmd, env
+    # Any OpenAI-shaped server: LM Studio, llama.cpp, OpenAI itself.
+    # openai_agent.py replays the same stream-json dialect Claude Code
+    # speaks, so everything downstream of the Popen is one code path — and
+    # its transcript file is the local equivalent of --resume.
+    url = st["url"] or LLM_URLS.get(st["provider"], "")
+    if not url:
+        raise RuntimeError("no server address for the model yet. "
+                           "The Settings tab holds it.")
+    tname = re.sub(r"[^a-z0-9_-]+", "-", (project or "library").lower())
+    conf = {"url": url, "key": st["key"], "model": st["model"],
+            "rules": rules, "prompt": prompt, "fresh": bool(fresh),
+            "transcript": str(ROOT / "chat_local" / f"{tname}.json")}
+    env = {**os.environ, "SAGA_LLM": json.dumps(conf),
+           "SAGA_API": f"http://127.0.0.1:{PORT}", "SAGA_TOKEN": TOKEN}
+    return [sys.executable, str(HERE / "openai_agent.py")], env
 
 
 # ── http ────────────────────────────────────────────────────────────────
@@ -3339,14 +3570,16 @@ class H(BaseHTTPRequestHandler):
                 return self._send(409, {"error": "already thinking — "
                                         "stop that first"})
         try:
-            cmd = _chat_cmd(d.get("name"), d["question"], d.get("chunks"),
-                            bool(d.get("fresh")))
+            cmd, cenv = _chat_cmd(d.get("name"), d["question"],
+                                  d.get("chunks"), bool(d.get("fresh")))
         except FileNotFoundError as ex:
             return self._send(500, {"error": f"missing file: {ex}"})
+        except RuntimeError as ex:
+            return self._send(500, {"error": str(ex)})
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True,
-                                    cwd=str(HERE))
+                                    cwd=str(HERE), env=cenv)
         except FileNotFoundError:
             return self._send(500, {"error": "Claude Code is not installed "
                                     "— install `claude` or set SAGA_CLAUDE"})
@@ -3384,6 +3617,7 @@ class H(BaseHTTPRequestHandler):
 
         streamed = 0            # deltas sent; the fallback for CLIs without
         done = False            # partial messages only fires when none came
+        actions = []            # mutating tool calls seen, for the journal
         try:
             for line in proc.stdout:
                 last[0] = time.time()
@@ -3411,9 +3645,10 @@ class H(BaseHTTPRequestHandler):
                 elif t == "assistant":
                     for cb in ((ev.get("message") or {}).get("content") or []):
                         if cb.get("type") == "tool_use":
-                            self._sse({"e": "tooldone",
-                                       "name": (cb.get("name") or ""
-                                                ).split("__")[-1],
+                            short = (cb.get("name") or "").split("__")[-1]
+                            if short in CHAT_JOURNAL:
+                                actions.append((short, cb.get("input") or {}))
+                            self._sse({"e": "tooldone", "name": short,
                                        "brief": json.dumps(
                                            cb.get("input") or {})[:160]})
                         elif (cb.get("type") == "text" and cb.get("text")
@@ -3441,6 +3676,10 @@ class H(BaseHTTPRequestHandler):
             with _chats_lock:
                 if _chats.get(project) is proc:
                     del _chats[project]
+        if done and actions:
+            # the ask finished and changed something: journal it, so the
+            # next conversation opens already knowing what this one did
+            _journal(project, str(d.get("question") or ""), actions)
         if not done:
             errt.join(timeout=2)     # stderr hits EOF once the child is gone
             tail = " · ".join(x for x in errtail if x)[-300:]
@@ -3511,11 +3750,19 @@ class H(BaseHTTPRequestHandler):
                 # noticed on the next refresh. Whether that Claude is signed
                 # in is only knowable by asking, so the panel learns it then.
                 "claude": Path(claude_path()).exists(),
-                # whether generate_media has a key to paint with — like the
-                # claude check, fresh each time, so pasting one in works
-                # without a restart
-                "nanobanana": bool(gemini_key()),
+                # which brain Discuss speaks with — the panel words its
+                # invitation around it, and a local provider needs no claude
+                "llm_provider": settings()["llm"]["provider"],
+                # whether generate_media can paint — like the claude check,
+                # fresh each time, so pasting a key in works without a
+                # restart. Still called nanobanana on the wire: the ✨
+                # button and the agent's overview both read this name.
+                "nanobanana": image_ready(),
                 "model": "warm" if _cb["warm"] else "cold"})
+        if u.path == "/api/settings":
+            # localhost and token-guarded, the author's own machine asking:
+            # the keys are theirs to see back
+            return self._send(200, settings())
         if u.path == "/api/plugins":
             try:
                 import pedalboard          # noqa: F401
@@ -4026,6 +4273,55 @@ class H(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(ex)})
             return self._send(200, {"ok": True, "media": mname,
                                     "kind": "image"})
+        # Editor settings: one small file of its own, no doc and no lock.
+        if u.path == "/api/settings":
+            return self._send(200, save_settings(d))
+        # The agent's remember tool lands here: append-only into the memory
+        # file, which has its own lock — never _docmut.
+        if u.path == "/api/agent_note":
+            note = str(d.get("note") or "").strip()
+            if not note:
+                return self._send(400, {"error": "an empty note remembers "
+                                                 "nothing"})
+            note_append("## " + time.strftime("%Y-%m-%d %H:%M") + " · note\n"
+                        + note[:2000])
+            return self._send(200, {"ok": True})
+        # Hand a clip or a picture to the author's chosen outside editor.
+        # The file is found by its pool name, never by a path from the
+        # request, so this cannot be pointed outside the library.
+        if u.path == "/api/open_in":
+            kind = {"image": "image", "video": "video",
+                    "clip": "audio"}.get(str(d.get("kind") or ""))
+            name = str(d.get("file") or "")
+            if not kind or not name or "/" in name or "\\" in name \
+                    or name.startswith("."):
+                return self._send(400, {"error": "a kind and a plain "
+                                                 "file name"})
+            try:
+                path = (CLIPS / f"{name}.wav") if d.get("kind") == "clip" \
+                    else media_file(name)
+            except FileNotFoundError as ex:
+                return self._send(404, {"error": str(ex)})
+            if not path.exists():
+                return self._send(404, {"error": f"no clip '{name}'"})
+            app = settings()["apps"].get(kind, "")
+            if not app:
+                return self._send(400, {"error": f"no {kind} editor chosen "
+                                        "yet. The ⚙ Settings tab holds it."})
+            if sys.platform == "darwin":
+                r = subprocess.run(["open", "-a", app, str(path)],
+                                   capture_output=True, text=True)
+                if r.returncode:
+                    return self._send(400, {"error": f'could not open '
+                                            f'"{app}". Is that its name in '
+                                            "/Applications?"})
+            else:
+                try:
+                    subprocess.Popen([app, str(path)])
+                except OSError as ex:
+                    return self._send(400, {"error":
+                                            f"could not run {app}: {ex}"})
+            return self._send(200, {"ok": True, "app": app})
         # Every mutating route needs a real project; without this a bad name
         # surfaces as an opaque 500 from subscripting None.
         if u.path not in ("/api/import", "/api/chat") and d.get("name") is not None:

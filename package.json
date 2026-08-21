@@ -33,6 +33,7 @@
       "python/omnivoice_server.py",
       "python/chatterbox_server.py",
       "python/saga_mcp.py",
+      "python/openai_agent.py",
       "python/discuss_rules.md",
       "python/requirements.txt"
     ],

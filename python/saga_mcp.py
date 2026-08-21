@@ -309,6 +309,15 @@ def t_generate_image(a):
                     "so a variant can be painted later"}
 
 
+def t_remember(a):
+    note = (a.get("note") or "").strip()
+    if not note:
+        raise ToolError("pass the note to keep")
+    api("/api/agent_note", {"note": note})
+    return {"ok": True,
+            "note": "kept; it rides into every future conversation"}
+
+
 def t_story_status(a):
     doc = doc_of(a.get("story"))
     render = [c for c in doc.get("chunks", [])
@@ -446,6 +455,13 @@ TOOLS = [
                       "subject; paint one image first, then pass it here "
                       "for every other card so the set stays one cast"}},
              ["prompt"]), t_generate_image),
+    ("remember", "Keep one or two sentences in your long-term memory of "
+     "this library. It survives new conversations and rides into every "
+     "future one; the oldest notes fall off as new ones arrive. For "
+     "decisions and their reasons, casting choices, naming schemes, work "
+     "left unfinished. What you DID is journaled automatically, so "
+     "remember the why, not the what.",
+     _schema({"note": STR}, ["note"]), t_remember),
 ]
 
 
