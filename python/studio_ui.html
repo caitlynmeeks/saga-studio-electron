@@ -446,6 +446,12 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
     <button onclick="exportAll()">Export Everything</button>
     <button onclick="$('arch').click()">Import…</button>
   </div>
+  <div style="display:flex;gap:5px;margin-top:5px">
+    <input id="bklink" placeholder="or paste a darkride source link…"
+      style="flex:1;min-width:0" onkeydown="if(event.key==='Enter')importLink()"
+      title="a /sources/ link from another studio's Upload Source Project — fetched and restored here, no browser download needed">
+    <button onclick="importLink()">Fetch</button>
+  </div>
   <input type="file" id="arch" accept=".sagaproj" hidden>
   <input type="file" id="clipfile" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aif,.aiff" hidden>
   <input type="file" id="perffile" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aif,.aiff" hidden>
@@ -776,6 +782,23 @@ async function importArchive(f){
       {method:'POST',body:f,headers:{'Content-Type':'application/octet-stream'}});
     j=await r.json();
   }catch(ex){ j={error:String(ex)}; }
+  await archDone(j);
+}
+// a pasted darkride source link: the server fetches the .sagaproj the link
+// points at and restores it — same restore, same message, no browser detour
+async function importLink(){
+  const inp=$('bklink'), url=(inp.value||'').trim(), m=$('bkmsg');
+  if(!url)return void(m.textContent='paste the darkride source link first');
+  m.innerHTML='<span class="warn">fetching the project from the link — '+
+    'a big one takes a while…</span>';
+  let j; try{ j=await api('/api/import_link',{url,mode:$('bkmode').value}); }
+  catch(ex){ j={error:String(ex)}; }
+  if(!j.error)inp.value='';
+  await archDone(j);
+}
+// what both import doors say when the dust settles
+async function archDone(j){
+  const m=$('bkmsg');
   if(j.error) return void(m.innerHTML=`<span class="warn">${esc(j.error)}</span>`);
   const bits=[`restored ${j.projects.length} episode(s)`];
   if(j.audio) bits.push(`${j.audio} rendered chunk(s)`);

@@ -3488,6 +3488,58 @@ def share_source(name):
     return out["url"], size
 
 
+def fetch_source_link(url, dest):
+    """Follow a darkride source link to its .sagaproj and stream it to dest.
+
+    What people paste is the LANDING page; its one download button names the
+    file, so an html answer is read just far enough to find that href. A
+    direct link to the .sagaproj itself works too. http(s) only, streamed in
+    blocks, never more than SOURCE_CAP bytes — the other side of the same
+    cap share_source packs under."""
+    import urllib.request
+    import urllib.error
+    from urllib.parse import urljoin
+    if not re.match(r"^https?://", url or ""):
+        raise RuntimeError("paste the whole link — it starts with https://")
+    def _open(u_, t):
+        return urllib.request.urlopen(
+            urllib.request.Request(u_, headers={"User-Agent": "SagaStudio"}),
+            timeout=t)
+    try:
+        r = _open(url, 60)
+        if "text/html" in (r.headers.get("Content-Type") or "").lower():
+            page = r.read(1 << 20).decode("utf-8", "replace")
+            r.close()
+            m = re.search(r'href="([^"]+\.sagaproj)"', page)
+            if not m:
+                raise RuntimeError("that page offers no .sagaproj — is it a "
+                                   "darkride source link?")
+            r = _open(urljoin(url, m.group(1)), 1800)
+        got = 0
+        try:
+            with open(dest, "wb") as f:
+                while True:
+                    b = r.read(1 << 20)
+                    if not b:
+                        break
+                    got += len(b)
+                    if got > SOURCE_CAP:
+                        raise RuntimeError("that file is over the "
+                                           f"{SOURCE_CAP // (1 << 30)} GB cap")
+                    f.write(b)
+        finally:
+            r.close()
+        if not got:
+            raise RuntimeError("the link answered with nothing")
+        return got
+    except urllib.error.HTTPError as ex:
+        raise RuntimeError(f"the link answered {ex.code} — has the source "
+                           "been deleted, or the address mistyped?")
+    except (urllib.error.URLError, OSError) as ex:
+        raise RuntimeError(f"could not reach the link — "
+                           f"{getattr(ex, 'reason', None) or ex}")
+
+
 # ── the discuss agent ───────────────────────────────────────────────────
 # This used to be three lines: shell out, wait three minutes, print whatever
 # came back. Now the agent has hands and a memory. It runs headless Claude
@@ -4418,6 +4470,31 @@ class H(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(ex)})
             return self._send(200, {"ok": True, "media": mname,
                                     "kind": "image"})
+        # A darkride source link, imported without the browser detour: the
+        # server downloads the .sagaproj the link points at, then restores
+        # it exactly as a dropped file would be. The download runs OUTSIDE
+        # every lock — a gigabyte on finca wifi must not freeze typing —
+        # and only the restore itself takes _docmut, like any drop.
+        if u.path == "/api/import_link":
+            mode = str(d.get("mode") or "skip")
+            if mode not in ("skip", "replace", "copy"):
+                return self._send(400, {"error": f"unknown mode {mode!r}"})
+            fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".linkimport-",
+                                       suffix=".tgz")
+            os.close(fd)
+            try:
+                try:
+                    fetch_source_link(str(d.get("url") or "").strip(),
+                                      Path(tmp))
+                except RuntimeError as ex:
+                    return self._send(400, {"error": str(ex)})
+                with _docmut:
+                    return self._send(200, {"ok": True,
+                                            **import_archive(Path(tmp), mode)})
+            except Exception as ex:
+                return self._send(400, {"error": f"{type(ex).__name__}: {ex}"})
+            finally:
+                Path(tmp).unlink(missing_ok=True)
         # Editor settings: one small file of its own, no doc and no lock.
         if u.path == "/api/settings":
             return self._send(200, save_settings(d))
