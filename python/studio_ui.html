@@ -84,6 +84,11 @@ background:var(--chrome);border-top:1px solid var(--line)}
 #status{font-size:11.5px}
 #status a{color:var(--amber);text-decoration:underline dotted;cursor:pointer}
 #status a:hover{color:var(--bright)}
+/* the standing count of cards still waiting on a render — same amber as the
+   stale dots it tallies, quiet when the tally is zero */
+#unrend{font-size:11.5px;color:var(--amber);text-decoration:underline dotted;
+cursor:pointer;white-space:nowrap}
+#unrend:hover{color:var(--bright)}
 h2{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--dim);margin:2px 0 8px}
 #drop{border:1.5px dashed var(--line);border-radius:8px;padding:20px 10px;text-align:center;
 color:var(--faint);cursor:pointer;transition:.15s;font-size:12.5px}
@@ -520,7 +525,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 
   <h2 style="margin-top:18px">Illustration</h2>
   <div class="mut" style="font-size:11px;margin-bottom:2px">Who paints when a
-    visual card asks (✨), here and in Discuss.</div>
+    visual card asks to be painted, here and in Discuss.</div>
   <label class="stlab">Provider
     <select id="st_img_p" onchange="settingsVis();saveSettings()">
       <option value="nanobanana">Nanobanana (Gemini)</option>
@@ -536,8 +541,8 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 
   <h2 style="margin-top:18px">Open in…</h2>
   <div class="mut" style="font-size:11px;margin-bottom:2px">Cards and the
-    media lists offer these as ✎ edit. Type an app's name, or 📁 to pick
-    it. Saving over the file there updates it here.</div>
+    media lists offer these as an Edit button. Type an app's name, or 📁 to
+    pick it. Saving over the file there updates it here.</div>
   <label class="stlab">Image editor<span class="approw">
     <input id="st_app_image" placeholder="e.g. Pixelmator Pro"
       onchange="saveSettings()">
@@ -608,6 +613,8 @@ Selected cards go along as context.</div></div>
   <span id="stgask"></span>
   <span class="mut" id="status"></span>
   <span style="flex:1"></span>
+  <a id="unrend" href="#" hidden onclick="jumpUnrendered();return false"
+    title="live cards with no render yet — click to visit them one per press"></a>
   <button id="revealb" onclick="revealOut()" title="Show this episode’s renders in the Finder">Open Renders Folder ↗</button>
 </footer>
 
@@ -663,6 +670,14 @@ function paintCur(){
 function setCur(id){ if(CUR===id)return; CUR=id; paintCur();
   // the stage is a viewfinder: idle, it shows the moment being edited
   if(STAGE&&DOC)STAGE.postMessage({type:'cur',to:'embed',card:id,name:DOC.name});
+}
+// The viewfinder again, by hand: setCur skips repeat clicks on the same card,
+// so a change that redresses the CURRENT one — a repaint, another variant, a
+// new subtitle — re-sends the frame itself. The paused stage refetches the
+// doc on every 'cur', so what hangs on the wall is what the card now holds.
+function stagePeek(){
+  if(STAGE&&DOC&&CUR!=null)
+    STAGE.postMessage({type:'cur',to:'embed',card:CUR,name:DOC.name});
 }
 function clearCur(){ CUR=null; paintCur(); }
 // The footer button says where it will start, so "preview" is never a guess
@@ -974,6 +989,7 @@ async function open_(name,quiet,anchor){
   keepPlace(an,was);          // after fitAll: the heights must be final first
   syncBookBtn();
   paintMinAll();
+  paintUnrendered();          // the footer tally follows the fresh doc
   if(!quiet)refresh();
   if(document.body.dataset.side==='publish')renderPublish();
 }
@@ -1588,12 +1604,16 @@ async function saveSettings(){
                   url:$('st_img_url').value},
            apps:{image:$('st_app_image').value,audio:$('st_app_audio').value,
                  video:$('st_app_video').value}};
+  const appsWere=JSON.stringify((SETTINGS||{}).apps||null);
   const r=await api('/api/settings',d);
   if(r.error)return void($('st_msg').innerHTML=
     `<span class="warn">${esc(r.error)}</span>`);
   SETTINGS=r; $('st_msg').textContent='saved';
   setTimeout(()=>{ if($('st_msg').textContent==='saved')$('st_msg').textContent=''; },1500);
-  refresh();      // the discuss panel and the ✨ button both watch these
+  refresh();      // the discuss panel and the Paint button both watch these
+  // the Edit buttons on cards exist only while an app is set for their kind,
+  // so a change here redraws the stack they live on
+  if(DOC&&JSON.stringify(r.apps||null)!==appsWere)open_(DOC.name,true);
 }
 async function openExternal(kind,name){
   const r=await api('/api/open_in',{kind,file:name});
@@ -2004,6 +2024,15 @@ function renderPublish(){
       <input type="checkbox" id="pubunl"> unlisted: only people with the link</label>
     <button id="pubshare" onclick="shareWeb()" style="width:100%;margin-top:6px">↗ Share to darkride.ai</button>
     <div id="sharemsg" class="mut" style="font-size:11px;margin-top:5px"></div>
+    <h2 style="margin-top:16px">Source Project</h2>
+    <div class="mut" style="font-size:11px"
+      title="The .sagaproj holds the document, the source, the voices, clips, media, takes and every rendered wav. Drop it on another Saga Studio and the project opens whole.">
+      The whole project — every asset and render — at a <b>private</b>
+      download link. Always unlisted, never playable there; anyone with the
+      link can download it and open it on their own machine, intact.
+      Uploading again replaces the file and keeps the link.</div>
+    <button id="pubsrc" onclick="shareSource()" style="width:100%;margin-top:6px">↗ Upload Source Project</button>
+    <div id="srcmsg" class="mut" style="font-size:11px;margin-top:5px"></div>
     <div id="pubmsg" class="mut" style="font-size:11px;margin-top:8px"></div>`;
   try{ const f=localStorage.getItem('saga.pubfmt'); if(f&&$('pubfmt'))$('pubfmt').value=f; }catch(e){}
   paintShare();
@@ -2018,6 +2047,8 @@ async function paintShare(){
   // unless you flip it on purpose
   if($('pubunl'))$('pubunl').checked=!!(r&&r.unlisted);
   if(el&&r&&r.url)el.innerHTML=shareLine(r.url,r.unlisted?'shared, unlisted':'shared');
+  const se=$('srcmsg');
+  if(se&&r&&r.source_url)se.innerHTML=shareLine(r.source_url,'uploaded');
 }
 const shareLine=(url,word)=>`<span class="ok">${word}</span> —
   <a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>
@@ -2034,6 +2065,20 @@ async function shareWeb(){
     `<span class="warn">share failed — ${esc(r.error)}</span>`);
   $('sharemsg').innerHTML=shareLine(r.url,
     (r.built?'exported fresh and live':'live')+(r.unlisted?', unlisted':''));
+}
+// the project itself, packed with every asset and carried to a private
+// darkride link — a big upload, so the button says what is taking so long
+async function shareSource(){
+  if(!DOC)return;
+  const b=$('pubsrc'); b.classList.add('busy'); b.disabled=true;
+  $('srcmsg').innerHTML='<span class="warn">packing the whole project — '+
+    'renders included, this can take a few minutes…</span>';
+  let r; try{ r=await api('/api/share_source',{name:DOC.name}); }
+  catch(ex){ r={error:String(ex)}; }
+  b.classList.remove('busy'); b.disabled=false;
+  if(r.error)return void($('srcmsg').innerHTML=
+    `<span class="warn">upload failed — ${esc(r.error)}</span>`);
+  $('srcmsg').innerHTML=shareLine(r.url,`uploaded, ${size(r.bytes)}`);
 }
 async function publishVideo(){
   if(!DOC)return;
@@ -2668,7 +2713,7 @@ function speechCard(c){return `
         title="what the stage shows, when that differs from what is spoken — Teide on screen, tay-dee in the booth">Subtitle</button>
       <button onclick="splitAt(${c.id})">Split</button>
       <button onclick="merge(${c.id})">Merge Next</button>
-      <button onclick="dup(${c.id})">duplicate</button>
+      <button onclick="dup(${c.id})">Duplicate</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
@@ -2701,7 +2746,7 @@ function audioCard(c){
       <button onclick="pickClip(${c.id})">Import a File…</button>
       <button id="pc${c.id}" onclick="playClip(${c.id})" ${c.ready&&!c.mute?'':'disabled'}>▶ play</button>
       ${c.clip&&appFor('clip')?`<button onclick="editExternal('clip','${esc(c.clip)}')"
-        title="open this clip in ${esc(appLabel(appFor('clip')))} — saving there updates it here">✎ edit</button>`:''}
+        title="open this clip in ${esc(appLabel(appFor('clip')))} — saving there updates it here">Edit</button>`:''}
     </div>
     <div class="arow">
       <span class="lbl">then</span>
@@ -2790,7 +2835,7 @@ function voicedCard(c){
       ${takeUi(c)}
       <button id="sub${c.id}" class="${((c.sub||'').trim()||c.chain)?'dirty':''}" onclick="toggleSub(${c.id})"
         title="a voiced card has no prose — this is what the stage shows while your performance plays">Subtitle</button>
-      <button onclick="dup(${c.id})">duplicate</button>
+      <button onclick="dup(${c.id})">Duplicate</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
@@ -2866,15 +2911,15 @@ function visualCard(c){
         title="a caption over this picture — shown while it stands, typewriter overrides included">Subtitle</button>
       <button id="pt${c.id}" class="tiny ${((c.note||'').trim()||(c.gen||[]).length)?'dirty':''}"
         onclick="togglePaint(${c.id})"
-        title="paint this card with nanobanana — prompt, reference image, variants">✨ Paint</button>
+        title="paint this card — prompt, reference images, variants">Paint</button>
       ${eapp?`<button class="tiny" onclick="editExternal('${kind==='video'?'video':'image'}','${esc(c.media)}')"
-        title="open this ${kind==='video'?'film':'picture'} in ${esc(appLabel(eapp))} — saving there updates it here">✎ Edit</button>`:''}
+        title="open this ${kind==='video'?'film':'picture'} in ${esc(appLabel(eapp))} — saving there updates it here">Edit</button>`:''}
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
 }
 
-// The paint panel, shut by default and popped open by the ✨ Paint button —
+// The paint panel, shut by default and popped open by the Paint button —
 // beneath the picture, because it is ABOUT the picture. The prompt is the
 // card's note (the same field the discuss agent writes its prompts into,
 // so either of them can repaint the other's card), the reference keeps a
@@ -2890,12 +2935,14 @@ function paintRow(c){
         oninput="fitTa(this)"
         onblur="setCard(${c.id},{note:this.value})"${c.locked?' readonly':''}>${esc(c.note||'')}</textarea>
     </div>
-    <div class="arow">
-      <select onchange="setCard(${c.id},{ref:this.value})" style="max-width:150px"
-        title="optional reference image — the model matches its style or subject, which keeps a story's pictures one cast">
-        <option value="">no reference</option>
-        ${media.filter(m=>m.kind!=='video').map(m=>`<option value="${esc(m.name)}" ${
-          m.name===c.ref?'selected':''}>ref: ${esc(m.name)}</option>`).join('')}
+    <div class="arow" style="flex-wrap:wrap">
+      ${refsOf(c).map(n=>`<button class="tiny" onclick="dropRef(${c.id},'${esc(n)}')"
+        title="stop using “${esc(n)}” as a reference — the picture stays in the pool">ref: ${esc(n)} ✕</button>`).join('')}
+      <select onchange="addRef(${c.id},this.value)" style="max-width:150px"
+        title="reference images — the model matches their style or subject, which keeps a story's pictures one cast. Nanobanana takes them all; Draw Things paints over the first.">
+        <option value="">${refsOf(c).length?'+ another reference':'no reference'}</option>
+        ${media.filter(m=>m.kind!=='video'&&!refsOf(c).includes(m.name)).map(m=>
+          `<option value="${esc(m.name)}">ref: ${esc(m.name)}</option>`).join('')}
       </select>
       ${(c.gen||[]).length?`<button onclick="genMenu(event,${c.id})"
         title="the variants painted for this card — choose one, drop one, paint another">${
@@ -2904,9 +2951,22 @@ function paintRow(c){
       <button id="gb${c.id}" class="pri" onclick="genImage(${c.id})" ${nb?'':'disabled'}
         title="${nb
           ?'paint this card with nanobanana — every press is a NEW variant, a few cents and ~15s each'
-          :'no Gemini API key — paste one from aistudio.google.com into gemini_key.txt in your library folder, no restart needed'}">✨ ${c.media?'Repaint':'Paint'}</button>
+          :'no Gemini API key — paste one from aistudio.google.com into gemini_key.txt in your library folder, no restart needed'}">${c.media?'Repaint':'Paint'}</button>
     </div>
   </div>`;
+}
+// A card's references, whatever shape the field is in: absent, one pool
+// name (every doc from before), or a list. Stored back the same way — bare
+// name for one, list for more — so old docs and new stay interchangeable.
+const refsOf=c=>Array.isArray(c.ref)?c.ref.filter(Boolean):(c.ref?[c.ref]:[]);
+async function addRef(id,n){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c||!n)return;
+  const refs=refsOf(c); if(!refs.includes(n))refs.push(n);
+  await setCard(id,{ref:refs},true);
+}
+async function dropRef(id,n){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  await setCard(id,{ref:refsOf(c).filter(x=>x!==n)},true);
 }
 function togglePaint(id){
   const row=$('pr'+id);
@@ -2926,7 +2986,7 @@ function togglePaint(id){
 }
 
 // ── painting visuals ──────────────────────────────────────
-// The ✨ button is the take stepper's cousin: every press paints a NEW
+// The Paint button is the take stepper's cousin: every press paints a NEW
 // variant into the media pool (never overwriting — pool law), points the
 // card at it and remembers the name in c.gen. The variants menu is where
 // you choose between them, drop the ones that are off (the file stays in
@@ -2937,17 +2997,17 @@ async function genImage(id){
   const c=DOC.chunks.find(x=>x.id===id); if(!c)return;
   const inp=$('vp'+id), prompt=((inp?inp.value:c.note)||'').trim();
   if(!prompt){
-    $('status').textContent='write the prompt first — ✨ paints what the prompt says';
+    $('status').textContent='write the prompt first — Paint paints what the prompt says';
     if(inp)inp.focus();
     return;
   }
   if(prompt!==(c.note||''))await api('/api/chunk',{name:DOC.name,id,note:prompt});
-  const b=$('gb'+id); if(b){ b.disabled=true; b.textContent='✨ painting…'; }
+  const b=$('gb'+id); if(b){ b.disabled=true; b.textContent='painting…'; }
   $('s'+id).textContent='nanobanana is painting — about 15 seconds';
   const stem=(c.media||'').replace(/-new(-\d+)?$/,'')||(DOC.name+'-'+id);
   const r=await api('/api/media/generate',{prompt,media:stem,ref:c.ref||''});
   if(r.error){
-    if(b){ b.disabled=false; b.textContent='✨ '+(c.media?'Repaint':'Paint'); }
+    if(b){ b.disabled=false; b.textContent=c.media?'Repaint':'Paint'; }
     $('s'+id).innerHTML=`<span style="color:var(--red)">${esc(r.error)}</span>`;
     return;
   }
@@ -2957,6 +3017,7 @@ async function genImage(id){
   await api('/api/chunk',{name:DOC.name,id,media:r.media,gen});
   refresh();                       // the pool has a picture more than it did
   open_(DOC.name,true,id);
+  if(id===CUR)stagePeek();         // a repaint of the selected card hangs NOW
   $('status').textContent=`“${r.media}” painted — the variants menu holds the others`;
 }
 async function genMenu(e,id){
@@ -2965,7 +3026,7 @@ async function genMenu(e,id){
   const items=gen.map(n=>({label:(n===c.media?'● ':'  ')+n,
     run:()=>setCard(id,{media:n},true)}));
   items.push('-');
-  items.push({label:'✨ paint another variant',run:()=>genImage(id)});
+  items.push({label:'paint another variant',run:()=>genImage(id)});
   if(c.media&&gen.includes(c.media)&&gen.length>1)
     items.push({label:`✕ drop “${c.media}” — it's off`,danger:true,
       run:()=>dropVariant(id)});
@@ -3389,6 +3450,16 @@ async function syncCards(){
   // had more to do (takeSet rendering a fresh roll, above all) died there
   // silently. The cards were already painted, so it looked like working.
   $('hdr').textContent=DOC.title+' · '+DOC.chunks.length+' chunks';
+  paintUnrendered();
+}
+// The footer's standing tally of cards with no render yet. syncCards runs on
+// every open, render, bake tick and undo, so the number moves as the work
+// does; clicking it borrows jumpUnrendered's walk through the amber dots.
+function paintUnrendered(){
+  const el=$('unrend'); if(!el)return;
+  const n=DOC?unrendered().length:0;
+  el.hidden=!n;
+  if(n)el.textContent=`${n} card${n===1?'':'s'} unrendered`;
 }
 
 // ── takes ─────────────────────────────────────────────────
@@ -3400,7 +3471,7 @@ async function syncCards(){
 // the chunk hash, so every take you have heard stays on disk under its own name.
 // ⟳ rolls again; ◂ steps back, and a take you have already heard comes back
 // instantly rather than being re-rendered.
-const takeName=n=>n?'take '+n:'original';
+const takeName=n=>n?'Take '+n:'Original';
 function takeUi(c){
   const n=c.seed||0;
   // Both engines store each take under its own name, so stepping back always
@@ -3462,8 +3533,10 @@ async function takeSet(id,n){
   await api('/api/chunk',{name:DOC.name,id,seed:n});
   await syncCards();
   const now=DOC.chunks.find(x=>x.id===id);
+  // A fresh roll is a slot, not a render: the dice wait for the Render
+  // button (or the next bake), so stepping through takes costs nothing.
   if(now&&now.ready){ $('s'+id).textContent=takeName(n)+' — already rendered'; playFull(id); }
-  else one(id,true);                // and speaks up the moment it arrives
+  else $('s'+id).textContent=takeName(n)+' — not rendered yet';
 }
 async function takeHide(id,n,hide){
   const c=DOC.chunks.find(x=>x.id===id); if(!c)return;
@@ -3913,6 +3986,9 @@ async function setCard(id,patch,rebuild){
   // a refusal — a locked card, mostly — must be seen, or the control looks broken
   if(r.error)$('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`;
   if(rebuild)open_(DOC.name,true,id); else await syncCards();
+  // dressing the selected card redresses the stage too — picking a variant
+  // used to leave the old picture hanging until the next click away
+  if(!r.error&&id===CUR&&('media'in patch||'sub'in patch))stagePeek();
 }
 function fadeUi(id){
   const lo=$('flo'+id), hi=$('fhi'+id); if(!lo||!hi)return;
@@ -4105,24 +4181,23 @@ async function pasteCard(at,ev){
     : '';
   $('status').innerHTML=`pasted ${esc(clipLabel(CLIP))} as card #${at}${note}`;
 }
-// a copied group pastes card by card into consecutive slots; in the open the
-// run becomes a group again — its old name, or a numbered variant when that
-// name is taken here — while a paste inside another group's indent just joins
-// that group
+// a copied group pastes in ONE server call — all its cards, plus the name
+// the run comes back under: its old one, or a numbered variant when that
+// name is taken here. A paste inside another group's indent just joins that
+// group. One call matters beyond tidiness: it is one undo step, where the
+// old card-by-card paste took N presses of ⌘Z — and the first press
+// dissolved only the bar, stranding the members loose in the story.
 async function pasteGroup(at,grp){
   const cards=CLIP.multi;
-  for(let i=0;i<cards.length;i++){
-    const r=await api('/api/paste',{name:DOC.name,at:at+i,card:cards[i],group:grp});
-    if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
-  }
+  let gname='';
   if(!grp){
     const base=CLIP.gname||'Group';
     const used=new Set(DOC.chunks.flatMap(c=>
       c.type==='group'?[c.gname]:c.group?[c.group]:[]));
-    let v=base; for(let k=2;used.has(v);k++)v=`${base} (${k})`;
-    const r=await api('/api/group',{name:DOC.name,ids:cards.map((_,i)=>at+i),gname:v});
-    if(r.error)$('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`;
+    gname=base; for(let k=2;used.has(gname);k++)gname=`${base} (${k})`;
   }
+  const r=await api('/api/paste',{name:DOC.name,at,cards,group:grp,gname});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
   HEIGHT={}; CUR=null;
   await open_(DOC.name,true, at>0?at-1:{from:0,to:1});
   refresh();                                  // the episode has cards more than it did
@@ -4788,9 +4863,11 @@ async function pollJobs(){
 }
 pollJobs();
 // the profile panel used to stay empty until a document was opened, which made
-// the voices look like they belonged to the document rather than the library
-refresh().then(renderProfiles);
-loadSettings();     // the clip and media menus read it before the tab opens
+// the voices look like they belonged to the document rather than the library.
+// Settings first, and WAITED for: the Edit buttons on cards exist only if an
+// outside app is configured, and painting the cards before the settings
+// arrive builds a stack with no Edit buttons on it.
+loadSettings().then(()=>refresh().then(renderProfiles));
 paintFR();          // the header buttons before any document is open
 paintClip();        // a card copied last session is still on the clipboard
 </script>

@@ -677,8 +677,9 @@ def paste_card(src):
              # on a visual card the note is the paint prompt — content,
              # not marginalia, so it travels with the copy
              "note": str(src.get("note") or "")[:2000]}
-        if src.get("ref"):                 # the generate button's reference
-            c["ref"] = re.sub(r"[^a-z0-9_-]", "", str(src["ref"]))
+        refs = ref_list(src.get("ref"))    # the paint panel's reference(s)
+        if refs:
+            c["ref"] = ref_store(refs)
         gen = [re.sub(r"[^a-z0-9_-]", "", str(x))
                for x in (src.get("gen") or []) if str(x or "").strip()]
         if gen:                            # its painted variants, names only
@@ -870,19 +871,21 @@ def generate_media(prompt, stem="", aspect="", ref=""):
     media is global, and replacing a name would change every episode showing
     it. 16:9 unless asked otherwise: the stage and the animatic export are
     widescreen, and a square picture would sit pillarboxed between them.
-    `ref` names a picture already in the pool to send along as a reference —
-    the model matches its style or subject, which is how a cast of images
-    stays one cast. Returns the name the pool filed it under."""
+    `ref` names pictures already in the pool to send along as references —
+    one name or a list of them; the model matches their style or subject,
+    which is how a cast of images stays one cast. Returns the name the pool
+    filed it under."""
     if not prompt.strip():
         raise ValueError("an empty prompt paints nothing")
     aspect = aspect or "16:9"
     if aspect not in NB_ASPECTS:
         raise ValueError(f"aspect must be one of: {', '.join(NB_ASPECTS)}")
+    refs = ref_list(ref)
     st = settings()["image"]
     if st["provider"] == "drawthings":
-        img, ext = _paint_drawthings(prompt, aspect, ref, st["url"])
+        img, ext = _paint_drawthings(prompt, aspect, refs, st["url"])
     else:
-        img, ext = _paint_nanobanana(prompt, aspect, ref,
+        img, ext = _paint_nanobanana(prompt, aspect, refs,
                                      st["key"] or gemini_key())
     stem = re.sub(r"[^a-z0-9_-]+", "-",
                   (stem or "art").lower()).strip("-")[:40] or "art"
@@ -912,6 +915,27 @@ def _ref_image(ref):
     return rf
 
 
+def ref_list(v):
+    """The reference field in every shape it has worn: absent, one pool
+    name, or a list of them. Sanitised like every pool name, empties and
+    doubles dropped, order kept — the first reference is the one a
+    single-image painter gets."""
+    vs = v if isinstance(v, (list, tuple)) else [v]
+    out = []
+    for x in vs:
+        x = re.sub(r"[^a-z0-9_-]", "", str(x or ""))
+        if x and x not in out:
+            out.append(x)
+    return out
+
+
+def ref_store(vs):
+    """How the card carries its references: nothing, the bare name, or the
+    list. The bare-name form is what every doc written before lists looked
+    like, so old and new stay interchangeable both ways."""
+    return vs if len(vs) > 1 else (vs[0] if vs else "")
+
+
 # Draw Things paints on this machine for free, through the A1111-compatible
 # HTTP API it serves when its "API Server" switch is on. Sizes rather than
 # ratios, because that is the shape its API takes; these are the SDXL-native
@@ -920,18 +944,20 @@ DT_SIZES = {"16:9": (1344, 768), "1:1": (1024, 1024), "9:16": (768, 1344),
             "4:3": (1152, 896), "3:4": (896, 1152), "21:9": (1536, 640)}
 
 
-def _paint_drawthings(prompt, aspect, ref, url):
+def _paint_drawthings(prompt, aspect, refs, url):
     import base64
     import urllib.request, urllib.error
     base = (url or "http://127.0.0.1:7860").rstrip("/")
     w, h = DT_SIZES[aspect]
     body = {"prompt": prompt, "width": w, "height": h}
     route = "/sdapi/v1/txt2img"
-    if ref:
+    if refs:
         # img2img with the reference underneath: it keeps the bones of the
-        # picture and repaints the skin, the local cousin of a style match
+        # picture and repaints the skin, the local cousin of a style match.
+        # One canvas only — img2img paints over a single image, so of many
+        # references the FIRST is the one that goes under the brush.
         route = "/sdapi/v1/img2img"
-        body["init_images"] = [base64.b64encode(_ref_image(ref)
+        body["init_images"] = [base64.b64encode(_ref_image(refs[0])
                                                 .read_bytes()).decode()]
         body["denoising_strength"] = 0.65
     req = urllib.request.Request(base + route,
@@ -955,14 +981,16 @@ def _paint_drawthings(prompt, aspect, ref, url):
     return base64.b64decode(imgs[0].split(",")[-1]), ".png"
 
 
-def _paint_nanobanana(prompt, aspect, ref, key):
+def _paint_nanobanana(prompt, aspect, refs, key):
     import base64
     import urllib.request, urllib.error
     if not key:
         raise RuntimeError("no Gemini API key. Paste one from "
                            "aistudio.google.com into the Settings tab.")
     parts = []
-    if ref:
+    # the model takes a whole gallery of references — a face from one, a
+    # palette from another — so every name the card holds goes along
+    for ref in refs:
         rf = _ref_image(ref)
         parts.append({"inlineData": {
             "mimeType": MEDIA_MIME.get(rf.suffix.lower(), "image/png"),
@@ -1744,9 +1772,14 @@ def _cb_vc(src, voice, seed, dest):
 
 def _nothing_to_say(spoken):
     """True when the text strips to nothing a voice could say — blank, only
-    scene marks, only zero-width characters. The engines throw cryptic errors
-    on such input (kokoro: "need at least one array to concatenate")."""
-    return not re.sub(r"[\s\u200b-\u200d\u2060\ufeff]", "", spoken)
+    scene marks, zero-width characters, or bare punctuation. The engines
+    misbehave on such input: kokoro throws ("need at least one array to
+    concatenate"), and chatterbox SPEAKS — its punc_norm substitutes "You
+    need to add some text for me to talk." for empty input, and it babbles
+    over punctuation alone. \\W is Unicode-aware, so any real letter in any
+    script keeps a card speakable; no letters and no digits means a beat
+    of silence instead of a voice explaining the blank."""
+    return not re.sub(r"[\W_]+", "", spoken)
 
 
 def _write_silence(dest, secs=0.3, sr=24000):
@@ -1757,6 +1790,20 @@ def _write_silence(dest, secs=0.3, sr=24000):
     import numpy as np
     import soundfile as sf
     sf.write(str(dest), np.zeros(int(sr * secs), dtype=np.float32), sr)
+
+
+def _render_mute(dest):
+    """The silence path skips the cache on purpose, overwriting whatever wav
+    stands under this hash: one from before the punctuation guard may carry
+    chatterbox's spoken complaint about the empty text, and 0.3 seconds of
+    zeros costs less to rewrite than that ghost costs to hear again."""
+    tmp = dest.with_name(dest.stem + ".tmp.wav")
+    try:
+        _write_silence(tmp)
+        tmp.rename(dest)                   # atomic, as everywhere else here
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def voice_file(name):
@@ -2463,16 +2510,16 @@ def render_kokoro(c, doc, force=False):
     re-rendering a take reproduces it exactly."""
     h = chunk_hash(c, doc)
     dest = AUDIO / f"{h}.wav"
+    spoken = spoken_text(c["text"])       # ❦ and // are for the screen
+    if _nothing_to_say(spoken):
+        _render_mute(dest)                 # never from cache — see the helper
+        return h, False
     if dest.exists() and not force:
         return h, True
     p = params_for(c, doc)
-    spoken = spoken_text(c["text"])       # ❦ and // are for the screen
     tmp = dest.with_name(dest.stem + ".tmp.wav")
     try:
-        if _nothing_to_say(spoken):
-            _write_silence(tmp)
-        else:
-            _kokoro_gen(spoken, p, tmp)
+        _kokoro_gen(spoken, p, tmp)
         tmp.rename(dest)                   # atomic, as everywhere else here
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -2488,16 +2535,16 @@ def render_omnivoice(c, doc, force=False):
     will not reproduce it the way a seeded chatterbox take does."""
     h = chunk_hash(c, doc)
     dest = AUDIO / f"{h}.wav"
+    spoken = spoken_text(c["text"])       # ❦ and // are for the screen
+    if _nothing_to_say(spoken):
+        _render_mute(dest)                 # never from cache — see the helper
+        return h, False
     if dest.exists() and not force:
         return h, True
     p = params_for(c, doc)
-    spoken = spoken_text(c["text"])       # ❦ and // are for the screen
     tmp = dest.with_name(dest.stem + ".tmp.wav")
     try:
-        if _nothing_to_say(spoken):
-            _write_silence(tmp)
-        else:
-            _ov_gen(spoken, p, tmp)
+        _ov_gen(spoken, p, tmp)
         tmp.rename(dest)                   # atomic, as everywhere else here
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -2525,16 +2572,16 @@ def render(c, doc, force=False):
     the render/preview buttons always generate, so a press always means work."""
     h = chunk_hash(c, doc)
     dest = AUDIO / f"{h}.wav"
+    spoken = spoken_text(c["text"])       # ❦ and // are for the screen
+    if _nothing_to_say(spoken):
+        _render_mute(dest)                 # never from cache — see the helper
+        return h, False
     if dest.exists() and not force:
         return h, True
     p = params_for(c, doc)
-    spoken = spoken_text(c["text"])       # ❦ and // are for the screen
     tmp = dest.with_name(dest.stem + ".tmp.wav")
     try:
-        if _nothing_to_say(spoken):
-            _write_silence(tmp)
-        else:
-            _cb_gen(spoken, p, c.get("seed"), tmp)
+        _cb_gen(spoken, p, c.get("seed"), tmp)
         tmp.rename(dest)                   # atomic: no half-written cache entries
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -2563,13 +2610,11 @@ def render_preview(c, doc, force=False, text=None):
               "speed": float(p["speed"] or 0)}]
     h = "p" + hashlib.sha256(json.dumps(k, sort_keys=True).encode()).hexdigest()[:19]
     dest = AUDIO / f"{h}.wav"
+    if _nothing_to_say(spoken):
+        _render_mute(dest)                 # never from cache — see the helper
+        return h, False, spoken
     if dest.exists() and not force:
         return h, True, spoken
-    if _nothing_to_say(spoken):
-        tmp = dest.with_name(dest.stem + ".tmp.wav")
-        _write_silence(tmp)
-        tmp.rename(dest)
-        return h, False, spoken
     if p["engine"] == "kokoro":
         tmp = dest.with_name(dest.stem + ".tmp.wav")
         try:
@@ -3356,6 +3401,93 @@ def share_web(name, unlisted=None):
     return out["url"], built, zp.stat().st_size, bool(unlisted)
 
 
+# a fresh .sagaproj with the renders inside can be most of a gigabyte, so it
+# is streamed off disk rather than read into memory, and the box holds the
+# matching cap on its side (DARKRIDE_SRC_CAP there)
+SOURCE_CAP = 1024 * 1024 * 1024
+
+
+def share_source(name):
+    """Carry the PROJECT ITSELF to darkride and come back with a private
+    download link.
+
+    What the web share is to an audience, this is to another machine: the
+    .sagaproj packed here is the full export — doc, source, voices, clips,
+    media, takes, every rendered wav — so downloading it and dropping it on
+    Saga Studio opens the project whole, nothing re-rendered, nothing
+    missing. The link is ALWAYS private by design: darkride files a source
+    under a long unguessable slug, keeps it off the marquee, asks the
+    crawlers to look away, and serves it only as a download — it never runs
+    there. share.json carries a `source` section (slug, token, url) beside
+    the web share's own, so sharing again REPLACES the file at the same
+    link; a token the box no longer knows is dropped and the share retried
+    once as new, like the web share before it."""
+    import urllib.request
+    import urllib.error
+    plan = plan_export([name], True)
+    if not plan["projects"]:
+        raise RuntimeError("nothing to pack — is the project readable?")
+    title = plan["projects"][0].get("title") or name
+    sf = pdir(name) / "share.json"
+    try:
+        share = json.loads(sf.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        share = {}
+    src = share.get("source") or {}
+    fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".share-src-", suffix=".tgz")
+    os.close(fd)
+    try:
+        write_archive(plan, Path(tmp))
+        size = Path(tmp).stat().st_size
+        if size > SOURCE_CAP:
+            raise RuntimeError("the packed project is over darkride's "
+                               f"{SOURCE_CAP // (1 << 30)} GB source cap — "
+                               "trim the media pool or the takes")
+        fn = f"{name}-{time.strftime('%Y-%m-%d')}.sagaproj"
+        for retry in (False, True):
+            # streamed, not read_bytes(): urllib sends a file object in
+            # blocks as long as Content-Length is given by hand
+            body = open(tmp, "rb")
+            req = urllib.request.Request(
+                DARKRIDE + "/api/upload_source", data=body,
+                headers={"Content-Type": "application/gzip",
+                         "Content-Length": str(size),
+                         "X-Darkride-Filename": fn,
+                         "X-Darkride-Title": title})
+            if src.get("slug") and src.get("token"):
+                req.add_header("X-Darkride-Slug", src["slug"])
+                req.add_header("X-Darkride-Token", src["token"])
+            try:
+                with urllib.request.urlopen(req, timeout=1800) as r:
+                    out = json.loads(r.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as ex:
+                try:
+                    msg = json.loads(ex.read().decode("utf-8")).get("error") or str(ex)
+                except (ValueError, OSError):
+                    msg = str(ex)
+                if ex.code == 403 and src and not retry:
+                    src = {}              # stale token: retry once as new
+                    continue
+                if ex.code == 404:
+                    raise RuntimeError("this darkride has no source door yet "
+                                       "— its server needs the update")
+                raise RuntimeError(msg)
+            except (urllib.error.URLError, OSError) as ex:
+                raise RuntimeError(f"could not reach {DARKRIDE} — "
+                                   f"{getattr(ex, 'reason', None) or ex}")
+            finally:
+                body.close()
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    src.update({"slug": out["slug"], "url": out["url"], "at": int(time.time())})
+    if out.get("token"):
+        src["token"] = out["token"]
+    share["source"] = src
+    sf.write_text(json.dumps(share), encoding="utf-8")
+    return out["url"], size
+
+
 # ── the discuss agent ───────────────────────────────────────────────────
 # This used to be three lines: shell out, wait three minutes, print whatever
 # came back. Now the agent has hands and a memory. It runs headless Claude
@@ -3968,7 +4100,9 @@ class H(BaseHTTPRequestHandler):
             except (OSError, ValueError):
                 s = {}
             return self._send(200, {"url": s.get("url"), "at": s.get("at"),
-                                    "unlisted": bool(s.get("unlisted"))})
+                                    "unlisted": bool(s.get("unlisted")),
+                                    "source_url": (s.get("source") or {}).get("url"),
+                                    "source_at": (s.get("source") or {}).get("at")})
         if u.path == "/api/book_audio":
             f = pdir(q.get("name", [""])[0]) / "out" / ".preview.wav"
             if not f.exists():
@@ -4279,7 +4413,7 @@ class H(BaseHTTPRequestHandler):
                 mname = generate_media(str(d.get("prompt") or ""),
                                        str(d.get("media") or ""),
                                        str(d.get("aspect") or ""),
-                                       str(d.get("ref") or ""))
+                                       d.get("ref") or "")   # name or list
             except (ValueError, RuntimeError) as ex:
                 return self._send(400, {"error": str(ex)})
             return self._send(200, {"ok": True, "media": mname,
@@ -4308,10 +4442,14 @@ class H(BaseHTTPRequestHandler):
             what = {"image": "images", "audio": "audio",
                     "video": "video"}.get(str(d.get("kind") or ""), "files")
             try:
+                # `as alias`, or the chooser hands back an application OBJECT
+                # — and "POSIX path of" throws on those, which read as a
+                # cancel here: the picker "worked" but nothing ever landed
+                # in the settings field.
                 r = subprocess.run(
                     ["osascript", "-e",
                      'POSIX path of (choose application with prompt '
-                     f'"Which application opens your {what}?")'],
+                     f'"Which application opens your {what}?" as alias)'],
                     capture_output=True, text=True, timeout=180)
             except subprocess.TimeoutExpired:
                 return self._send(400, {"error": "the chooser timed out"})
@@ -4431,7 +4569,7 @@ class H(BaseHTTPRequestHandler):
                                   # assemble — they must not block typing
                                   # (share touches only share.json and out/)
                                   "/api/publish_video", "/api/publish_html",
-                                  "/api/share") else _docmut
+                                  "/api/share", "/api/share_source") else _docmut
         if lock:
             lock.acquire()
         try:
@@ -4549,8 +4687,8 @@ class H(BaseHTTPRequestHandler):
                             c["clip"] = re.sub(r"[^a-z0-9_-]", "", d["clip"] or "")
                         if "media" in d:       # visual-card pointer, clip-shaped
                             c["media"] = re.sub(r"[^a-z0-9_-]", "", d["media"] or "")
-                        if "ref" in d:         # generate's reference image
-                            c["ref"] = re.sub(r"[^a-z0-9_-]", "", d["ref"] or "")
+                        if "ref" in d:         # paint reference(s): name or list
+                            c["ref"] = ref_store(ref_list(d["ref"]))
                             if not c["ref"]:
                                 c.pop("ref", None)
                         if "gen" in d:
@@ -4675,13 +4813,38 @@ class H(BaseHTTPRequestHandler):
 
             if u.path == "/api/paste":
                 doc = load(d["name"])
+                at = max(0, min(int(d.get("at", 0)), len(doc["chunks"])))
+                grp = str(d.get("group") or "")
+                cards = d.get("cards")
+                if isinstance(cards, list) and cards:
+                    # A copied group arrives whole and lands as ONE undo
+                    # step. Pasted card by card it took N presses of ⌘Z to
+                    # take back — and the first press dissolved only the
+                    # bar, leaving the members loose in the story.
+                    gname = re.sub(r"[\"'`\\<>&]", "",
+                                   str(d.get("gname") or "")).strip()[:60]
+                    pcs = [paste_card(c) for c in cards if isinstance(c, dict)]
+                    if not pcs:
+                        return self._send(400, {"error": "nothing to paste"})
+                    snapshot(doc, f"paste “{gname}”" if gname else "paste cards")
+                    into = grp and group_exists(doc["chunks"], grp)
+                    for i, pc in enumerate(pcs):
+                        if pc.get("type") != "group":
+                            if into:
+                                pc["group"] = grp     # joins the host group
+                            elif gname:
+                                pc["group"] = gname   # becomes its own again
+                        doc["chunks"].insert(at + i, pc)
+                    for i, c in enumerate(doc["chunks"]):
+                        c["id"] = i
+                    save(doc)   # normalize_groups seats the new bar on load
+                    return self._send(200, {"ok": True, "id": at,
+                                            "count": len(pcs)})
                 card = d.get("card")
                 if not isinstance(card, dict):
                     return self._send(400, {"error": "nothing to paste"})
                 snapshot(doc, "paste card")
-                at = max(0, min(int(d.get("at", 0)), len(doc["chunks"])))
                 pc = paste_card(card)
-                grp = str(d.get("group") or "")
                 if grp and pc.get("type") != "group" \
                         and group_exists(doc["chunks"], grp):
                     pc["group"] = grp
@@ -5284,6 +5447,13 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "url": url,
                                         "built": built, "bytes": nbytes,
                                         "unlisted": unl})
+            if u.path == "/api/share_source":
+                try:
+                    url, nbytes = share_source(d["name"])
+                except RuntimeError as ex:
+                    return self._send(400, {"error": str(ex)})
+                return self._send(200, {"ok": True, "url": url,
+                                        "bytes": nbytes})
             if u.path == "/api/book_preview":
                 frm, upto = d.get("from"), d.get("upto")
                 f, secs, missing, marks = preview_book(

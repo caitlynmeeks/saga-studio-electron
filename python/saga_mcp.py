@@ -368,9 +368,10 @@ CARD_FIELD_PROPS = {
              "title card: [in, out] fades in SECONDS"},
     "secs": {**NUM, "description": "silence length, or a title card's hold"},
     "media": {**STR, "description": "visual-card media name"},
-    "ref": {**STR, "description": "visual-card reference image (a media "
-            "name) — generate_image matches its style, keeping a story's "
-            "pictures one cast"},
+    "ref": {"anyOf": [STR, {"type": "array", "items": STR}],
+            "description": "visual-card reference image(s) — one media name "
+            "or a list of them; generate_image matches their style, keeping "
+            "a story's pictures one cast"},
 }
 
 TOOLS = [
@@ -450,10 +451,12 @@ TOOLS = [
               "aspect": {**STR,
                          "enum": ["16:9", "1:1", "9:16", "4:3", "3:4", "21:9"],
                          "description": "default 16:9, the stage's shape"},
-              "ref": {**STR, "description": "a media name to send as a "
-                      "reference image — the model matches its style or "
-                      "subject; paint one image first, then pass it here "
-                      "for every other card so the set stays one cast"}},
+              "ref": {"anyOf": [STR, {"type": "array", "items": STR}],
+                      "description": "media name(s) to send as reference "
+                      "images — the model matches their style or subject; "
+                      "paint one image first, then pass it here for every "
+                      "other card so the set stays one cast. A list sends "
+                      "several (a character sheet plus a palette, say)"}},
              ["prompt"]), t_generate_image),
     ("remember", "Keep one or two sentences in your long-term memory of "
      "this library. It survives new conversations and rides into every "
