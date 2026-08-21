@@ -3288,7 +3288,7 @@ def publish_html(name):
     return Path(made), len(segs), missing_total
 
 
-def share_web(name):
+def share_web(name, unlisted=None):
     """Carry the web story to darkride.ai and come back with the link.
 
     The export is rebuilt when the document has changed since the zip was
@@ -3298,7 +3298,13 @@ def share_web(name):
     REPLACE the story at the same URL instead of scattering a new link per
     revision. A token the server no longer recognises (the story deleted
     there, the box rebuilt) is dropped and the share retried once as new,
-    because a stale secret should cost the author nothing but a fresh URL."""
+    because a stale secret should cost the author nothing but a fresh URL.
+
+    `unlisted` is the "anyone with the link" mode: the story runs at its
+    URL but stays off darkride's front page. It travels with every upload
+    (the choice lives in share.json between shares), so re-sharing can
+    flip a story either way without moving its link. None means the caller
+    had no opinion; the standing choice rides again."""
     import urllib.request
     import urllib.error
     zp = pdir(name) / "out" / f"{name}-web.zip"
@@ -3316,10 +3322,13 @@ def share_web(name):
     if zp.stat().st_size > 400 * 1024 * 1024:
         raise RuntimeError("the story is over darkride's 400 MB cap — "
                            "trim the media or the audio and export again")
+    if unlisted is None:
+        unlisted = bool(share.get("unlisted"))
     payload = zp.read_bytes()
     for retry in (False, True):
         req = urllib.request.Request(DARKRIDE + "/api/upload", data=payload,
                                      headers={"Content-Type": "application/zip"})
+        req.add_header("X-Darkride-Unlisted", "1" if unlisted else "0")
         if share.get("slug") and share.get("token"):
             req.add_header("X-Darkride-Slug", share["slug"])
             req.add_header("X-Darkride-Token", share["token"])
@@ -3339,11 +3348,12 @@ def share_web(name):
         except (urllib.error.URLError, OSError) as ex:
             raise RuntimeError(f"could not reach {DARKRIDE} — "
                                f"{getattr(ex, 'reason', None) or ex}")
-    share.update({"slug": out["slug"], "url": out["url"], "at": int(time.time())})
+    share.update({"slug": out["slug"], "url": out["url"], "at": int(time.time()),
+                  "unlisted": bool(unlisted)})
     if out.get("token"):
         share["token"] = out["token"]
     sf.write_text(json.dumps(share), encoding="utf-8")
-    return out["url"], built, zp.stat().st_size
+    return out["url"], built, zp.stat().st_size, bool(unlisted)
 
 
 # ── the discuss agent ───────────────────────────────────────────────────
@@ -3957,7 +3967,8 @@ class H(BaseHTTPRequestHandler):
                                .read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 s = {}
-            return self._send(200, {"url": s.get("url"), "at": s.get("at")})
+            return self._send(200, {"url": s.get("url"), "at": s.get("at"),
+                                    "unlisted": bool(s.get("unlisted"))})
         if u.path == "/api/book_audio":
             f = pdir(q.get("name", [""])[0]) / "out" / ".preview.wav"
             if not f.exists():
@@ -5186,12 +5197,15 @@ class H(BaseHTTPRequestHandler):
                                         "bytes": f.stat().st_size,
                                         "segments": nsegs, "missing": missing})
             if u.path == "/api/share":
+                unl = d.get("unlisted")
                 try:
-                    url, built, nbytes = share_web(d["name"])
+                    url, built, nbytes, unl = share_web(
+                        d["name"], None if unl is None else bool(unl))
                 except RuntimeError as ex:
                     return self._send(400, {"error": str(ex)})
                 return self._send(200, {"ok": True, "url": url,
-                                        "built": built, "bytes": nbytes})
+                                        "built": built, "bytes": nbytes,
+                                        "unlisted": unl})
             if u.path == "/api/book_preview":
                 frm, upto = d.get("from"), d.get("upto")
                 f, secs, missing, marks = preview_book(
