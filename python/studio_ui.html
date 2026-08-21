@@ -9,7 +9,7 @@
 --mono:ui-monospace,SFMono-Regular,Menlo,monospace}
 *{box-sizing:border-box;margin:0}
 body{background:var(--bg);color:var(--fg);font:14px/1.55 var(--mono);height:100vh;
-display:grid;grid-template-columns:270px 1fr 340px;grid-template-rows:44px 1fr 52px}
+display:grid;grid-template-columns:var(--sidew,270px) 1fr 340px;grid-template-rows:44px 1fr 52px}
 header{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:0 14px;
 background:var(--chrome);border-bottom:1px solid var(--line)}
 header b{color:var(--bright);letter-spacing:.08em}
@@ -25,11 +25,16 @@ aside,#right{background:var(--panel)}
    with the series, the clips with the sound design — so they are tabs rather
    than a split. Whichever one you are working out of gets the whole column. */
 aside{border-right:1px solid var(--line);padding:0;overflow:hidden;min-height:0;
-display:grid;grid-template-rows:auto 1fr}
-#stabs{display:flex;gap:2px;align-items:center;padding:7px 8px 0;
+display:grid;grid-template-rows:auto 1fr;position:relative}
+/* the sidebar's width is the author's: drag the right edge, double-click it
+   to go home. The grip lives inside the border so overflow:hidden keeps it */
+#sidegrip{position:absolute;top:0;right:0;width:6px;height:100%;
+cursor:col-resize;z-index:5}
+#sidegrip:hover,#sidegrip.drag{background:linear-gradient(90deg,transparent,var(--line))}
+#stabs{display:flex;gap:2px;align-items:center;flex-wrap:wrap;padding:7px 6px 0;
 border-bottom:1px solid var(--line)}
 #stabs button{border:0;border-bottom:2px solid transparent;border-radius:0;
-background:none;color:var(--dim);padding:3px 9px 5px;font-size:11.5px}
+background:none;color:var(--dim);padding:3px 8px 5px;font-size:11.5px}
 #stabs button:hover{color:var(--fg)}
 #stabs button.on{color:var(--bright);border-bottom-color:var(--amber)}
 aside .pane{overflow-y:auto;padding:12px;min-height:0;display:none}
@@ -333,7 +338,7 @@ color:var(--fg);font-size:11px}
 /* The discuss panel is off by default and the third column simply stops
    existing — collapsing it rather than hiding it is what gives the width back
    to the cards, which is the column you actually read. */
-body[data-panel=off]{grid-template-columns:270px 1fr}
+body[data-panel=off]{grid-template-columns:var(--sidew,270px) 1fr}
 body[data-panel=off] #right{display:none}
 /* "send this as context" only means something while discuss is the visible tab */
 body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
@@ -1492,6 +1497,32 @@ function setSide(t){
   try{ localStorage.setItem('saga.side',t); }catch(e){}
 }
 try{ setSide(localStorage.getItem('saga.side')||'stories'); }catch(e){ setSide('stories'); }
+
+// ── the sidebar's width is yours ──────────────────────────
+// A grip on the sidebar's right edge: drag to taste, double-click to go
+// home to 270. Clamped so the tabs always fit and the cards keep room.
+(function(){
+  const aside=document.querySelector('aside'); if(!aside)return;
+  const g=document.createElement('div'); g.id='sidegrip';
+  g.title='drag to resize · double-click to reset';
+  aside.appendChild(g);
+  const set=w=>document.documentElement.style.setProperty('--sidew',
+    Math.max(230,Math.min(560,w))+'px');
+  try{ const w=parseInt(localStorage.getItem('saga.sidew'),10); if(w)set(w); }catch(e){}
+  const save=()=>{ try{ localStorage.setItem('saga.sidew',
+    Math.round(aside.getBoundingClientRect().width)); }catch(e){} };
+  g.addEventListener('pointerdown',e=>{
+    e.preventDefault();
+    const x0=e.clientX, w0=aside.getBoundingClientRect().width;
+    g.setPointerCapture(e.pointerId);
+    g.classList.add('drag');
+    const move=ev=>set(w0+ev.clientX-x0);
+    g.addEventListener('pointermove',move);
+    g.addEventListener('pointerup',()=>{ g.classList.remove('drag');
+      g.removeEventListener('pointermove',move); save(); },{once:true});
+  });
+  g.addEventListener('dblclick',()=>{ set(270); save(); });
+})();
 
 // ── editor settings ───────────────────────────────────────
 // One small file on this machine, never in the library: which model Discuss

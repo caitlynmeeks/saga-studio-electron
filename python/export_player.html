@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Saga</title>
 <!--
 The exported player. Written by Saga Studio's publish tab: the studio fills
@@ -24,8 +24,11 @@ autoplay policy everywhere, including iOS.
    may ever glint white between two pictures */
 html{background:#000}
 body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--mono);height:100vh;
-height:100dvh;display:grid;grid-template-rows:1fr auto}
+height:100dvh;display:grid;grid-template-rows:1fr}
 #room{position:relative;overflow:hidden;min-height:0;background:#000}
+/* while the story plays and the pointer rests, the knobs go dark and the
+   cursor with them — a theatre, not a dashboard */
+body:not(.barlit) #room{cursor:none}
 /* a picture arrives invisible and DISSOLVES in over the one still hanging —
    the old only comes down once the new is fully on, so the wall never dips
    to black (or worse) between two shots */
@@ -40,8 +43,11 @@ padding:0 8vw;font-size:clamp(14px,2.2vw,21px);line-height:1.6;
 color:var(--bright);text-shadow:0 1px 3px #000,0 0 14px #000;
 opacity:0;transition:opacity .35s,bottom .3s ease}
 #caption.on{opacity:1}
+/* the bar floats over the room now, so a lit bar nudges the words up clear
+   of it; the words drop back the moment the knobs go dark */
+body.barlit #caption{bottom:calc(66px + env(safe-area-inset-bottom))}
 /* while the chooser is out, the caption steps up to sit just above it */
-#room.choosing #caption{bottom:118px}
+#room.choosing #caption{bottom:170px}
 /* the sound's own line — "(Foghorn blowing)" — a supertitle at the top so it
    can sit over a standing dialog block without touching it */
 #fxcap{position:absolute;left:0;right:0;top:22px;text-align:center;
@@ -67,14 +73,23 @@ text-align:center;padding:0 6vw}
    and the picture popping larger and smaller is exactly the wrong drama. */
 #chooser{position:absolute;left:0;right:0;bottom:0;display:none;gap:10px;
 justify-content:center;flex-wrap:wrap;align-items:flex-end;
-padding:56px 16px 22px;
+padding:56px 16px calc(62px + env(safe-area-inset-bottom));
 background:linear-gradient(180deg,transparent,rgba(0,0,0,.72) 45%,rgba(0,0,0,.9))}
 #chooser.on{display:flex}
 button{background:#131a17;border:1px solid var(--line);color:var(--fg);
 border-radius:7px;padding:10px 18px;font:14px var(--mono);cursor:pointer;max-width:44ch}
 button:hover{border-color:var(--green);color:var(--green)}
-#bar{display:flex;gap:12px;align-items:center;padding:8px 14px;
-background:var(--chrome);border-top:1px solid var(--line);font-size:12px}
+/* The bar floats over the room instead of owning a layout row: the picture
+   keeps the whole viewport, and the knobs sleep while the story plays —
+   opacity, not display, so the room never resizes and the fade is calm.
+   Any pointer, tap or key wakes them; stops (gate, pause, choice, end)
+   keep them lit. */
+#bar{position:fixed;left:0;right:0;bottom:0;z-index:2;
+display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+padding:8px 14px calc(8px + env(safe-area-inset-bottom));
+background:rgba(11,13,12,.92);border-top:1px solid var(--line);font-size:12px;
+transition:opacity .35s,transform .35s}
+body:not(.barlit) #bar{opacity:0;transform:translateY(10px);pointer-events:none}
 #bar b{color:var(--bright);letter-spacing:.08em}
 #bar button{padding:3px 11px;font-size:12px;border-radius:5px}
 #bar button.lit{border-color:var(--green);color:var(--green)}
@@ -100,7 +115,7 @@ background:var(--chrome);border-top:1px solid var(--line);font-size:12px}
   <span class="vol" title="volume">🔊<input type="range" id="vol" min="0" max="100" value="100"
     oninput="setVol(this.value)"></span>
   <button id="ccb" onclick="toggleCC()" title="subtitles on / off">CC</button>
-  <button onclick="fullScreen()" title="full screen">⛶</button>
+  <button id="fsb" onclick="fullScreen()" title="full screen">⛶</button>
   <button id="shb" onclick="share()" title="share this story">↗ share</button>
 </div>
 <script>
@@ -178,10 +193,20 @@ const pref=(k,v)=>{ try{ localStorage.setItem('saga.player.'+k,v) }catch(e){} };
 function setVol(v){ AUDIO.volume=v/100; pref('vol',v); }
 function toggleCC(){ CC=!CC; $('ccb').classList.toggle('lit',CC);
   if(!CC){ caption(''); fxcap(''); } pref('cc',CC?'1':'0'); }
+// Feature-detected with the webkit spelling too: iPhone Safari grew the
+// real thing in 16.4, sometimes under the prefix. A browser with neither
+// (Chrome on iOS) gets no dead knob — the button unmounts below, and the
+// sleeping bar plus viewport-fit=cover already hand back most of the room.
 function fullScreen(){
-  if(document.fullscreenElement)document.exitFullscreen();
-  else document.documentElement.requestFullscreen().catch(()=>{});
+  const d=document, el=d.documentElement;
+  if(d.fullscreenElement||d.webkitFullscreenElement)
+    return void (d.exitFullscreen||d.webkitExitFullscreen).call(d);
+  const ask=el.requestFullscreen||el.webkitRequestFullscreen;
+  if(!ask)return;
+  try{ const p=ask.call(el); if(p&&p.catch)p.catch(()=>{}); }catch(e){}
 }
+if(!(document.documentElement.requestFullscreen
+     ||document.documentElement.webkitRequestFullscreen))$('fsb').remove();
 async function share(){
   const data={title:GRAPH.title,text:'“'+GRAPH.title+'” — an interactive story',
               url:location.href};
@@ -197,6 +222,25 @@ try{
   const c=localStorage.getItem('saga.player.cc'); if(c!=null)CC=c==='1';
   $('ccb').classList.toggle('lit',CC);
 }catch(e){}
+
+// ── the bar sleeps while the story plays ──────────────────
+// Lit on any pointer, tap or key; dark again a few seconds into playback.
+// A stopped player keeps its knobs: the gate, a pause, a choice and the
+// end are exactly the moments a viewer reaches for them.
+let BART=null;
+function barLit(){
+  document.body.classList.add('barlit');
+  clearTimeout(BART); BART=setTimeout(barDim,2800);
+}
+function barDim(){
+  if(AUDIO.paused||AUDIO.ended||!AUDIO.src
+     ||$('gate').style.display!=='none'
+     ||$('chooser').classList.contains('on'))return;
+  document.body.classList.remove('barlit');
+}
+['pointermove','pointerdown','keydown'].forEach(ev=>
+  document.addEventListener(ev,barLit,{passive:true}));
+barLit();
 
 let CAPST={txt:'',chain:false}, CAPQ=[], CAPI=-1;
 // this card's typewriter word, else the story's — the ⌨ button vetoes both
@@ -301,6 +345,7 @@ function ask(tok,opts){
     if(tok!==TOKEN)return res(null);
     CAPST={txt:'',chain:false};           // a choice breaks the chain
     $('playb').textContent='▶ play';
+    barLit();                             // a stop: the knobs come back
     const ch=$('chooser');
     ch.innerHTML=opts.map((o,i)=>`<button data-i="${i}">${esc(o.label)||'…'}</button>`).join('');
     ch.classList.add('on'); $('room').classList.add('choosing');
@@ -313,12 +358,13 @@ function hideChooser(){ const ch=$('chooser');
   ch.classList.remove('on'); ch.onclick=null; $('room').classList.remove('choosing'); ASKOFF=null; }
 function ended(){
   $('playb').textContent='▶ play';
+  barLit();                               // the ride is over; knobs return
   caption(''); fxcap(''); titleClear();
   const ch=$('chooser');
   ch.innerHTML='<button onclick="story()">⟲ once more</button>';
   ch.classList.add('on'); $('room').classList.add('choosing');
 }
-function pause(){ AUDIO.pause(); $('playb').textContent='▶ resume'; }
+function pause(){ AUDIO.pause(); $('playb').textContent='▶ resume'; barLit(); }
 function toggle(){
   if(!AUDIO.paused)return pause();
   if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended&&RUNOFF){
