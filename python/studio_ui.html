@@ -491,6 +491,8 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
   <div id="media"></div>
   <div style="display:flex;gap:5px;margin-top:8px">
     <button onclick="importMedia()">Import an Image or Film…</button>
+    <button onclick="pressPool()" id="pressb"
+      title="recompress every png/jpg still in the pool to WebP — same pictures, a fraction of the weight; exports, source archives and uploads all slim down. New imports and paintings are pressed automatically.">Slim to WebP</button>
   </div>
   <input type="file" id="mediafile" hidden
     accept="image/*,video/*,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov">
@@ -543,6 +545,15 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
       onchange="saveSettings()"></label>
   <label class="stlab" id="st_img_url_row">Server
     <input id="st_img_url" placeholder="http://127.0.0.1:7860"
+      onchange="saveSettings()"></label>
+
+  <h2 style="margin-top:18px">darkride.ai</h2>
+  <div class="mut" style="font-size:11px;margin-bottom:2px">Optional. Sign in
+    at darkride.ai, generate a key on My Studio, paste it here — and every
+    share and source upload lands in your account, with your name on it.
+    Blank shares anonymously, as always.</div>
+  <label class="stlab">Account key
+    <input id="st_dk_key" type="password" placeholder="dk_…"
       onchange="saveSettings()"></label>
 
   <h2 style="margin-top:18px">Open in…</h2>
@@ -1618,6 +1629,7 @@ async function loadSettings(){
   $('st_img_url').value=s.image.url;
   $('st_app_image').value=s.apps.image; $('st_app_audio').value=s.apps.audio;
   $('st_app_video').value=s.apps.video;
+  $('st_dk_key').value=(s.darkride||{}).key||'';
   settingsVis();
 }
 async function saveSettings(){
@@ -1626,7 +1638,8 @@ async function saveSettings(){
            image:{provider:$('st_img_p').value,key:$('st_img_key').value,
                   url:$('st_img_url').value},
            apps:{image:$('st_app_image').value,audio:$('st_app_audio').value,
-                 video:$('st_app_video').value}};
+                 video:$('st_app_video').value},
+           darkride:{key:$('st_dk_key').value}};
   const appsWere=JSON.stringify((SETTINGS||{}).apps||null);
   const r=await api('/api/settings',d);
   if(r.error)return void($('st_msg').innerHTML=
@@ -1978,6 +1991,19 @@ async function dropMediaAt(at,grp){
     ` — the stage shows it from here until the next visual`;
 }
 let MEDIATARGET=null;
+// one pass over the pool: every png/jpg still becomes a lighter WebP with
+// the same name, so nothing pointing at it notices anything but the weight
+async function pressPool(){
+  const b=$('pressb'); if(b){ b.disabled=true; b.textContent='pressing…'; }
+  let r; try{ r=await api('/api/media/compress',{}); }
+  catch(ex){ r={error:String(ex)}; }
+  if(b){ b.disabled=false; b.textContent='Slim to WebP'; }
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  $('status').textContent=r.pressed
+    ? `pressed ${r.pressed} still${r.pressed===1?'':'s'} to WebP — saved ${size(r.saved)}`
+    : 'nothing to press — the stills are already WebP (or film)';
+  refresh();
+}
 function pickMedia(id){ MEDIATARGET=id; $('mediafile').click(); }
 function importMedia(){ MEDIATARGET=null; $('mediafile').click(); }
 $('mediafile').onchange=async e=>{
