@@ -23,6 +23,44 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 let win = null
 let starting = false
 
+// ── the text-field context menu ─────────────────────────────────────────
+// Right-click in a text field gets the menu a browser would have given it;
+// Electron ships none of its own. Spelling first, the way native fields do
+// it — this is a manuscript editor, and a squiggle with no suggestions under
+// it was the sorest missing piece. Attached per webContents so the stage
+// pop-outs get it too. The app's own right-click menus (clips, media, cards)
+// live where nothing is editable and nothing is selected, so the guard at
+// the bottom keeps this one out of their way. No Undo item on purpose: ⌘Z
+// is story undo, and the card fields dispatch their own (see lib/menu.js).
+function attachTextMenu (contents) {
+  contents.on('context-menu', (_e, p) => {
+    const items = []
+    for (const word of (p.dictionarySuggestions || []).slice(0, 4)) {
+      items.push({ label: word, click: () => contents.replaceMisspelling(word) })
+    }
+    if (p.misspelledWord) {
+      items.push({
+        label: 'Add to Dictionary',
+        click: () => contents.session.addWordToSpellCheckerDictionary(p.misspelledWord)
+      })
+      items.push({ type: 'separator' })
+    }
+    if (p.isEditable) {
+      items.push(
+        { role: 'cut', enabled: p.editFlags.canCut },
+        { role: 'copy', enabled: p.editFlags.canCopy },
+        { role: 'paste', enabled: p.editFlags.canPaste },
+        { type: 'separator' },
+        { role: 'selectAll' }
+      )
+    } else if ((p.selectionText || '').trim()) {
+      items.push({ role: 'copy' })
+    }
+    if (items.length) Menu.buildFromTemplate(items).popup()
+  })
+}
+app.on('web-contents-created', (_e, contents) => attachTextMenu(contents))
+
 // ── window ──────────────────────────────────────────────────────────────
 function createWindow () {
   const saved = config.get('bounds', {})
