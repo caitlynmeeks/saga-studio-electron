@@ -4297,6 +4297,84 @@ class H(BaseHTTPRequestHandler):
             note_append("## " + time.strftime("%Y-%m-%d %H:%M") + " · note\n"
                         + note[:2000])
             return self._send(200, {"ok": True})
+        # The native application chooser, for the Settings tab's 📁 buttons.
+        # Server-side via osascript rather than an electron dialog: the
+        # studio page is ordinary web content on purpose (see preload.js),
+        # and this way the classic browser launch gets the picker too.
+        if u.path == "/api/choose_app":
+            if sys.platform != "darwin":
+                return self._send(400, {"error": "the picker is macOS only; "
+                                        "type the command name instead"})
+            what = {"image": "images", "audio": "audio",
+                    "video": "video"}.get(str(d.get("kind") or ""), "files")
+            try:
+                r = subprocess.run(
+                    ["osascript", "-e",
+                     'POSIX path of (choose application with prompt '
+                     f'"Which application opens your {what}?")'],
+                    capture_output=True, text=True, timeout=180)
+            except subprocess.TimeoutExpired:
+                return self._send(400, {"error": "the chooser timed out"})
+            if r.returncode:                     # cancel arrives as an error
+                return self._send(200, {"canceled": True})
+            app = r.stdout.strip().rstrip("/")
+            if not app:
+                return self._send(200, {"canceled": True})
+            return self._send(200, {"ok": True, "app": app})
+        # The outside-editor watch: the page polls while a file is out for
+        # surgery, and the answer says whether it changed on disk. A clip
+        # that came back in a shape the wave module cannot read (float wav,
+        # 24-bit — editors love those) is quietly re-encoded to the plain
+        # PCM this program writes, in place, same name: the re-import.
+        if u.path == "/api/edit_check":
+            kind = str(d.get("kind") or "")
+            name = str(d.get("file") or "")
+            if not name or "/" in name or "\\" in name or name.startswith("."):
+                return self._send(400, {"error": "a plain file name"})
+            try:
+                path = (CLIPS / f"{name}.wav") if kind == "clip" \
+                    else media_file(name)
+                st_ = path.stat()
+            except (FileNotFoundError, OSError) as ex:
+                return self._send(404, {"error": str(ex)})
+            cur = f"{st_.st_mtime_ns}:{st_.st_size}"
+            last = str(d.get("stamp") or "")
+            if not last or last == cur:
+                return self._send(200, {"stamp": cur, "changed": False})
+            if time.time() - st_.st_mtime < 1.2:
+                # mid-save: answer "no change yet" and let the next poll act
+                return self._send(200, {"stamp": last, "changed": False,
+                                        "settling": True})
+            resynced = False
+            if kind == "clip":
+                try:
+                    with wave.open(str(path)):
+                        pass
+                except Exception:
+                    if not shutil.which("ffmpeg"):
+                        return self._send(400, {"error": "the clip came back "
+                                                "in a format this program "
+                                                "cannot read, and ffmpeg is "
+                                                "not here to convert it"})
+                    fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".resync-",
+                                               suffix=".wav")
+                    os.close(fd)
+                    r = subprocess.run(
+                        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                         "-y", "-i", str(path), tmp],
+                        capture_output=True, text=True)
+                    if r.returncode:
+                        Path(tmp).unlink(missing_ok=True)
+                        return self._send(400, {"error": "ffmpeg could not "
+                                                "read the edited clip: "
+                                                + (r.stderr or "").strip()[-200:]})
+                    os.replace(tmp, path)
+                    os.chmod(path, 0o644)
+                    resynced = True
+                    st_ = path.stat()
+                    cur = f"{st_.st_mtime_ns}:{st_.st_size}"
+            return self._send(200, {"stamp": cur, "changed": True,
+                                    "resynced": resynced})
         # Hand a clip or a picture to the author's chosen outside editor.
         # The file is found by its pool name, never by a path from the
         # request, so this cannot be pointed outside the library.

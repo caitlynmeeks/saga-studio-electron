@@ -46,6 +46,8 @@ body[data-side=settings] #sideSettings{display:block}
 /* the settings tab's little forms: label above field, quiet and narrow */
 .stlab{display:block;font-size:11px;color:var(--dim);margin-top:7px}
 .stlab input,.stlab select{width:100%;margin-top:2px;display:block}
+.stlab .approw{display:flex;gap:4px;margin-top:2px}
+.stlab .approw input{margin-top:0;flex:1;min-width:0}
 /* The right column is an inspector: what it shows belongs to whatever is
    selected, and it is wider than the sidebar, which the profile editor had
    outgrown. Discuss shares it as a second tab rather than a second column —
@@ -533,15 +535,24 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
       onchange="saveSettings()"></label>
 
   <h2 style="margin-top:18px">Open in…</h2>
-  <div class="mut" style="font-size:11px;margin-bottom:2px">Right-clicking a
-    clip or a picture offers these. Use the app's name as it appears in
-    /Applications.</div>
-  <label class="stlab">Image editor<input id="st_app_image"
-    placeholder="e.g. Pixelmator Pro" onchange="saveSettings()"></label>
-  <label class="stlab">Audio editor<input id="st_app_audio"
-    placeholder="e.g. Audacity" onchange="saveSettings()"></label>
-  <label class="stlab">Video editor<input id="st_app_video"
-    placeholder="e.g. DaVinci Resolve" onchange="saveSettings()"></label>
+  <div class="mut" style="font-size:11px;margin-bottom:2px">Cards and the
+    media lists offer these as ✎ edit. Type an app's name, or 📁 to pick
+    it. Saving over the file there updates it here.</div>
+  <label class="stlab">Image editor<span class="approw">
+    <input id="st_app_image" placeholder="e.g. Pixelmator Pro"
+      onchange="saveSettings()">
+    <button class="tiny appbrowse" onclick="chooseApp('image')"
+      title="pick the application">📁</button></span></label>
+  <label class="stlab">Audio editor<span class="approw">
+    <input id="st_app_audio" placeholder="e.g. Audacity"
+      onchange="saveSettings()">
+    <button class="tiny appbrowse" onclick="chooseApp('audio')"
+      title="pick the application">📁</button></span></label>
+  <label class="stlab">Video editor<span class="approw">
+    <input id="st_app_video" placeholder="e.g. DaVinci Resolve"
+      onchange="saveSettings()">
+    <button class="tiny appbrowse" onclick="chooseApp('video')"
+      title="pick the application">📁</button></span></label>
   <div id="st_msg" class="mut" style="font-size:11px;margin-top:8px"></div>
  </div>
 </aside>
@@ -1523,6 +1534,9 @@ try{ setSide(localStorage.getItem('saga.side')||'stories'); }catch(e){ setSide('
   });
   g.addEventListener('dblclick',()=>{ set(270); save(); });
 })();
+// the 📁 pickers ride macOS's own chooser; elsewhere the name field stands alone
+if(!/mac/i.test(navigator.platform||''))
+  document.querySelectorAll('.appbrowse').forEach(b=>b.remove());
 
 // ── editor settings ───────────────────────────────────────
 // One small file on this machine, never in the library: which model Discuss
@@ -1584,7 +1598,44 @@ async function saveSettings(){
 async function openExternal(kind,name){
   const r=await api('/api/open_in',{kind,file:name});
   if(r.error)$('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`;
-  else $('status').textContent=`sent to ${r.app}`;
+  else $('status').textContent=`sent to ${appLabel(r.app)}`;
+  return !r.error;
+}
+// an app setting may be a plain name or a full .app path; show the short name
+const appLabel=p=>(p||'').split('/').filter(Boolean).pop().replace(/\.app$/,'');
+// which app opens this kind of thing, per the settings tab
+const appFor=kind=>SETTINGS&&SETTINGS.apps&&SETTINGS.apps[
+  {clip:'audio',image:'image',video:'video'}[kind]||kind];
+async function chooseApp(kind){
+  const r=await api('/api/choose_app',{kind});
+  if(r&&r.app){ $('st_app_'+kind).value=r.app; saveSettings(); }
+  else if(r&&r.error)$('st_msg').innerHTML=`<span class="warn">${esc(r.error)}</span>`;
+}
+// ── files out for surgery ─────────────────────────────────
+// ✎ edit hands a clip or a picture to the outside editor and then WATCHES
+// it: the moment the file is saved over there, the studio re-imports what
+// needs re-importing (a clip in a shape the mixer can't read) and repaints,
+// so the card is already showing the new version when you come back.
+const WATCH={};
+async function editExternal(kind,name){
+  if(!await openExternal(kind,name))return;
+  const key=kind+':'+name;
+  if(WATCH[key])return;                     // already being watched
+  const w=WATCH[key]={stamp:null};
+  const poll=async()=>{
+    let r; try{ r=await api('/api/edit_check',{kind,file:name,stamp:w.stamp}); }
+    catch(_){ r=null; }
+    if(r&&!r.error){
+      if(w.stamp&&r.changed){
+        $('status').innerHTML=`<span class="ok">“${esc(name)}” saved outside</span>`+
+          (r.resynced?' — re-imported':'')+' — the cards show the new version';
+        await refresh(); if(DOC)await open_(DOC.name,true);
+      }
+      w.stamp=r.stamp;
+    }
+    w.t=setTimeout(poll,2500);
+  };
+  poll();
 }
 
 // ── plugins ───────────────────────────────────────────────
@@ -1784,10 +1835,10 @@ async function dropClipAt(at,grp){
 function clipMenu(e,i){
   const c=CLIPVIEW[i]; if(!c)return;
   const used=(STATE.clip_counts||{})[c.name]||0;
-  const eapp=SETTINGS&&SETTINGS.apps&&SETTINGS.apps.audio;
+  const eapp=appFor('clip');
   openCtx(e,[
     {label:'Play', run:()=>playClipAt(i)},
-    ...(eapp?[{label:'Open in '+eapp, run:()=>openExternal('clip',c.name)}]:[]),
+    ...(eapp?[{label:'Edit in '+appLabel(eapp), run:()=>editExternal('clip',c.name)}]:[]),
     {label:'Rename…', run:()=>{ openCtx(e,[]);
        ctxAsk(c.name,'clip name','rename',t=>renameClip(c.name,t)); }},
     '-',
@@ -1818,7 +1869,7 @@ function renderMedia(){
   $('media').innerHTML = MEDIAVIEW.length ? MEDIAVIEW.map((m,i)=>{
     const used=n[m.name]||0, when=fmtWhen(m.added);
     const thumb=m.kind==='image'
-      ?`<img src="/api/media?f=${encodeURIComponent(m.name)}" loading="lazy"
+      ?`<img src="/api/media?f=${encodeURIComponent(m.name)}&v=${m.added}" loading="lazy"
          style="height:30px;width:44px;object-fit:cover;border-radius:4px;flex:none">`
       :`<span style="width:44px;text-align:center;flex:none" title="film">🎞</span>`;
     return `<div class="proj" draggable="true" oncontextmenu="mediaMenu(event,${i})"
@@ -1837,11 +1888,10 @@ function renderMedia(){
 function mediaMenu(e,i){
   const m=MEDIAVIEW[i]; if(!m)return;
   const used=(STATE.media_counts||{})[m.name]||0;
-  const eapp=SETTINGS&&SETTINGS.apps&&
-    (m.kind==='video'?SETTINGS.apps.video:SETTINGS.apps.image);
+  const mk=m.kind==='video'?'video':'image', eapp=appFor(mk);
   openCtx(e,[
-    ...(eapp?[{label:'Open in '+eapp,
-      run:()=>openExternal(m.kind==='video'?'video':'image',m.name)}]:[]),
+    ...(eapp?[{label:'Edit in '+appLabel(eapp),
+      run:()=>editExternal(mk,m.name)}]:[]),
     {label:'Rename…', run:()=>{ openCtx(e,[]);
        ctxAsk(m.name,'media name','rename',t=>renameMedia(m.name,t)); }},
     '-',
@@ -2650,6 +2700,8 @@ function audioCard(c){
       </select>
       <button onclick="pickClip(${c.id})">Import a File…</button>
       <button id="pc${c.id}" onclick="playClip(${c.id})" ${c.ready&&!c.mute?'':'disabled'}>▶ play</button>
+      ${c.clip&&appFor('clip')?`<button onclick="editExternal('clip','${esc(c.clip)}')"
+        title="open this clip in ${esc(appLabel(appFor('clip')))} — saving there updates it here">✎ edit</button>`:''}
     </div>
     <div class="arow">
       <span class="lbl">then</span>
@@ -2773,13 +2825,17 @@ function silenceCard(c){return `
 function visualCard(c){
   const media=STATE.media||[], cur=media.find(m=>m.name===c.media);
   const kind=c.mediakind||(cur&&cur.kind)||'';
+  // the file's mtime rides the url, so a picture edited outside and saved
+  // over repaints here instead of serving from the browser's cache
+  const src=`/api/media?f=${encodeURIComponent(c.media)}&v=${cur?cur.added:0}`;
   const show=!c.media?'<div class="mut" style="padding:6px 0">no visual chosen</div>'
     :!c.ready?'<div class="warn" style="padding:6px 0">that file is missing from media/</div>'
     :kind==='video'
-      ?`<video src="/api/media?f=${encodeURIComponent(c.media)}" muted playsinline
+      ?`<video src="${src}" muted playsinline
          controls preload="metadata" style="max-height:150px;max-width:100%;border-radius:6px"></video>`
-      :`<img src="/api/media?f=${encodeURIComponent(c.media)}" loading="lazy"
+      :`<img src="${src}" loading="lazy"
          style="max-height:150px;max-width:100%;border-radius:6px;object-fit:contain">`;
+  const eapp=c.media&&appFor(kind==='video'?'video':'image');
   return `
    <div class="chunk ${SEL.has(c.id)?'sel':''} ${CUR===c.id?'cur':''}" id="c${c.id}"
      onmousedown="setCur(${c.id})" style="${c.mute?'opacity:.45':''}">
@@ -2811,6 +2867,8 @@ function visualCard(c){
       <button id="pt${c.id}" class="tiny ${((c.note||'').trim()||(c.gen||[]).length)?'dirty':''}"
         onclick="togglePaint(${c.id})"
         title="paint this card with nanobanana — prompt, reference image, variants">✨ Paint</button>
+      ${eapp?`<button class="tiny" onclick="editExternal('${kind==='video'?'video':'image'}','${esc(c.media)}')"
+        title="open this ${kind==='video'?'film':'picture'} in ${esc(appLabel(eapp))} — saving there updates it here">✎ Edit</button>`:''}
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
