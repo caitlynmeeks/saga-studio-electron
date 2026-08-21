@@ -10,7 +10,8 @@
   "scripts": {
     "start": "electron .",
     "runtime": "bash scripts/prepare-runtime.sh",
-    "dist": "electron-builder"
+    "stamp": "bash scripts/stamp-version.sh",
+    "dist": "npm run --silent stamp && electron-builder"
   },
   "devDependencies": {
     "electron": "^43.4.0",
@@ -35,7 +36,8 @@
       "python/saga_mcp.py",
       "python/openai_agent.py",
       "python/discuss_rules.md",
-      "python/requirements.txt"
+      "python/requirements.txt",
+      "python/version.json"
     ],
     "extraResources": [
       {

@@ -56,6 +56,25 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 HERE = Path(__file__).resolve().parent
+# ── keeping current ─────────────────────────────────────────────────────
+# The studio can fetch its own newer self from GitHub, so a new version
+# never costs the author a terminal. Two shapes of install, two ways:
+# a git checkout fast-forwards itself; a packaged app downloads the payload
+# (the files below and nothing else) into a folder that outranks the one
+# inside the .app — so the bundle is never written to and no code signature
+# is ever broken. Checking is automatic and quiet; INSTALLING is always a
+# button, because replacing the running program is the author's call.
+APP_REPO = os.environ.get("SAGA_REPO", "caitlynmeeks/saga-studio")
+APP_BRANCH = os.environ.get("SAGA_BRANCH", "main")
+# where a downloaded payload lands. The electron shell passes this and
+# prefers what it finds there; a bare install updates itself in place.
+APP_DIR = Path(os.environ.get("SAGA_APP_DIR") or HERE).expanduser()
+# Exactly what an update replaces: the program, never the data. A name not
+# on this list cannot be written by an update, whatever a tarball holds.
+PAYLOAD = ("studio.py", "studio_ui.html", "stage_ui.html", "player.js",
+           "export_player.html", "omnivoice_server.py", "chatterbox_server.py",
+           "saga_mcp.py", "openai_agent.py", "discuss_rules.md",
+           "requirements.txt")
 # Data lives OUTSIDE the repo by default: voice clips and manuscripts are
 # private, and a tool should never assume it may publish its user's material.
 # Point these anywhere with SAGA_DATA / SAGA_VOICES.
@@ -910,6 +929,163 @@ def generate_media(prompt, stem="", aspect="", ref=""):
     finally:
         Path(tmp).unlink(missing_ok=True)
     return name
+
+
+# ── keeping current ─────────────────────────────────────────────────────
+def _git_dir():
+    """The checkout this studio runs from, or None when it is a packaged
+    copy. A dev tree is updated by fast-forward, never by overwriting: the
+    author may have work in it, and clobbering that would be unforgivable."""
+    for d in (HERE, HERE.parent):
+        if (d / ".git").exists() and shutil.which("git"):
+            return HERE
+    return None
+
+
+def _git(*args, cwd=None):
+    return subprocess.run(["git", *args], cwd=str(cwd or HERE),
+                          capture_output=True, text=True, timeout=120)
+
+
+def version_now():
+    """What is running: the commit it came from, however it got here. A
+    checkout knows from git; a packaged payload knows from the version.json
+    an update wrote beside it. Neither knowing is fine — then anything
+    upstream counts as newer, which is the safe way to be wrong."""
+    if _git_dir():
+        r = _git("log", "-1", "--format=%H%n%ct%n%s")
+        if not r.returncode:
+            sha, ts, subject = (r.stdout.strip().split("\n", 2) + ["", "", ""])[:3]
+            dirty = bool(_git("status", "--porcelain").stdout.strip())
+            return {"sha": sha, "at": int(ts or 0), "subject": subject,
+                    "how": "git", "dirty": dirty}
+        return {"sha": "", "at": 0, "subject": "", "how": "git", "dirty": False}
+    try:
+        v = json.loads((APP_DIR / "version.json").read_text(encoding="utf-8"))
+        return {"sha": str(v.get("sha") or ""), "at": int(v.get("at") or 0),
+                "subject": str(v.get("subject") or ""), "how": "payload",
+                "dirty": False}
+    except (OSError, ValueError):
+        return {"sha": "", "at": 0, "subject": "", "how": "payload",
+                "dirty": False}
+
+
+def version_latest():
+    """What GitHub has on the branch. Public repo, so no token and no
+    ceremony — one small JSON over TLS."""
+    import urllib.request
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{APP_REPO}/commits/{APP_BRANCH}",
+        headers={"Accept": "application/vnd.github+json",
+                 "User-Agent": "SagaStudio"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        c = json.loads(r.read().decode("utf-8", "replace"))
+    when = c.get("commit", {}).get("committer", {}).get("date") or ""
+    try:
+        at = int(time.mktime(time.strptime(when, "%Y-%m-%dT%H:%M:%SZ"))
+                 - time.timezone)
+    except ValueError:
+        at = 0
+    return {"sha": c.get("sha") or "",
+            "subject": (c.get("commit", {}).get("message") or "").split("\n")[0],
+            "at": at}
+
+
+def update_check():
+    """Is there a newer studio? Never raises at the caller: an offline finca
+    is a normal Tuesday, and a failed check must not colour anything red."""
+    cur = version_now()
+    out = {"current": cur, "how": cur["how"], "behind": False, "latest": None}
+    if cur["how"] == "git" and cur["dirty"]:
+        out["blocked"] = ("this checkout has uncommitted changes — commit or "
+                          "stash them and the update can fast-forward")
+    try:
+        latest = version_latest()
+    except Exception as ex:
+        out["error"] = f"could not ask GitHub — {ex}"
+        return out
+    out["latest"] = latest
+    # A different sha upstream is only NEWER if it is also later in time —
+    # otherwise a machine running an unpushed commit would be told to
+    # "update" backwards onto what it already improved on.
+    out["behind"] = bool(latest["sha"] and latest["sha"] != cur["sha"]
+                         and latest["at"] >= cur["at"])
+    return out
+
+
+def _safe_members(tar):
+    """Only the payload, only from inside the archive's own folder. A
+    tarball is a stranger's data: no absolute paths, no .., no links, no
+    names this program did not ask for."""
+    for m in tar.getmembers():
+        if not m.isfile():
+            continue
+        parts = Path(m.name).parts
+        if len(parts) < 2 or ".." in parts:
+            continue
+        rel = "/".join(parts[1:])          # drop the repo-sha top folder
+        if rel in PAYLOAD:
+            yield rel, m
+
+
+def update_apply():
+    """Fetch and install. Returns a sentence for the author to read.
+
+    A checkout fast-forwards (--ff-only, so a diverged tree is refused
+    rather than mangled). A packaged copy downloads the branch tarball and
+    writes only PAYLOAD names into APP_DIR, keeping the previous copy
+    beside it as .prev so a bad update is one folder-rename from undone."""
+    import urllib.request
+    cur = version_now()
+    if cur["how"] == "git":
+        if cur["dirty"]:
+            raise RuntimeError("this checkout has uncommitted changes — "
+                               "commit or stash them first")
+        r = _git("pull", "--ff-only")
+        if r.returncode:
+            raise RuntimeError((r.stderr or r.stdout).strip()[:300]
+                               or "git pull failed")
+        now = version_now()
+        return f"updated to “{now['subject']}”", now
+    latest = version_latest()
+    url = f"https://github.com/{APP_REPO}/archive/{latest['sha']}.tar.gz"
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=APP_DIR, prefix=".update-", suffix=".tgz")
+    os.close(fd)
+    stage = APP_DIR / ".update-stage"
+    shutil.rmtree(stage, ignore_errors=True)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "SagaStudio"})
+        with urllib.request.urlopen(req, timeout=300) as r, open(tmp, "wb") as f:
+            shutil.copyfileobj(r, f, 1 << 20)
+        stage.mkdir(parents=True)
+        got = 0
+        with tarfile.open(tmp) as tar:
+            for rel, m in _safe_members(tar):
+                src = tar.extractfile(m)
+                if src is None:
+                    continue
+                with src, open(stage / rel, "wb") as out:
+                    shutil.copyfileobj(src, out, 1 << 20)
+                got += 1
+        if not got or not (stage / "studio.py").exists():
+            raise RuntimeError("that download carried no studio — nothing changed")
+        (stage / "version.json").write_text(json.dumps(
+            {"sha": latest["sha"], "at": latest["at"],
+             "subject": latest["subject"]}), encoding="utf-8")
+        # keep the outgoing copy whole, then move the new one in file by file
+        prev = APP_DIR / ".prev"
+        shutil.rmtree(prev, ignore_errors=True)
+        prev.mkdir(parents=True)
+        for name in PAYLOAD + ("version.json",):
+            if (APP_DIR / name).exists():
+                shutil.copy2(APP_DIR / name, prev / name)
+        for f in sorted(stage.iterdir()):
+            os.replace(f, APP_DIR / f.name)   # same filesystem: atomic each
+        return f"updated to “{latest['subject']}”", version_now()
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+        shutil.rmtree(stage, ignore_errors=True)
 
 
 def webp_still(src):
@@ -4559,6 +4735,17 @@ class H(BaseHTTPRequestHandler):
                     saved += was - w.stat().st_size
             return self._send(200, {"ok": True, "pressed": pressed,
                                     "saved": saved})
+        # Keeping current. Both are lockless: asking GitHub and replacing
+        # program files touches no document, and the check in particular
+        # must never make the editor wait on a slow network.
+        if u.path == "/api/update/check":
+            return self._send(200, update_check())
+        if u.path == "/api/update/apply":
+            try:
+                note, now = update_apply()
+            except Exception as ex:
+                return self._send(400, {"error": str(ex)[:300]})
+            return self._send(200, {"ok": True, "note": note, "current": now})
         # Editor settings: one small file of its own, no doc and no lock.
         if u.path == "/api/settings":
             return self._send(200, save_settings(d))

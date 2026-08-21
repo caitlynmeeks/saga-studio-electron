@@ -89,6 +89,10 @@ background:var(--chrome);border-top:1px solid var(--line)}
 #unrend{font-size:11.5px;color:var(--amber);text-decoration:underline dotted;
 cursor:pointer;white-space:nowrap}
 #unrend:hover{color:var(--bright)}
+/* a waiting update — green, because it is good news, not a warning */
+#upnudge{font-size:11.5px;color:var(--green);text-decoration:underline dotted;
+cursor:pointer;white-space:nowrap;margin-left:10px}
+#upnudge:hover{color:var(--bright)}
 h2{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--dim);margin:2px 0 8px}
 #drop{border:1.5px dashed var(--line);border-radius:8px;padding:20px 10px;text-align:center;
 color:var(--faint);cursor:pointer;transition:.15s;font-size:12.5px}
@@ -576,6 +580,14 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
     <button class="tiny appbrowse" onclick="chooseApp('video')"
       title="pick the application">📁</button></span></label>
   <div id="st_msg" class="mut" style="font-size:11px;margin-top:8px"></div>
+
+  <h2 style="margin-top:18px">Version</h2>
+  <div class="mut" id="st_ver" style="font-size:11px">checking…</div>
+  <div style="display:flex;gap:5px;margin-top:6px">
+    <button class="tiny" onclick="updateCheck(true)">Check for Updates</button>
+    <button class="tiny pri" id="st_upb" onclick="updateApply()" hidden>Install Update</button>
+  </div>
+  <div id="st_upmsg" class="mut" style="font-size:11px;margin-top:5px"></div>
  </div>
 </aside>
 
@@ -632,6 +644,8 @@ Selected cards go along as context.</div></div>
   <span style="flex:1"></span>
   <a id="unrend" href="#" hidden onclick="jumpUnrendered();return false"
     title="live cards with no render yet — click to visit them one per press"></a>
+  <a id="upnudge" href="#" hidden onclick="showSettingsVersion();return false"
+    title="a newer Saga Studio is on GitHub — click to see what changed"></a>
   <button id="revealb" onclick="revealOut()" title="Show this episode’s renders in the Finder">Open Renders Folder ↗</button>
 </footer>
 
@@ -1538,6 +1552,62 @@ function paintStale(){
     'again</b> to run the new version — reloading only refreshes the interface, '+
     'and a new interface on an old server fails in confusing ways.';
   document.body.appendChild(d);
+}
+
+// ── keeping current ───────────────────────────────────────
+// The studio watches GitHub for its own newer self. Checking happens by
+// itself and quietly; INSTALLING is always a press, because swapping the
+// program you are working in is not a thing to do behind someone's back.
+// The commit's own subject line is the changelog — which is why it reads
+// like a sentence rather than a number.
+let UPD=null;
+const shortWhen=t=>{ const d=new Date((t||0)*1000);
+  return t?d.toLocaleDateString(undefined,{month:'short',day:'numeric'}):'unknown'; };
+async function updateCheck(loud){
+  if(loud)$('st_upmsg').textContent='asking GitHub…';
+  let r; try{ r=await api('/api/update/check',{}); }
+  catch(ex){ r={error:String(ex)}; }
+  UPD=r;
+  const ver=$('st_ver'), b=$('st_upb'), nudge=$('upnudge');
+  if(ver){
+    const c=r.current||{};
+    ver.innerHTML=`running ${c.sha?`<b>${esc((c.sha||'').slice(0,7))}</b>`:'an unknown build'}`+
+      (c.at?` · ${esc(shortWhen(c.at))}`:'')+
+      (c.how==='git'?' · git checkout':'')+
+      (c.subject?`<div style="margin-top:2px">“${esc(c.subject)}”</div>`:'');
+  }
+  const behind=!!(r&&r.behind);
+  if(b)b.hidden=!behind||!!r.blocked;
+  if(nudge){ nudge.hidden=!behind; if(behind)nudge.textContent='update available'; }
+  if($('st_upmsg')){
+    $('st_upmsg').innerHTML = r.error?`<span class="warn">${esc(r.error)}</span>`
+      : r.blocked?`<span class="warn">${esc(r.blocked)}</span>`
+      : behind?`<span class="ok">a newer studio is waiting</span> — “${
+          esc((r.latest||{}).subject||'')}”`
+      : loud?'<span class="ok">this is the newest there is</span>':'';
+  }
+}
+function showSettingsVersion(){
+  setSide('settings');
+  const el=$('st_ver'); if(el)el.scrollIntoView({block:'center'});
+}
+async function updateApply(){
+  const b=$('st_upb'); if(b){ b.disabled=true; b.textContent='installing…'; }
+  $('st_upmsg').innerHTML='<span class="warn">fetching and installing…</span>';
+  let r; try{ r=await api('/api/update/apply',{}); }
+  catch(ex){ r={error:String(ex)}; }
+  if(b){ b.disabled=false; b.textContent='Install Update'; }
+  if(r.error)return void($('st_upmsg').innerHTML=
+    `<span class="warn">update failed — ${esc(r.error)}</span>`);
+  if(b)b.hidden=true;
+  const nudge=$('upnudge'); if(nudge)nudge.hidden=true;
+  // The new code is on disk; the old code is still the one running. Say so
+  // plainly — a studio that claimed to be updated while running the old
+  // program would be lying in the most confusing way available.
+  $('st_upmsg').innerHTML=`<span class="ok">${esc(r.note)}</span> — `+
+    `restart Saga Studio to run it`;
+  $('status').innerHTML=`<span class="ok">${esc(r.note)}</span> — restart to run it`;
+  updateCheck(false);
 }
 
 // ── the sidebar's tabs ────────────────────────────────────
@@ -4919,6 +4989,10 @@ pollJobs();
 loadSettings().then(()=>refresh().then(renderProfiles));
 paintFR();          // the header buttons before any document is open
 paintClip();        // a card copied last session is still on the clipboard
+// One quiet look at GitHub a few seconds in — late enough that a slow
+// network never delays the editor coming up, and silent unless there is
+// actually something waiting.
+setTimeout(()=>updateCheck(false),4000);
 </script>
 </body>
 </html>

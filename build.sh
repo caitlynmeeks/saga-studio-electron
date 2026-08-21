@@ -30,6 +30,9 @@ echo "── 2/3 fetching the Python runtime and the Kokoro voices…"
 npm run --silent runtime
 
 echo "── 3/3 building the app…"
+# say which commit this payload is, so a downloaded update can tell whether
+# it is actually newer than what the bundle carries
+./scripts/stamp-version.sh
 npx electron-builder --dir
 
 APP=$(find dist -maxdepth 2 -name "Saga Studio.app" -print -quit)
