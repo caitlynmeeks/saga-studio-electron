@@ -6,13 +6,13 @@
 <title>Saga</title>
 <!--
 The exported player. Written by Saga Studio's publish tab: the studio fills
-in the runtime (player.js — the choice grammar's one evaluator) and the
+in the runtime (player.js, the choice grammar's one evaluator) and the
 story graph, and copies audio/ and media/ beside this file. Everything is
 inline or relative because this page's whole job is to play from file://,
 where fetch is blocked and only src attributes may load.
 
 One audio element for the life of the page: the ▶ begin button's click
-unlocks it, and every later stretch reuses it — the pattern that survives
+unlocks it, and every later stretch reuses it: the pattern that survives
 autoplay policy everywhere, including iOS.
 -->
 <style>
@@ -27,9 +27,9 @@ body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--mono);height:100vh
 height:100dvh;display:grid;grid-template-rows:1fr}
 #room{position:relative;overflow:hidden;min-height:0;background:#000}
 /* while the story plays and the pointer rests, the knobs go dark and the
-   cursor with them — a theatre, not a dashboard */
+   cursor with them: a theatre, not a dashboard */
 body:not(.barlit) #room{cursor:none}
-/* a picture arrives invisible and DISSOLVES in over the one still hanging —
+/* a picture arrives invisible and DISSOLVES in over the one still hanging;
    the old only comes down once the new is fully on, so the wall never dips
    to black (or worse) between two shots */
 #room img,#room video{position:absolute;inset:0;width:100%;height:100%;
@@ -48,14 +48,14 @@ opacity:0;transition:opacity .35s,bottom .3s ease}
 body.barlit #caption{bottom:calc(66px + env(safe-area-inset-bottom))}
 /* while the chooser is out, the caption steps up to sit just above it */
 #room.choosing #caption{bottom:170px}
-/* the sound's own line — "(Foghorn blowing)" — a supertitle at the top so it
+/* the sound's own line, "(Foghorn blowing)", a supertitle at the top so it
    can sit over a standing dialog block without touching it */
 #fxcap{position:absolute;left:0;right:0;top:22px;text-align:center;
 padding:0 8vw;font-size:clamp(12px,1.7vw,17px);font-style:italic;
 color:#cfd6d3;text-shadow:0 1px 3px #000,0 0 12px #000;
 opacity:0;transition:opacity .3s}
 #fxcap.on{opacity:.85}
-/* the title card: big words centred on the wall, faded by the audio clock —
+/* the title card: big words centred on the wall, faded by the audio clock;
    the transition duration is set per phase from the card's own fade times */
 #titlecap{position:absolute;inset:0;display:flex;align-items:center;
 justify-content:center;text-align:center;padding:0 10vw;white-space:pre-line;
@@ -68,7 +68,7 @@ align-items:center;justify-content:center;background:#000d}
 #gate h1{font-size:clamp(18px,3vw,30px);color:var(--bright);letter-spacing:.06em;
 text-align:center;padding:0 6vw}
 #gate button{font-size:17px;padding:12px 30px}
-/* The chooser floats OVER the room on a scrim rather than living beside it —
+/* The chooser floats OVER the room on a scrim rather than living beside it:
    a layout sibling would resize the stage every time choices came and went,
    and the picture popping larger and smaller is exactly the wrong drama. */
 #chooser{position:absolute;left:0;right:0;bottom:0;display:none;gap:10px;
@@ -80,8 +80,8 @@ button{background:#131a17;border:1px solid var(--line);color:var(--fg);
 border-radius:7px;padding:10px 18px;font:14px var(--mono);cursor:pointer;max-width:44ch}
 button:hover{border-color:var(--green);color:var(--green)}
 /* The bar floats over the room instead of owning a layout row: the picture
-   keeps the whole viewport, and the knobs sleep while the story plays —
-   opacity, not display, so the room never resizes and the fade is calm.
+   keeps the whole viewport, and the knobs sleep while the story plays.
+   Opacity, not display, so the room never resizes and the fade is calm.
    Any pointer, tap or key wakes them; stops (gate, pause, choice, end)
    keep them lit. */
 #bar{position:fixed;left:0;right:0;bottom:0;z-index:2;
@@ -137,7 +137,7 @@ let MARKS=[],MARKI=-1,SHOWN=null,TOKEN=0,RUNOFF=null,ASKOFF=null;
 
 // The wall never blinks: the standing picture stays up while the next one
 // loads and DECODES off-screen, is dissolved in on top, and only then is
-// the old struck. MSEQ is the wall's clock — a swap that finishes loading
+// the old struck. MSEQ is the wall's clock: a swap that finishes loading
 // after a newer one began quietly lets go, and a picture that fails to
 // arrive changes nothing at all.
 let MSEQ=0;
@@ -159,7 +159,7 @@ function show(c){
     if(seq!==MSEQ)return void el.remove();   // a newer picture won the wall
     room.insertBefore(el,$('caption'));
     void el.offsetWidth;        // commit opacity 0 first, so .on transitions
-    el.classList.add('on');     // (no rAF — an occluded window never fires it)
+    el.classList.add('on');     // (no rAF: an occluded window never fires it)
     setTimeout(()=>{ if(seq===MSEQ)strike(el); },520);
   };
   if(c.mediakind==='video'){
@@ -170,7 +170,7 @@ function show(c){
   }else{
     el=document.createElement('img');
     // decode() is preferred (the picture is paint-ready before it hangs) but
-    // never trusted alone — a decode that dawdles must not strand the wall
+    // never trusted alone; a decode that dawdles must not strand the wall
     // on the old shot, so the load event plus a beat is the backstop either
     // way, and a picture that never arrives simply never hangs.
     let hung=false;
@@ -184,7 +184,7 @@ function show(c){
 }
 // ── the control bar ───────────────────────────────────────
 // The knobs a viewer expects of a player: volume, captions, full screen,
-// share. Remembered per browser — a story reopened tomorrow sounds and
+// share. Remembered per browser, so a story reopened tomorrow sounds and
 // reads the way it was left. Captions start OFF: the story is voiced, and
 // the words are there for whoever asks. The typewriter is the author's
 // design (story setting, card overrides) and simply plays as written.
@@ -195,7 +195,7 @@ function toggleCC(){ CC=!CC; $('ccb').classList.toggle('lit',CC);
   if(!CC){ caption(''); fxcap(''); } pref('cc',CC?'1':'0'); }
 // Feature-detected with the webkit spelling too: iPhone Safari grew the
 // real thing in 16.4, sometimes under the prefix. A browser with neither
-// (Chrome on iOS) gets no dead knob — the button unmounts below, and the
+// (Chrome on iOS) gets no dead knob: the button unmounts below, and the
 // sleeping bar plus viewport-fit=cover already hand back most of the room.
 function fullScreen(){
   const d=document, el=d.documentElement;
@@ -208,7 +208,7 @@ function fullScreen(){
 if(!(document.documentElement.requestFullscreen
      ||document.documentElement.webkitRequestFullscreen))$('fsb').remove();
 async function share(){
-  const data={title:GRAPH.title,text:'“'+GRAPH.title+'” — an interactive story',
+  const data={title:GRAPH.title,text:'“'+GRAPH.title+'”, an interactive story',
               url:location.href};
   if(navigator.share){ try{ await navigator.share(data); return; }catch(e){} }
   try{ await navigator.clipboard.writeText(location.href);
@@ -243,7 +243,7 @@ function barDim(){
 barLit();
 
 let CAPST={txt:'',chain:false}, CAPQ=[], CAPI=-1;
-// this card's typewriter word, else the story's — the ⌨ button vetoes both
+// this card's typewriter word, else the story's; the ⌨ button vetoes both
 const twOf=c=>c&&c.tw!=null?!!c.tw:!!GRAPH.typewriter;
 const sfxOf=c=>c&&c.twsfx!=null?!!c.twsfx:!!GRAPH.typesfx;
 let ACTX=null, LASTTK=0;
@@ -272,8 +272,8 @@ function fxcap(t){ const el=$('fxcap');
   if(!t||!CC)return void el.classList.remove('on');
   el.textContent=t; el.classList.add('on'); }
 // the title card, driven by the audio clock exactly as in the studio's
-// stage: TITLEQ is SagaPlay.titlePlan's arithmetic — the same seconds the
-// mixdown cut as silence — and pausing the clock holds the title where it is
+// stage: TITLEQ is SagaPlay.titlePlan's arithmetic (the same seconds the
+// mixdown cut as silence), and pausing the clock holds the title where it is
 let TITLEQ=null, TPHASE='';
 function titleClear(){ TITLEQ=null; TPHASE='';
   const el=$('titlecap'); el.style.transitionDuration='.2s'; el.classList.remove('on'); }
@@ -308,8 +308,8 @@ async function story(){
   },{},0);
 }
 
-// [from, upto) may span several premixed files — the export cuts at every
-// jump target as well as at every stop — so play the chain until the stop.
+// [from, upto) may span several premixed files: the export cuts at every
+// jump target as well as at every stop, so play the chain until the stop.
 async function playChain(tok,from,upto){
   let at=from;
   while(at!=null&&at!==upto){
@@ -400,7 +400,7 @@ function tick(){
   }
   pageTick(t);
 }
-// turn the caption's pages against the audio clock — pause freezes them,
+// turn the caption's pages against the audio clock; pause freezes them,
 // and only the page whose moment has come is shown
 function pageTick(t){
   while(CAPI+1<CAPQ.length&&CAPQ[CAPI+1].at<=t){

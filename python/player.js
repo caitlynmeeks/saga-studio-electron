@@ -36,13 +36,13 @@ const SagaPlay = (() => {
     return true            // the server should never let this arrive
   }
 
-  // Index of the first card carrying the tag — where a jump lands. Tags are
+  // Index of the first card carrying the tag, where a jump lands. Tags are
   // anchors precisely because they survive the renumbering ids do not.
   const findTag = (chunks, tag) =>
     chunks.findIndex(c => (c.tags || []).includes(tag))
 
   // Where the run starting at i must stop: the next card that playback has to
-  // think about rather than simply speak — a choice, or a conditional card.
+  // think about rather than simply speak: a choice, or a conditional card.
   // Everything between two stops is one premixed stretch of audio.
   function runEnd (chunks, i) {
     let j = i + 1
@@ -94,7 +94,7 @@ const SagaPlay = (() => {
 
   // Every stretch the exported player could ever need on disk, before it is
   // asked for: run boundaries as walk() would find them, PLUS a break at
-  // every card any goto names — a jump must land on a stretch that starts
+  // every card any goto names, since a jump must land on a stretch that starts
   // there, because the export's audio is premixed and cannot begin mid-file.
   function segments (chunks) {
     const targets = new Set()
@@ -118,7 +118,7 @@ const SagaPlay = (() => {
     return out
   }
 
-  // Reveal a caption at the pace the audio gives it — the typewriter effect,
+  // Reveal a caption at the pace the audio gives it: the typewriter effect,
   // off by default in both players. The rate comes from the stretch of time
   // the card actually occupies, aiming to land the last character a beat
   // before the audio moves on; clamped so a two-word line does not smear and
@@ -127,9 +127,9 @@ const SagaPlay = (() => {
   function typeCaption (el, text, secs, from, ontick) {
     // `from` is where the fresh words start: a chained caption keeps its
     // standing prefix on screen and types only what this card adds, at a
-    // rate set by this card's own stretch of audio — which is what keeps
+    // rate set by this card's own stretch of audio, which is what keeps
     // the pace honest across a chain of differently-sized cards.
-    // `ontick` hears each revealed character — the hosts hang the typing
+    // `ontick` hears each revealed character; the hosts hang the typing
     // sound on it; captions themselves never make noise here.
     from = from || 0
     el.textContent = text.slice(0, from)
@@ -150,11 +150,11 @@ const SagaPlay = (() => {
   // ── caption paging ──────────────────────────────────────────────────
   // A caption is at most a couple of lines. A card carrying a paragraph gets
   // its text split into sentence-packed pages, and each page gets a slice of
-  // the card's audio in proportion to its share of the characters — spoken
+  // the card's audio in proportion to its share of the characters: spoken
   // narration is steady enough that characters are a fair clock. The hosts
   // drive the flips from the audio's own currentTime, so pausing freezes the
   // page and nothing ever drifts.
-  const PAGE = 110                     // target characters — about two lines
+  const PAGE = 110                     // target characters, about two lines
 
   function sentences (t) {
     const rough = t.match(/[^.!?…]+[.!?…]+["'”’)]*\s*|\S[^.!?…]*$/g) || [t]
@@ -178,7 +178,7 @@ const SagaPlay = (() => {
   function pages (t) {
     // A // is the author's own page break: they pace the line themselves,
     // and each piece is a page exactly as written, shown in turn across
-    // the card's audio. Spacing around it is the author's business —
+    // the card's audio. Spacing around it is the author's business:
     // `still,//it` breaks as surely as `still, // it`. Only a URL's own
     // :// is shielded (swapped out before the split, restored after).
     // Without any //, a paragraph packs itself into sentence pages.
@@ -197,7 +197,7 @@ const SagaPlay = (() => {
   }
 
   // The caption plan for one card: timed events the host replays against the
-  // audio clock — [{at, secs, text, from}], `from` being where fresh text
+  // audio clock: [{at, secs, text, from}], `from` being where fresh text
   // starts (the typewriter's cue). Chaining lives here too: a card marked
   // `chain` leaves its last page standing, a chained continuation flows into
   // that page while there is room (the join reads as growth, not
@@ -231,7 +231,7 @@ const SagaPlay = (() => {
   }
 
   // The title card's clock: where its fade-in, hold and fade-out fall on
-  // the timeline — the same arithmetic the mixdown used to cut its silence,
+  // the timeline, the same arithmetic the mixdown used to cut its silence,
   // so the picture and the quiet can never drift apart.
   function titlePlan (card, at) {
     const f = card.fade || []
