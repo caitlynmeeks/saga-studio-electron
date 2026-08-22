@@ -553,12 +553,14 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 
   <h2 style="margin-top:18px">darkride.ai</h2>
   <div class="mut" style="font-size:11px;margin-bottom:2px">Optional. Sign in
-    at darkride.ai, generate a key on My Studio, paste it here — and every
-    share and source upload lands in your account, with your name on it.
-    Blank shares anonymously, as always.</div>
-  <label class="stlab">Account key
+    at darkride.ai, generate a key on My Studio, press the copy button beside
+    it, then 📋 here. Every share and every source upload after that lands in
+    your account with your name on it. Blank shares anonymously, as always.</div>
+  <label class="stlab">Account key<span class="approw">
     <input id="st_dk_key" type="password" placeholder="dk_…"
-      onchange="saveSettings()"></label>
+      onchange="saveSettings()">
+    <button class="tiny" onclick="pasteKey()"
+      title="paste the key from the clipboard">📋</button></span></label>
 
   <h2 style="margin-top:18px">Open in…</h2>
   <div class="mut" style="font-size:11px;margin-bottom:2px">Cards and the
@@ -1714,12 +1716,36 @@ async function saveSettings(){
   const r=await api('/api/settings',d);
   if(r.error)return void($('st_msg').innerHTML=
     `<span class="warn">${esc(r.error)}</span>`);
-  SETTINGS=r; $('st_msg').textContent='saved';
-  setTimeout(()=>{ if($('st_msg').textContent==='saved')$('st_msg').textContent=''; },1500);
+  SETTINGS=r;
+  // a rejected darkride key: everything else in the form still saved, so
+  // only the key field goes back to whatever was standing, and the message
+  // stays up instead of blinking away like an ordinary 'saved'
+  if(r.warn){
+    $('st_dk_key').value=(r.darkride||{}).key||'';
+    $('st_msg').innerHTML=`<span class="warn">${esc(r.warn)}</span>`;
+  }else{
+    $('st_msg').textContent='saved';
+    setTimeout(()=>{ if($('st_msg').textContent==='saved')$('st_msg').textContent=''; },1500);
+  }
   refresh();      // the discuss panel and the Paint button both watch these
   // the Edit buttons on cards exist only while an app is set for their kind,
   // so a change here redraws the stack they live on
   if(DOC&&JSON.stringify(r.apps||null)!==appsWere)open_(DOC.name,true);
+}
+// The darkride key is 35 characters of hex behind a password field, which
+// makes typing it a bad joke and pasting it blind the only real way in. The
+// clipboard read happens on the python side (the electron shell will not
+// grant web content the permission), and only a key-shaped thing comes back,
+// so a wrong paste is caught here rather than discovered weeks later on a
+// profile page with nothing on it.
+async function pasteKey(){
+  const r=await api('/api/paste_key',{});
+  if(r.error)return void($('st_msg').innerHTML=
+    `<span class="warn">${esc(r.error)}</span>`);
+  $('st_dk_key').value=r.key;
+  if(SETTINGS)SETTINGS.darkride={key:r.key};
+  $('st_msg').innerHTML='<span class="ok">key saved · '+
+    esc(r.key.slice(0,7))+'…'+esc(r.key.slice(-4))+'</span>';
 }
 async function openExternal(kind,name){
   const r=await api('/api/open_in',{kind,file:name});

@@ -133,6 +133,13 @@ SETTINGS_DEFAULTS = {
     # exactly as before accounts existed.
     "darkride": {"key": ""},
 }
+# What a darkride studio key looks like: dk_ and then hex, nothing else. The
+# check exists because the thing people actually paste into this field by
+# mistake is darkride's own note ABOUT the key, which My Studio used to print
+# in the same monospace the key itself wears. A wrong key is worse than an
+# empty one: the upload still succeeds, it just lands in nobody's account,
+# and the author finds out days later looking at an empty profile.
+DK_KEY = re.compile(r"dk_[0-9a-f]{16,}")
 LLM_PROVIDERS = ("claude", "anthropic", "lmstudio", "llamacpp", "openai",
                  "custom")
 # where each OpenAI-shaped provider listens when the url field is left blank
@@ -162,6 +169,7 @@ def save_settings(d):
     """Merge what the page sent over what is known, never trusting shape, and
     keep the file at 0600: it holds the author's keys."""
     cur = settings()
+    standing_dk = cur["darkride"]["key"]
     for sec, vals in cur.items():
         g = d.get(sec)
         if isinstance(g, dict):
@@ -172,6 +180,15 @@ def save_settings(d):
         cur["llm"]["provider"] = "claude"
     if cur["image"]["provider"] not in ("nanobanana", "drawthings"):
         cur["image"]["provider"] = "nanobanana"
+    # A key that is not a key never reaches the file. The rest of the form
+    # still saves: one bad paste should not cost the author the model they
+    # just picked. Blank stays blank, which is how you share anonymously.
+    warn = ""
+    if cur["darkride"]["key"] and not DK_KEY.fullmatch(cur["darkride"]["key"]):
+        cur["darkride"]["key"] = standing_dk
+        warn = ("that is not a darkride key. They read dk_ and then hex. "
+                "Generate one on My Studio at darkride.ai, press the copy "
+                "button beside it, and paste that.")
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=SETTINGS_FILE.parent, prefix=".settings-")
     try:
@@ -181,7 +198,25 @@ def save_settings(d):
         os.chmod(SETTINGS_FILE, 0o600)
     finally:
         Path(tmp).unlink(missing_ok=True)
-    return cur
+    return dict(cur, warn=warn) if warn else cur
+
+
+def clipboard_text():
+    """Whatever is on the system clipboard, as text, or "". The Settings
+    tab's paste button goes through here rather than the page's own
+    navigator.clipboard: reading the clipboard from web content wants a
+    permission the electron shell does not grant, and this is the author's
+    own machine either way. Same shape as the 📁 app picker, which is
+    osascript on this side for the same reason."""
+    for cmd in (["pbpaste"], ["wl-paste", "-n"], ["xclip", "-o",
+                "-selection", "clipboard"], ["xsel", "-b", "-o"]):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode == 0:
+            return r.stdout
+    return ""
 
 
 def _engine_python(env, managed, classic):
@@ -4759,6 +4794,25 @@ class H(BaseHTTPRequestHandler):
             note_append("## " + time.strftime("%Y-%m-%d %H:%M") + " · note\n"
                         + note[:2000])
             return self._send(200, {"ok": True})
+        # The Settings tab's paste button for the darkride key. Deliberately
+        # narrow: it reads the clipboard, and what comes back to the page is
+        # a key or a refusal, never whatever else was on there. The check is
+        # the point: a key-shaped thing gets saved, a sentence about a key
+        # gets turned away at the door instead of being carried to darkride
+        # on every upload from here on.
+        if u.path == "/api/paste_key":
+            got = clipboard_text().strip()
+            if not got:
+                return self._send(400, {"error": "the clipboard is empty"})
+            if not DK_KEY.fullmatch(got):
+                n = len(got)
+                return self._send(400, {"error": (
+                    f"the clipboard holds {n} character{'s' if n != 1 else ''} "
+                    "that are not a darkride key. Keys read dk_ and then hex; "
+                    "generate one on My Studio at darkride.ai and press the "
+                    "copy button beside it.")})
+            cur = save_settings({"darkride": {"key": got}})
+            return self._send(200, {"ok": True, "key": cur["darkride"]["key"]})
         # The native application chooser, for the Settings tab's 📁 buttons.
         # Server-side via osascript rather than an electron dialog: the
         # studio page is ordinary web content on purpose (see preload.js),
