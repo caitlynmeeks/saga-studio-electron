@@ -50,6 +50,7 @@ import tarfile
 import tempfile
 import threading
 import time
+import unicodedata
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -114,7 +115,7 @@ ENGINES_DIR = Path(os.environ.get("SAGA_ENGINES")
                    or (Path.home() / "Library/Application Support/Saga Studio/engines"
                        if sys.platform == "darwin"
                        else Path.home() / ".saga-studio/engines")).expanduser()
-# Editor settings — the author's own arrangements: which model Discuss speaks
+# Editor settings — the author's own arrangements: which model Brenda speaks
 # with, who paints the pictures, which apps a clip opens in for surgery. They
 # are per-MACHINE, kept beside the engines rather than in the library, because
 # a library travels (Export Everything, a copied folder) and an API key must
@@ -422,6 +423,32 @@ def strip_markdown(md):
 # built once should be usable everywhere. "Default" always exists and cannot
 # be deleted — every card falls back to it.
 PROFILES = ROOT / "profiles.json"
+# ── shelves ─────────────────────────────────────────────────────────────
+# A series is a playlist over the library: an ordered list of project names
+# kept entirely OUTSIDE the projects it names. Not one byte of a doc.json says
+# which shelf a story sits on, and that is the whole point. A story stands
+# alone, is shared alone, plays alone; the order it is read in belongs to the
+# shelf. Which is also what retires the numbers people put in titles — the
+# position in `order` IS the chapter number, so inserting an episode between
+# two others renames nothing.
+SERIES = ROOT / "series.json"
+# ── the cast ────────────────────────────────────────────────────────────
+# Characters, locations, props and styles as things the library KNOWS, not
+# filenames somebody remembered (CAST.md is the spec). A cast member owns
+# reference plates and may link to a voice profile; a visual card will point
+# at it by name. Plates live OUTSIDE media/ on purpose: canon lives somewhere
+# a shot cannot be mistaken for it, and the pool stays what it is — the place
+# output lands. A plate is never a shot.
+CAST_FILE = ROOT / "cast.json"
+CAST = ROOT / "cast"                      # plate files: cast/<slug>/<file>
+# A slug is the name a stored ref will hold, so it wears the ref alphabet.
+# The slot (plate) name is the addressable half of a ref's second segment.
+CAST_SLUG_RE = re.compile(r"^[a-z0-9_-]{1,60}$")
+PLATE_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
+# What one item in a card's `ref` may be: a bare pool name exactly as ever,
+# `@slug` for a member's key plate, or `@slug/plate` for that exact plate.
+# `@maisie/suit-blue-3q` is as deep as a reference ever goes (CAST.md §3).
+REF_RE = re.compile(r"^@?[a-z0-9_-]{1,60}(/[a-z0-9_-]{1,40})?$")
 # `engine` defaults to chatterbox so that adding a second engine changes nothing
 # until a profile is deliberately moved across — every wav already on disk keeps
 # its name and stays valid. `lang` and `speed` mean nothing to chatterbox and are
@@ -546,7 +573,17 @@ def library_counts():
 
     One pass and no hashing: the sidebar only needs to say how much a thing is
     carrying, which is cheap next to asking what is rendered."""
-    profs, clips, media = {}, {}, {}
+    profs, clips, media, home = {}, {}, {}, {}
+
+    def claim(name, rank, proj, title, of=""):
+        # Placed beats painted-against beats generated-and-not-kept, and an
+        # earlier project beats a later one on a tie. Rank first so that a
+        # picture two stories know is filed under the one that SHOWS it.
+        cur = home.get(name)
+        if cur is None or rank < cur["rank"]:
+            home[name] = {"rank": rank, "project": proj, "title": title,
+                          "of": of, "how": ("placed", "ref", "variant")[rank]}
+
     for d in sorted(ROOT.iterdir()):
         f = d / "doc.json"
         if not f.exists():
@@ -555,6 +592,7 @@ def library_counts():
             doc = json.loads(f.read_text())
         except (json.JSONDecodeError, OSError):
             continue
+        title = doc.get("title", d.name)
         for c in doc.get("chunks", []):
             if is_renderable(c):
                 k = c.get("profile", "Default")
@@ -563,7 +601,22 @@ def library_counts():
                 clips[c["clip"]] = clips.get(c["clip"], 0) + 1
             elif c.get("type") == "visual" and c.get("media"):
                 media[c["media"]] = media.get(c["media"], 0) + 1
-    return profs, clips, media
+            # Where a picture belongs is not something anyone should have to
+            # file: the documents already say it. A visual card SHOWS one,
+            # was painted AGAINST others, and remembers the ones it generated
+            # and did not keep.
+            if c.get("type") == "visual":
+                chosen = c.get("media") or ""
+                if chosen:
+                    claim(chosen, 0, d.name, title)
+                for g in c.get("gen") or []:
+                    g = re.sub(r"[^a-z0-9_-]", "", str(g or ""))
+                    if g and g != chosen:
+                        claim(g, 2, d.name, title, chosen)
+            for r in ref_list(c.get("ref")):
+                if not r.startswith("@"):     # a plate is filed, not homeless
+                    claim(r, 1, d.name, title)
+    return profs, clips, media, home
 
 
 def params_for(c, doc, profs=None):
@@ -662,26 +715,71 @@ SET_RE = re.compile(r"^(!?[a-z][a-z0-9_]{0,23}|[a-z][a-z0-9_]{0,23}[+\-=]\d{1,4}
 WHEN_RE = re.compile(r"^!?[a-z][a-z0-9_]{0,23}((==|!=|>=|<=|>|<)-?\d{1,4})?$")
 
 
+# A link is only ever followed by someone who is not the author, so the
+# scheme is a whitelist rather than a blacklist: two schemes, no spaces, no
+# quotes or angle brackets that could climb out of the attribute a player
+# writes it into.
+URL_RE = re.compile(r"^https?://[^\s<>\"']{1,400}$", re.I)
+
+
 def clean_when(v):
     w = re.sub(r"\s+", "", str(v or ""))
     return w if WHEN_RE.match(w) else ""
 
 
+def clean_url(v):
+    """A link an option may open, made safe.
+
+    http and https and nothing else. An option's URL is typed by an author but
+    CLICKED by a stranger, in an exported page that may be sitting on the open
+    web, so javascript:, data: and file: never get through this door — and
+    anything that is not a link at all comes back empty, which is exactly what
+    an ordinary option is."""
+    u = str(v or "").strip()
+    return u if URL_RE.match(u) else ""
+
+
+def clean_wait(v):
+    """Seconds a choice waits before deciding for itself. 0 waits forever,
+    which is what every choice card did before this existed, so a document
+    that has never heard of a timeout keeps its old behaviour by saying
+    nothing."""
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(600, n))
+
+
 def clean_options(v):
     """A choice card's options, made safe. `goto` is a tag, and gets exactly a
-    tag's sanitising; empty goto means the story ends there."""
+    tag's sanitising; empty goto means the story ends there.
+
+    `url` opens a page in the listener's own browser, and `dflt` marks the one
+    the card's clock takes when nobody answers. Only ONE option may be the
+    default: two of them is not a stalemate the players should have to break
+    at playback, so the first marked one wins here, once, and both players
+    then read the same document the same way."""
     out = []
+    marked = False
     for o in list(v or [])[:6]:
         if not isinstance(o, dict):
             continue
-        out.append({
+        row = {
             "label": str(o.get("label") or "")[:120],
             "goto": re.sub(r"[^a-z0-9_-]", "", str(o.get("goto") or "").lower())[:24],
             "set": [s for s in (re.sub(r"\s+", "", str(x))
                                 for x in list(o.get("set") or [])[:8])
                     if SET_RE.match(s)],
             "when": clean_when(o.get("when")),
-        })
+        }
+        u = clean_url(o.get("url"))
+        if u:
+            row["url"] = u
+        if o.get("dflt") and not marked:
+            row["dflt"] = True
+            marked = True
+        out.append(row)
     return out
 
 
@@ -738,6 +836,8 @@ def paste_card(src):
         refs = ref_list(src.get("ref"))    # the paint panel's reference(s)
         if refs:
             c["ref"] = ref_store(refs)
+        if src.get("nostyle"):             # the opt-out travels with the copy
+            c["nostyle"] = True
         gen = [re.sub(r"[^a-z0-9_-]", "", str(x))
                for x in (src.get("gen") or []) if str(x or "").strip()]
         if gen:                            # its painted variants, names only
@@ -752,6 +852,7 @@ def paste_card(src):
              "note": ""}
     elif kind == "choice":
         c = {"id": 0, "type": "choice", "auto": bool(src.get("auto")),
+             "wait": clean_wait(src.get("wait")),
              "options": clean_options(src.get("options")), "note": ""}
     elif kind == "group":
         c = {"id": 0, "type": "group",
@@ -886,9 +987,60 @@ def media_list():
 
 
 def media_of(doc):
-    """The media names a project's visual cards point at."""
+    """The media names a project's visual cards point at.
+
+    What the STORY needs, and no more: the web export shows exactly these,
+    so it must not be widened. A whole COPY of a project needs more than a
+    story does, and that is the next two functions' business."""
     return {c["media"] for c in doc["chunks"]
             if c.get("type") == "visual" and c.get("media")}
+
+
+def media_refs_of(doc):
+    """Pool images a card was painted AGAINST: its style references.
+
+    Nobody ever sees one, which is exactly why they went missing from the
+    archive. But a project that loses its references can no longer paint in
+    its own style, so a copy that drops them is not a copy of the project.
+    Only POOL names belong here: an @entity ref names a cast plate, which
+    is cast_of's business (CAST.md §8), not the pool closure's. The story's
+    style tier can name pool pictures too, and those are equally something
+    a copy was painted against."""
+    out = set()
+    for c in doc["chunks"]:
+        out |= {r for r in ref_list(c.get("ref")) if not r.startswith("@")}
+    out |= {r for r in ref_list((doc.get("style") or {}).get("refs"))
+            if not r.startswith("@")}
+    return out
+
+
+def cast_of(doc):
+    """The cast members a project's cards reach for, and the plates they
+    name. A copy that loses these can no longer paint in the story's own
+    style, which is the same reason media_refs_of exists. The story's style
+    tier counts too — its refs travel inside the doc. The SHELF's tier does
+    not: a story stands alone, and the shelf record it sat on stays home."""
+    refs = []
+    for c in doc["chunks"]:
+        refs += ref_list(c.get("ref"))
+    refs += ref_list((doc.get("style") or {}).get("refs"))
+    return {r[1:].partition("/")[0] for r in refs if r.startswith("@")}
+
+
+def media_history_of(doc):
+    """The variants a card generated and did not keep.
+
+    Packed when they are on disk and not mourned when they are not: a lost
+    rejected take is lost history, not a broken project. That is the whole
+    difference between this and the two above, and it is why the archive
+    reports a missing picture or reference and stays quiet about these."""
+    out = set()
+    for c in doc["chunks"]:
+        for g in c.get("gen") or []:
+            g = re.sub(r"[^a-z0-9_-]", "", str(g or ""))
+            if g:
+                out.add(g)
+    return out
 
 
 # Nanobanana — Gemini's image model, the studio's illustrator on demand. The
@@ -921,7 +1073,126 @@ def image_ready():
     return bool(st["key"] or gemini_key())
 
 
-def generate_media(prompt, stem="", aspect="", ref=""):
+def _labelled_prompt(prompt, members):
+    """The words half of CAST.md §4: each referenced member's brief goes in
+    as a sentence beside the plates that show it, in a FIXED order — style,
+    then cast, then setting, then the shot — because consistent ordering is
+    itself a consistency lever with these models. No members, no dressing:
+    the prompt goes as it always went."""
+    heads = {"style": "Style", "character": "Cast", "location": "Setting"}
+    rank = {"style": 0, "character": 1, "location": 2}
+    lines = []
+    for m in sorted(members, key=lambda m: rank.get(m.get("kind") or "", 3)):
+        brief = (m.get("brief") or "").strip().rstrip(".")
+        if not brief:
+            continue
+        kind = m.get("kind") or ""
+        head = heads.get(kind, (kind or "reference").capitalize())
+        title = (m.get("title") or "").strip()
+        lines.append(f"{head}: {brief}." if kind == "style" or not title
+                     else f"{head}: {title}, {brief}.")
+    if not lines:
+        return prompt
+    return "\n".join(lines) + f"\n\nShot: {prompt}"
+
+
+def _paint_image(text, aspect, refs):
+    """One painting, whoever holds the brush: `refs` are (path, label) pairs
+    already resolved upstream. Returns (bytes, ext)."""
+    st = settings()["image"]
+    if st["provider"] == "drawthings":
+        return _paint_drawthings(text, aspect, refs, st["url"])
+    return _paint_nanobanana(text, aspect, refs, st["key"] or gemini_key())
+
+
+def cast_paint(slug, prompt, plate="", stem="", file=""):
+    """Paint inside the board (CAST.md §7d): the member's own plates as
+    references — the selected plate first, so a local painter's canvas is
+    the one being varied, then the key — and its brief as words, assembled
+    exactly as a card's painting is. Anything less and the drift simply
+    moves up a level: a turnaround that does not match the portrait it came
+    from. What comes back lands as a CANDIDATE in the member's folder,
+    never a plate: canon is chosen, not accumulated (§7c). A member with no
+    plates yet paints from the brief alone — that is how one is
+    bootstrapped from nothing.
+
+    `file` targets a CANDIDATE instead, and then the candidate is the only
+    picture sent: pulling the key in beside it would drag the paint back
+    toward the very look the candidate may be escaping. Returns the new
+    candidate's file name."""
+    if not prompt.strip():
+        raise ValueError("an empty prompt paints nothing")
+    m = cast().get(slug)
+    if m is None:
+        raise ValueError("no such cast member")
+    plates = m.get("plates") or {}
+    if plate and plate not in plates:
+        raise ValueError(f'no plate "{plate}" to paint against')
+    rr, refs = [], []
+    if file:
+        if file not in (m.get("candidates") or []):
+            raise ValueError("no such candidate to paint against")
+        cf = CAST / slug / file
+        if not cf.is_file():
+            raise ValueError("the candidate's file is missing from disk")
+        kind = (m.get("kind") or "reference").capitalize()
+        rr.append((cf, f'{kind} reference ({m.get("title") or slug}, '
+                       'candidate)'))
+    else:
+        if plate:
+            refs.append(f"@{slug}/{plate}")
+        if plates:
+            k = m.get("key") or next(iter(plates))
+            if k != plate:
+                refs.append(f"@{slug}/{k}")
+    # §7d in full: the collection's style rides too, named by the member's
+    # own scope — the board still reads no DOC. Without this, a member's
+    # FIRST plate is painted with no Style line at all, comes out in the
+    # model's own taste, becomes the key, and then every later plate is
+    # painted against it: the style drift moves up a level and calcifies.
+    # (Found by Musti the cat pirate, who came out Pixar in a flat world.)
+    st = (series().get(m.get("scope") or "") or {}).get("style") or {}
+    stext = str(st.get("text") or "").strip()
+    for r in ref_list(st.get("refs")):
+        if r not in refs:
+            refs.append(r)
+    rr += [resolve_ref(r) for r in refs]
+    text = _labelled_prompt(prompt,
+                            ([{"kind": "style", "brief": stext}] if stext
+                             else []) + [m])
+    img, ext = _paint_image(text, "16:9", rr)
+    stem = (re.sub(r"[^a-z0-9_-]+", "-", (stem or "candidate").lower())
+            .strip("-")[:40] or "candidate")
+    folder = CAST / slug
+    folder.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".plate-", suffix=ext)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(img)
+        w = webp_still(Path(tmp))
+        if w:
+            Path(tmp).unlink(missing_ok=True)
+            tmp, ext = str(w), ".webp"
+        # the slow painting ran lockless; only this read-modify-write of the
+        # registry takes the lock, like any other json touch
+        with _docmut:
+            reg = cast()
+            m = reg.get(slug)
+            if m is None:
+                raise ValueError("the member went away mid-painting")
+            taken = {p.stem for p in folder.iterdir() if p.is_file()}
+            fname = _free_name(taken, stem, "new") + ext
+            dest = folder / fname
+            os.replace(tmp, dest)
+            os.chmod(dest, 0o644)
+            m.setdefault("candidates", []).append(fname)
+            save_cast(reg)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    return fname
+
+
+def generate_media(prompt, stem="", aspect="", ref="", style=None):
     """Ask the chosen illustrator for a picture and file it in the media pool.
 
     Every generation is new bytes, so the upload route's dedupe has nothing
@@ -929,22 +1200,39 @@ def generate_media(prompt, stem="", aspect="", ref=""):
     media is global, and replacing a name would change every episode showing
     it. 16:9 unless asked otherwise: the stage and the animatic export are
     widescreen, and a square picture would sit pillarboxed between them.
-    `ref` names pictures already in the pool to send along as references —
-    one name or a list of them; the model matches their style or subject,
-    which is how a cast of images stays one cast. Returns the name the pool
-    filed it under."""
+    `ref` is one name or a list: pool pictures as ever, and `@member` or
+    `@member/plate` for cast plates (CAST.md §3). Each resolves to an image
+    WITH a label saying what it is for, and each @member also brings its
+    brief along as words — a picture and a sentence agreeing beat either
+    alone. `style` is style_of's (texts, refs) — the tiers above the card,
+    composed by the caller because only the caller knows the card said no.
+    Returns the name the pool filed it under."""
     if not prompt.strip():
         raise ValueError("an empty prompt paints nothing")
     aspect = aspect or "16:9"
     if aspect not in NB_ASPECTS:
         raise ValueError(f"aspect must be one of: {', '.join(NB_ASPECTS)}")
-    refs = ref_list(ref)
-    st = settings()["image"]
-    if st["provider"] == "drawthings":
-        img, ext = _paint_drawthings(prompt, aspect, refs, st["url"])
-    else:
-        img, ext = _paint_nanobanana(prompt, aspect, refs,
-                                     st["key"] or gemini_key())
+    items = ref_list(ref)
+    stexts = []
+    if style:
+        stexts = [str(t).strip() for t in style[0] if str(t).strip()]
+        # tier refs ride AFTER the card's own: a local painter's canvas
+        # stays the subject, and §4's example sends the style board last
+        for r in ref_list(style[1]):
+            if r not in items:
+                items.append(r)
+    refs = [resolve_ref(r) for r in items]
+    reg, members, seen = cast(), [], set()
+    # the tiers' words arrive as style members, broadest first, so the
+    # Style lines stand where §4 fixes them — before cast, setting, shot
+    members += [{"kind": "style", "brief": t} for t in stexts]
+    for r in items:
+        slug = r[1:].partition("/")[0] if r.startswith("@") else ""
+        if slug and slug not in seen and slug in reg:
+            seen.add(slug)
+            members.append(reg[slug])
+    text = _labelled_prompt(prompt, members)
+    img, ext = _paint_image(text, aspect, refs)
     stem = re.sub(r"[^a-z0-9_-]+", "-",
                   (stem or "art").lower()).strip("-")[:40] or "art"
     MEDIA.mkdir(parents=True, exist_ok=True)
@@ -1159,16 +1447,36 @@ def _ref_image(ref):
     return rf
 
 
+def resolve_ref(item):
+    """A ref item to (path, label). A bare name is a pool picture and labels
+    itself; an @entity is a plate and says what it is FOR, which is the half
+    the model was never told. The only place that knows what an @ means."""
+    if not item.startswith("@"):
+        return _ref_image(item), "Reference"
+    slug, _, plate = item[1:].partition("/")
+    e = cast().get(slug)
+    if not e:
+        raise ValueError(f'no cast member "{slug}"')
+    plate = plate or e.get("key") or next(iter(e.get("plates") or {}), "")
+    p = e.get("plates", {}).get(plate)
+    if not p:
+        raise ValueError(f'"{slug}" has no plate "{plate}"')
+    kind = (e.get("kind") or "reference").capitalize()
+    return CAST / slug / p["file"], \
+        f'{kind} reference ({e.get("title") or slug}, {plate})'
+
+
 def ref_list(v):
-    """The reference field in every shape it has worn: absent, one pool
-    name, or a list of them. Sanitised like every pool name, empties and
-    doubles dropped, order kept — the first reference is the one a
-    single-image painter gets."""
+    """The reference field in every shape it has worn: absent, one name, or
+    a list of them. A bare name is a pool picture, exactly as ever; `@slug`
+    is a cast member's key plate and `@slug/plate` an exact plate. Held to
+    REF_RE, empties and doubles dropped, order kept — the first reference
+    is the one a single-image painter gets."""
     vs = v if isinstance(v, (list, tuple)) else [v]
     out = []
     for x in vs:
-        x = re.sub(r"[^a-z0-9_-]", "", str(x or ""))
-        if x and x not in out:
+        x = re.sub(r"[^a-z0-9_@/-]", "", str(x or ""))
+        if x and REF_RE.match(x) and x not in out:
             out.append(x)
     return out
 
@@ -1199,9 +1507,11 @@ def _paint_drawthings(prompt, aspect, refs, url):
         # img2img with the reference underneath: it keeps the bones of the
         # picture and repaints the skin, the local cousin of a style match.
         # One canvas only — img2img paints over a single image, so of many
-        # references the FIRST is the one that goes under the brush.
+        # references the FIRST is the one that goes under the brush. It
+        # cannot take a gallery; that is a limit of the local painter, not
+        # of the design — the labelled text still rides in the prompt.
         route = "/sdapi/v1/img2img"
-        body["init_images"] = [base64.b64encode(_ref_image(refs[0])
+        body["init_images"] = [base64.b64encode(refs[0][0]
                                                 .read_bytes()).decode()]
         body["denoising_strength"] = 0.65
     req = urllib.request.Request(base + route,
@@ -1232,13 +1542,16 @@ def _paint_nanobanana(prompt, aspect, refs, key):
         raise RuntimeError("no Gemini API key. Paste one from "
                            "aistudio.google.com into the Settings tab.")
     parts = []
-    # the model takes a whole gallery of references — a face from one, a
-    # palette from another — so every name the card holds goes along
-    for ref in refs:
-        rf = _ref_image(ref)
+    # a described gallery, not an anonymous pile: the model takes a whole
+    # gallery of references — a face from one, a palette from another — and
+    # each one now arrives BEHIND a line saying what it is for. Sending four
+    # references without saying which is which is how you get blending
+    # (CAST.md §0 cause 4); the label is what actually kills the drift.
+    for path, label in refs:
+        parts.append({"text": f"{label}:"})
         parts.append({"inlineData": {
-            "mimeType": MEDIA_MIME.get(rf.suffix.lower(), "image/png"),
-            "data": base64.b64encode(rf.read_bytes()).decode()}})
+            "mimeType": MEDIA_MIME.get(path.suffix.lower(), "image/png"),
+            "data": base64.b64encode(path.read_bytes()).decode()}})
     parts.append({"text": prompt})
     body = json.dumps({
         "contents": [{"parts": parts}],
@@ -1456,6 +1769,176 @@ def projects():
     return out
 
 
+def series():
+    """Every shelf, by slug. Missing or unreadable reads as none, so a library
+    with no series.json behaves exactly as one did before shelves existed."""
+    if not SERIES.exists():
+        return {}
+    try:
+        s = json.loads(SERIES.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return s if isinstance(s, dict) else {}
+
+
+def save_series(s):
+    SERIES.write_text(json.dumps(s, indent=1))
+
+
+def series_slug(title, taken, fallback="series"):
+    """Accents are folded rather than replaced, so "Cardon Poems" is what
+    `Cardón Poems` becomes and not `card-n-poems`. This slug is the shelf's
+    name on disk and, one day, its address on darkride, and a Canarian title
+    should not have to spell itself in ASCII to get a decent one. The cast
+    borrows it (fallback="member"): same alphabet, same manners."""
+    t = unicodedata.normalize("NFKD", title or "")
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    base = re.sub(r"[^a-z0-9_-]+", "-", t.lower()).strip("-")[:60]
+    slug, k = (base or fallback), 2
+    while slug in taken:
+        slug, k = f"{base or fallback}-{k}", k + 1
+    return slug
+
+
+def _clean(v, cap):
+    return re.sub(r"[\x00-\x1f\x7f]", "", str(v or "")).strip()[:cap]
+
+
+def series_state():
+    """What the sidebar draws: every shelf, and the members that answer to a
+    real project, in the order the author put them.
+
+    A name no project answers to is passed OVER rather than struck out.
+    Deleting a story should not quietly rewrite a shelf, and a story restored
+    from a backup then walks straight back into the place it held. A story
+    sits on one shelf only, and only a hand-edited file could say otherwise —
+    but if one does, the claim is settled in the ORDER THE SHELVES WERE MADE,
+    never in the order they happen to be displayed. Sorting for display is a
+    view; it must not be able to move a story from one shelf to another, which
+    is exactly what deduping down the sorted list would have done the moment a
+    shelf was renamed."""
+    recs = series()
+    have = {d.name for d in ROOT.iterdir() if (d / "doc.json").exists()}
+    claim = {}
+    for slug in recs:
+        for n in recs[slug].get("order") or []:
+            claim.setdefault(n, slug)
+    out = []
+    for slug in sorted(recs, key=lambda k: str(recs[k].get("title") or k).lower()):
+        rec = recs[slug]
+        mem, seen = [], set()
+        for n in rec.get("order") or []:
+            if n in have and n not in seen and claim.get(n) == slug:
+                seen.add(n)
+                mem.append(n)
+        out.append({"slug": slug, "title": rec.get("title") or slug,
+                    # what this shelf calls itself and what it calls its parts:
+                    # Saga is a serial of episodes, the poems are a collection
+                    # of poems, and darkride's pages should say so
+                    "noun": rec.get("noun") or "series",
+                    "member": rec.get("member") or "episode",
+                    "blurb": rec.get("blurb") or "", "cover": rec.get("cover") or "",
+                    # the shelf's picture style (CAST.md §5) — the editor
+                    # shows it on every card it dresses, visible never silent
+                    "style": rec.get("style") or None,
+                    "order": mem, "created": rec.get("created") or ""})
+    return out
+
+
+def series_of(name):
+    """Which shelf a story sits on, by the same claim rule series_state uses:
+    the shelf MADE first wins. Derived, never stored, and a story still knows
+    nothing about where it is shelved."""
+    for slug, rec in series().items():
+        if name in (rec.get("order") or []):
+            return slug
+    return ""
+
+
+def series_new(title):
+    t = _clean(title, 80)
+    if not t:
+        raise ValueError("a title is needed")
+    recs = series()
+    slug = series_slug(t, recs)
+    recs[slug] = {"title": t, "noun": "series", "member": "episode",
+                  "blurb": "", "cover": "", "order": [],
+                  "created": time.strftime("%Y-%m-%d %H:%M")}
+    save_series(recs)
+    return slug
+
+
+def series_assign(name, to, at=None):
+    """Move a story onto a shelf, to another place on the shelf it is already
+    on, or off shelves entirely (`to` None).
+
+    One shelf per story, so joining one is also leaving the other. `at` is an
+    index into the shelf WITHOUT this story: that is what makes dragging a
+    story one slot down land one slot down instead of back where it started.
+    Nothing here touches the story itself; a shelf move writes one file."""
+    recs = series()
+    if to is not None and to not in recs:
+        raise KeyError(to)
+    for rec in recs.values():
+        rec["order"] = [n for n in (rec.get("order") or []) if n != name]
+    if to is not None:
+        o = recs[to]["order"]
+        if at is None:
+            o.append(name)
+        else:
+            # `at` counts the shelf AS DRAWN, and what is drawn is the
+            # filtered view: a deleted story's name still holds its place in
+            # the file but is not on screen. Counting into the raw list would
+            # then land the story a slot or two from where it was pointed at,
+            # once for every ghost above it. So translate: find the shown
+            # story that is to sit below this one, and take its raw seat.
+            have = {d.name for d in ROOT.iterdir() if (d / "doc.json").exists()}
+            claim = {}
+            for slug in recs:
+                for n in recs[slug]["order"]:
+                    claim.setdefault(n, slug)
+            shown = [n for n in o if n in have and claim.get(n) == to]
+            at = max(0, min(int(at), len(shown)))
+            o.insert(len(o) if at == len(shown) else o.index(shown[at]), name)
+    save_series(recs)
+
+
+def cast():
+    """Every cast member, by slug. Missing or unreadable reads as empty, so a
+    library that has never heard of the cast behaves exactly as one did
+    before it existed — same manners as series() and for the same reason."""
+    if not CAST_FILE.exists():
+        return {}
+    try:
+        c = json.loads(CAST_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return c if isinstance(c, dict) else {}
+
+
+def save_cast(c):
+    CAST_FILE.write_text(json.dumps(c, indent=1))
+
+
+def style_of(doc):
+    """The style tiers above a card (CAST.md §5), composed and never chosen:
+    the shelf's style, then the story's. Returns (texts, refs) — texts
+    broadest first, since that is the order the prompt states them in; refs
+    in the same order, deduped. The card's own tier is its note, as ever,
+    and a card opts out with `nostyle`, which is its caller's business."""
+    texts, refs = [], []
+    for st in ((series().get(series_of(doc.get("name") or "")) or {})
+               .get("style") or {},
+               doc.get("style") or {}):
+        t = str(st.get("text") or "").strip()
+        if t:
+            texts.append(t)
+        for r in ref_list(st.get("refs")):
+            if r not in refs:
+                refs.append(r)
+    return texts, refs
+
+
 def import_md(title, md):
     text = normalise(strip_markdown(md))
     chunks = [{"id": i, "text": t, "params": {}, "note": ""}
@@ -1479,6 +1962,8 @@ def import_md(title, md):
 #   projects/<name>/doc.json  cards, params, notes
 #   projects/<name>/source.md the untouched import
 #   voices/<stem>.wav         only the clips those profiles can speak with
+#   cast.json                 only the cast members those projects reach for
+#   cast/<slug>/<file>        their plates — reference artwork, never shown
 #   takes/<sha>.wav           the performances voiced cards are driven by
 #   audio/<hash>.wav          rendered chunks — optional, and nearly all the size
 #
@@ -1486,6 +1971,10 @@ def import_md(title, md):
 # mean decompressing a few hundred megabytes of audio to reach the last member.
 # The assembled mp3 in out/ is deliberately left out: it is derived, it is
 # large, and assemble() rebuilds it in seconds from the chunks that are here.
+#
+# Schema stays 1 across the cast's arrival, deliberately: an older studio's
+# allowlist below simply never extracts cast members, so a new archive opens
+# there whole-minus-cast instead of being refused outright.
 ARCHIVE_SCHEMA = 1
 
 # Extraction allowlist. tar members are attacker-controlled paths in the
@@ -1493,11 +1982,12 @@ ARCHIVE_SCHEMA = 1
 # program writes — which rules out absolute paths, "..", symlinks and devices
 # without relying on any particular Python version's tarfile filter.
 ARC_MEMBER = re.compile(
-    r"^(manifest\.json|profiles\.json"
+    r"^(manifest\.json|profiles\.json|cast\.json"
     r"|projects/[a-z0-9_-]{1,60}/(doc\.json|source\.md)"
     r"|voices/[a-z0-9_.-]{1,44}\.(wav|mp3|flac|m4a)"
     r"|clips/[a-z0-9_.-]{1,44}\.wav"
     r"|media/[a-z0-9_.-]{1,44}\.(png|jpe?g|webp|gif|mp4|webm|mov)"
+    r"|cast/[a-z0-9_-]{1,60}/[a-z0-9_.-]{1,60}\.(png|jpe?g|webp|gif)"
     r"|takes/[a-z0-9]{1,40}\.wav"
     r"|audio/[a-z0-9]{1,40}\.wav)$")
 _EXTRACT = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
@@ -1547,11 +2037,11 @@ def plan_export(names, with_audio):
     profs = profiles()
     plan = {"schema": ARCHIVE_SCHEMA, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "with_audio": bool(with_audio), "projects": [], "voices": {},
-            "clips": {}, "media": {}, "takes": {}, "unreadable": [],
+            "clips": {}, "media": {}, "takes": {}, "cast": {}, "unreadable": [],
             "missing_voices": [], "missing_clips": [], "missing_media": [],
-            "missing_takes": [], "bytes": 0}
+            "missing_takes": [], "missing_cast": [], "bytes": 0}
     vnames, pnames, cnames, tnames, audio = set(), set(), set(), set(), {}
-    mnames = set()
+    mnames, hnames, castslugs = set(), set(), set()
     for nm in names:
         try:
             doc = load(nm)
@@ -1565,7 +2055,11 @@ def plan_export(names, with_audio):
         vnames |= vs
         pnames |= ps
         cnames |= clips_of(doc)
-        mnames |= media_of(doc)
+        # what the cards show AND what they were painted against: both are
+        # needed for the project to open whole somewhere else
+        mnames |= media_of(doc) | media_refs_of(doc)
+        hnames |= media_history_of(doc)
+        castslugs |= cast_of(doc)
         tnames |= takes_of(doc)
         rendered = 0
         for c in doc["chunks"]:
@@ -1616,6 +2110,42 @@ def plan_export(names, with_audio):
         plan["media"][mn] = {"file": f.name, "sha": sha256_file(f),
                              "bytes": f.stat().st_size}
         plan["bytes"] += f.stat().st_size
+    # The variant history rides along, quietly. A rejected take that is no
+    # longer on disk is skipped rather than reported: the archive is whole
+    # without it, and "missing" is a word that should mean something.
+    for hn in sorted(hnames - mnames):
+        try:
+            f = media_file(hn)
+        except FileNotFoundError:
+            continue
+        plan["media"][hn] = {"file": f.name, "sha": sha256_file(f),
+                             "bytes": f.stat().st_size}
+        plan["bytes"] += f.stat().st_size
+    # The cast the cards reach for (CAST.md §8): each member's record, its
+    # plate files reported when missing — a plate is canon, and a backup
+    # short one canon picture should say so — and its candidates riding
+    # quietly on the history rule: packed when on disk, never mourned.
+    reg = cast()
+    arc_cast = {}
+    for slug in sorted(castslugs):
+        m = reg.get(slug)
+        if m is None:
+            plan["missing_cast"].append(f"@{slug}")
+            continue
+        arc_cast[slug] = m
+        quiet = set(m.get("candidates") or [])
+        named = [p.get("file") for p in (m.get("plates") or {}).values()]
+        for fn in named + sorted(quiet):
+            if not fn or f"{slug}/{fn}" in plan["cast"]:
+                continue
+            f = CAST / slug / fn
+            if not f.is_file():
+                if fn not in quiet:
+                    plan["missing_cast"].append(f"@{slug}/{fn}")
+                continue
+            plan["cast"][f"{slug}/{fn}"] = {"file": fn, "sha": sha256_file(f),
+                                            "bytes": f.stat().st_size}
+            plan["bytes"] += f.stat().st_size
     for tn in sorted(tnames):
         # Always packed, even without audio: a take is the *source* of a voiced
         # card, not a derived artefact. Leaving it out would restore a card
@@ -1629,6 +2159,7 @@ def plan_export(names, with_audio):
         plan["bytes"] += f.stat().st_size
     plan["kind"] = "library" if len(plan["projects"]) > 1 else "project"
     plan["_profiles"] = {n: profs[n] for n in sorted(pnames) if n in profs}
+    plan["_cast"] = arc_cast
     plan["_audio"] = audio
     return plan
 
@@ -1659,10 +2190,12 @@ def write_archive(plan, dest):
     higher levels spend minutes of CPU to save a couple of per cent."""
     audio = plan.pop("_audio", {})
     profs = plan.pop("_profiles", {})
+    arc_cast = plan.pop("_cast", {})
     manifest = dict(plan, audio=sorted(audio))
     with tarfile.open(dest, "w:gz", compresslevel=1 if plan["with_audio"] else 6) as tar:
         _add_bytes(tar, "manifest.json", json.dumps(manifest, indent=1).encode())
         _add_bytes(tar, "profiles.json", json.dumps(profs, indent=1).encode())
+        _add_bytes(tar, "cast.json", json.dumps(arc_cast, indent=1).encode())
         for p in plan["projects"]:
             d = ROOT / p["name"]
             _add_file(tar, d / "doc.json", f"projects/{p['name']}/doc.json")
@@ -1674,6 +2207,10 @@ def write_archive(plan, dest):
             _add_file(tar, CLIPS / meta["file"], f"clips/{meta['file']}")
         for meta in plan["media"].values():
             _add_file(tar, MEDIA / meta["file"], f"media/{meta['file']}")
+        for key, meta in plan["cast"].items():
+            slug = key.split("/", 1)[0]
+            _add_file(tar, CAST / slug / meta["file"],
+                      f"cast/{slug}/{meta['file']}")
         for meta in plan["takes"].values():
             _add_file(tar, TAKES / meta["file"], f"takes/{meta['file']}")
         for name, f in sorted(audio.items()):
@@ -1719,7 +2256,7 @@ def import_archive(path, mode="skip"):
     each cached WAV is filed under its new name. A plain restore onto the
     machine that made the archive renames nothing and takes the fast path."""
     rep = {"projects": [], "voices": [], "profiles": [], "clips": [],
-           "media": [], "audio": 0, "takes": 0, "skipped": []}
+           "media": [], "cast": [], "audio": 0, "takes": 0, "skipped": []}
     tmp = Path(tempfile.mkdtemp(prefix=".import-", dir=ROOT))
     try:
         with tarfile.open(path, "r:gz") as tar:
@@ -1815,6 +2352,46 @@ def import_archive(path, mode="skip"):
                 shutil.copy2(f, local)
                 rep["takes"] += 1
 
+        # ── the cast ── merged by slug on the same terms as profiles: an
+        # existing slug is KEPT, never overwritten (CAST.md §8). Kept means
+        # kept whole — the local member's plates stay its plates, and an
+        # imported @ref answers to whatever this library says the name
+        # means; if that leaves a pinned plate dangling, the card's chip
+        # says so in amber rather than anything being clobbered. Files are
+        # copied only for slugs that are new, and every name is held to the
+        # same alphabets the registry's own writers use.
+        try:
+            arc_cast = json.loads((tmp / "cast.json").read_text())
+        except (OSError, ValueError):
+            arc_cast = {}
+        if isinstance(arc_cast, dict):
+            local_cast = cast()
+            added = []
+            for slug, m in arc_cast.items():
+                if (not isinstance(m, dict) or not CAST_SLUG_RE.match(str(slug))
+                        or slug in local_cast):
+                    continue
+                fn_ok = re.compile(r"^[a-z0-9_.-]{1,60}$")
+                m["plates"] = {s: p for s, p in (m.get("plates") or {}).items()
+                               if PLATE_RE.match(str(s)) and isinstance(p, dict)
+                               and fn_ok.match(str(p.get("file") or ""))}
+                m["candidates"] = [f for f in (m.get("candidates") or [])
+                                   if fn_ok.match(str(f))]
+                if not m["candidates"]:
+                    m.pop("candidates")
+                local_cast[slug] = m
+                added.append(slug)
+                src_dir = tmp / "cast" / slug
+                if src_dir.is_dir():
+                    (CAST / slug).mkdir(parents=True, exist_ok=True)
+                    for f in sorted(src_dir.iterdir()):
+                        dst = CAST / slug / f.name
+                        if f.is_file() and not dst.exists():
+                            shutil.copy2(f, dst)
+            if added:
+                save_cast(local_cast)
+                rep["cast"] = [f"@{s}" for s in added]
+
         # ── profiles ──
         local_profs = profiles()
         pmap = {}
@@ -1860,6 +2437,15 @@ def import_archive(path, mode="skip"):
                     c["clip"] = cmap.get(c["clip"], c["clip"])
                 if c.get("type") == "visual" and c.get("media"):
                     c["media"] = mmap.get(c["media"], c["media"])
+                # A renamed picture takes its history and its style
+                # references with it. Repointing only the visible one left a
+                # card whose variant menu and whose reference chips named
+                # files that had arrived under other names.
+                if c.get("gen"):
+                    c["gen"] = [mmap.get(g, g) for g in c["gen"]]
+                if c.get("ref"):
+                    rs = [mmap.get(r, r) for r in ref_list(c.get("ref"))]
+                    c["ref"] = rs if isinstance(c["ref"], list) else (rs[0] if rs else "")
                 # Only write the key back if it was there or the name actually
                 # moved. Adding an explicit "Default" to a card that never had
                 # one would mean a plain restore did not return the document it
@@ -1874,6 +2460,11 @@ def import_archive(path, mode="skip"):
             dp = doc.get("params") or {}
             if dp.get("voice"):
                 dp["voice"] = vmap.get(dp["voice"], dp["voice"])
+            # the story style's pool refs follow a renamed picture the same
+            # way a card's do; its @refs pass through untouched, as ever
+            st = doc.get("style") or {}
+            if st.get("refs"):
+                st["refs"] = [mmap.get(r, r) for r in ref_list(st["refs"])]
             new = [chunk_hash(c, doc, local_profs) if is_renderable(c) else None
                    for c in doc["chunks"]]
 
@@ -3496,7 +4087,8 @@ def _export_chunk(c):
         out["text"] = c.get("text") or ""
         out["secs"] = float(c.get("secs", 3.0))
         out["fade"] = (list(c.get("fade") or []) + [0.6, 0.6])[:2]
-    for k in ("tags", "when", "auto", "mute", "media", "mediakind", "sub", "chain"):
+    for k in ("tags", "when", "auto", "wait", "mute", "media", "mediakind",
+              "sub", "chain"):
         if c.get(k):
             out[k] = c[k]
     for k in ("tw", "twsfx"):           # 0 is a real word here: explicit off
@@ -3790,7 +4382,7 @@ def fetch_source_link(url, dest):
                            f"{getattr(ex, 'reason', None) or ex}")
 
 
-# ── the discuss agent ───────────────────────────────────────────────────
+# ── Brenda, the drama manager ───────────────────────────────────────────
 # This used to be three lines: shell out, wait three minutes, print whatever
 # came back. Now the agent has hands and a memory. It runs headless Claude
 # Code with exactly one MCP server — saga_mcp.py, which speaks this studio's
@@ -3810,7 +4402,7 @@ CHAT_IDLE_S = 300               # silence this long means wedged, not thinking
 CHAT_MAX_S = 1800               # and no single ask runs past half an hour
 
 # ── the agent's memory ──────────────────────────────────────────────────
-# What Discuss keeps between conversations, CLAUDE.md-style: one markdown
+# What Brenda keeps between conversations, CLAUDE.md-style: one markdown
 # file in the library, because it is ABOUT these stories (a key is about a
 # machine and lives in settings; the distinction is the whole filing system).
 # Two kinds of entry share it: a journal the studio writes itself after any
@@ -4166,9 +4758,12 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, (HERE / "player.js").read_bytes(),
                               "text/javascript; charset=utf-8")
         if u.path == "/api/state":
-            pcounts, ccounts, mcounts = library_counts()
+            pcounts, ccounts, mcounts, mhome = library_counts()
             return self._send(200, {
                 "projects": projects(),
+                # the shelves, and who is on them — the sidebar draws the
+                # tree from this and calls everything else Unfiled
+                "series": series_state(),
                 # with durations: the editor shows them, and a reference clip
                 # past ten seconds is worth seeing, since chatterbox reads only
                 # the first ten and the rest has never been heard
@@ -4182,8 +4777,15 @@ class H(BaseHTTPRequestHandler):
                                  for p in CLIPS.glob("*.wav")),
                                 key=lambda c: c["name"]),
                 "media": media_list(),
+                # the cast rides along whole: a registry of briefs and plate
+                # names is small next to the media list, and the tab and the
+                # board both draw straight from it
+                "cast": cast(),
                 "profiles": profiles(), "profile_counts": pcounts,
                 "clip_counts": ccounts, "media_counts": mcounts,
+                # which story knows each picture, and how — the visuals pool
+                # draws its folders from this and files nothing by hand
+                "media_home": mhome,
                 "defaults": DEFAULTS, "bake": _bake,
                 "engines": list(ENGINES), "omnivoice": ov_available(),
                 "chatterbox": cb_available(),
@@ -4304,6 +4906,7 @@ class H(BaseHTTPRequestHandler):
                     c["ready"] = True          # nothing to render, ever
                     c.setdefault("options", [])
                     c.setdefault("auto", False)
+                    c.setdefault("wait", 0)
                 else:              # silence and titles have nothing to render
                     c["ready"] = True
             return self._send(200, doc)
@@ -4393,6 +4996,20 @@ class H(BaseHTTPRequestHandler):
             # film runs to real megabytes; stream it like a book
             return self._send_file(f, MEDIA_MIME.get(f.suffix.lower(),
                                                      "application/octet-stream"))
+        if u.path == "/api/plate":
+            # a plate by member and file name. Both halves are checked against
+            # the alphabets their writers use, so this cannot walk a path.
+            slug = q.get("slug", [""])[0]
+            fn = q.get("f", [""])[0]
+            if (not CAST_SLUG_RE.match(slug)
+                    or not re.fullmatch(r"[a-z0-9_.-]{1,80}", fn)
+                    or ".." in fn):
+                return self._send(404, b"", "text/plain")
+            f = CAST / slug / fn
+            if not f.is_file():
+                return self._send(404, b"", "text/plain")
+            return self._send_file(f, MEDIA_MIME.get(f.suffix.lower(),
+                                                     "application/octet-stream"))
         if u.path == "/api/share_info":
             # the standing darkride link, if this story has one — the token
             # stays home; only the URL is anyone's business
@@ -4435,6 +5052,7 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/export_plan":
                 plan.pop("_audio", None)
                 plan.pop("_profiles", None)
+                plan.pop("_cast", None)
                 return self._send(200, plan)
             if not plan["projects"]:
                 return self._send(404, {"error": "nothing to export"})
@@ -4668,13 +5286,67 @@ class H(BaseHTTPRequestHandler):
         finally:
             Path(tmp).unlink(missing_ok=True)
 
+    def _cast_upload(self, u):
+        """A plate arriving from Finder, straight into a member's folder.
+
+        Same manners as the pool: a still is pressed to WebP on arrival, and
+        nothing is ever overwritten — a plate's file name is about to live
+        inside stored refs, so a second arrival under the same stem gets a
+        new name rather than replacing the first. The slot is named after the
+        file and is the author's to rename; the first plate a member owns
+        becomes its key, since a key of nothing serves nobody."""
+        qq = parse_qs(u.query)
+        slug = qq.get("slug", [""])[0]
+        fn = qq.get("fn", ["plate"])[0]
+        ext = Path(fn).suffix.lower()
+        if ext not in IMG_EXT:
+            return self._send(400, {"error": f"a plate is a picture — "
+                                    f"png/jpg/webp/gif, not “{ext or fn}”"})
+        if not CAST_SLUG_RE.match(slug):
+            return self._send(404, {"error": "no such cast member"})
+        fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".plate-", suffix=ext)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                self._read_body_to(f)
+            w = webp_still(Path(tmp))
+            if w:
+                Path(tmp).unlink(missing_ok=True)
+                tmp, ext = str(w), ".webp"
+            with _docmut:
+                c = cast()
+                m = c.get(slug)
+                if m is None:
+                    return self._send(404, {"error": "no such cast member"})
+                stem = (re.sub(r"[^a-z0-9_-]+", "-", Path(fn).stem.lower())
+                        .strip("-")[:40] or "plate")
+                folder = CAST / slug
+                folder.mkdir(parents=True, exist_ok=True)
+                taken = {p.stem for p in folder.iterdir() if p.is_file()}
+                fname = _free_name(taken, stem, "new") + ext
+                dest = folder / fname
+                os.replace(tmp, dest)          # same filesystem: tmp is in ROOT
+                os.chmod(dest, 0o644)          # mkstemp makes it 0600
+                plates = m.setdefault("plates", {})
+                slot = _free_name(set(plates), stem, "new")
+                plates[slot] = {"file": fname}
+                if not m.get("key"):
+                    m["key"] = slot
+                save_cast(c)
+            return self._send(200, {"ok": True, "plate": slot, "file": fname})
+        except Exception as ex:
+            return self._send(400, {"error": f"{type(ex).__name__}: {ex}"})
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+
     def do_POST(self):
         u = urlparse(self.path)
         if not self._authed():
             return self._send(401, {"error": "unauthorised"})
         if u.path == "/api/import_archive":
             return self._import_archive(u)
-        if u.path == "/api/media/upload":      # raw body, so before the JSON parse
+        if u.path == "/api/cast/upload":       # raw body, so before the JSON parse
+            return self._cast_upload(u)
+        if u.path == "/api/media/upload":      # likewise
             return self._media_upload(u)
         if u.path == "/api/clip/upload":       # likewise
             return self._clip_upload(u)
@@ -4717,11 +5389,24 @@ class H(BaseHTTPRequestHandler):
         # typing. Each thread is its own request, so parallel paintings are
         # fine; the never-overwrite rule keeps their names from colliding.
         if u.path == "/api/media/generate":
+            # when the caller says which card is painting, the style tiers
+            # above it ride along (CAST.md §5) — unless the card said no.
+            # Composed here and not in generate_media because only the doc
+            # knows its shelf and only the card knows its `nostyle`.
+            style = None
+            nm = str(d.get("name") or "")
+            if nm:
+                doc = load(nm)
+                c = (next((x for x in doc["chunks"] if x["id"] == d.get("id")),
+                          None) if doc else None)
+                if doc and not (c or {}).get("nostyle"):
+                    style = style_of(doc)
             try:
                 mname = generate_media(str(d.get("prompt") or ""),
                                        str(d.get("media") or ""),
                                        str(d.get("aspect") or ""),
-                                       d.get("ref") or "")   # name or list
+                                       d.get("ref") or "",   # name or list
+                                       style)
             except (ValueError, RuntimeError) as ex:
                 return self._send(400, {"error": str(ex)})
             return self._send(200, {"ok": True, "media": mname,
@@ -4946,7 +5631,14 @@ class H(BaseHTTPRequestHandler):
         # impact scans every project in the library to count cards, so it is
         # slow and read-only — exactly the shape that must not hold the lock
         lock = None if u.path in ("/api/chat", "/api/assemble", "/api/book_preview",
-                                  "/api/reveal", "/api/profile/impact",
+                                  "/api/reveal", "/api/open_link",
+                                  "/api/cast/reveal", "/api/cast/open",
+                                  "/api/media/open",
+                                  # a painting takes ~15s and must not block
+                                  # typing; its one registry write takes the
+                                  # lock inside cast_paint
+                                  "/api/cast/paint",
+                                  "/api/profile/impact",
                                   # slow and read-only, the same shape as
                                   # assemble — they must not block typing
                                   # (share touches only share.json and out/)
@@ -5020,6 +5712,8 @@ class H(BaseHTTPRequestHandler):
                             c["options"] = clean_options(d["options"])
                         if "auto" in d:
                             c["auto"] = bool(d["auto"])
+                        if "wait" in d:    # 0 = wait for the listener forever
+                            c["wait"] = clean_wait(d["wait"])
                         if "profile" in d:
                             c["profile"] = d["profile"]
                         if "mute" in d:
@@ -5073,6 +5767,11 @@ class H(BaseHTTPRequestHandler):
                             c["ref"] = ref_store(ref_list(d["ref"]))
                             if not c["ref"]:
                                 c.pop("ref", None)
+                        if "nostyle" in d:     # this card opts out of the tiers
+                            if d["nostyle"]:
+                                c["nostyle"] = True
+                            else:
+                                c.pop("nostyle", None)
                         if "gen" in d:
                             # the variants painted for this visual card —
                             # names into the pool, presentation bookkeeping
@@ -5144,7 +5843,7 @@ class H(BaseHTTPRequestHandler):
                 elif kind == "choice":
                     # two blank options, because a choice is usually a fork —
                     # and a chooser with one button is a button
-                    c = {"id": 0, "type": "choice", "auto": False,
+                    c = {"id": 0, "type": "choice", "auto": False, "wait": 0,
                          "options": [{"label": "", "goto": "", "set": [], "when": ""},
                                      {"label": "", "goto": "", "set": [], "when": ""}],
                          "note": ""}
@@ -5308,11 +6007,28 @@ class H(BaseHTTPRequestHandler):
                     if k in d:
                         doc[k] = bool(d[k])
                         changed = True
+                if "style" in d:
+                    # the story's picture style (CAST.md §5): a TOP-LEVEL doc
+                    # key, deliberately not a corner of params — params is
+                    # the delivery bag, and style is not delivery. It rides
+                    # with the doc through save, copy and export for free.
+                    st = d.get("style") or {}
+                    if not isinstance(st, dict):
+                        return self._send(400, {"error": "style is "
+                                                "{text, refs}"})
+                    txt = _clean(st.get("text"), 500)
+                    refs = ref_list(st.get("refs"))[:8]
+                    if txt or refs:
+                        doc["style"] = {"text": txt, "refs": refs}
+                    else:
+                        doc.pop("style", None)
+                    changed = True
                 if changed:
                     save(doc)
                 return self._send(200, {"ok": True,
                                         "typewriter": bool(doc.get("typewriter")),
-                                        "typesfx": bool(doc.get("typesfx"))})
+                                        "typesfx": bool(doc.get("typesfx")),
+                                        "style": doc.get("style")})
 
             if u.path == "/api/group":
                 doc = load(d["name"])
@@ -5688,6 +6404,59 @@ class H(BaseHTTPRequestHandler):
                                         "left": len(stack)})
 
 
+            if u.path == "/api/voice/from_card":
+                # A rendered card becomes a reference clip, and a profile to
+                # wear it. The point is the voiced card: you drive it with one
+                # performance and a character's timbre, and what comes out is
+                # a voice that never existed before — an accent that is not
+                # yours in a mouth that is. Until now the only way to keep it
+                # was to find the wav in the cache by hand.
+                doc = load(d.get("name") or "")
+                if doc is None:
+                    return self._send(404, {"error": "no such project"})
+                try:
+                    cid = int(d.get("id"))
+                except (TypeError, ValueError):
+                    return self._send(400, {"error": "which card?"})
+                c = next((x for x in doc["chunks"] if x["id"] == cid), None)
+                if c is None or not is_renderable(c):
+                    return self._send(400, {"error": "that card makes no audio"})
+                src = AUDIO / f"{chunk_hash(c, doc)}.wav"
+                if not src.exists():
+                    return self._send(400, {"error": "render this card first — "
+                                            "there is no audio to clone yet"})
+                pname = _clean(d.get("profile"), 60)
+                if not pname:
+                    return self._send(400, {"error": "a name is needed"})
+                profs = profiles()
+                if pname in profs:
+                    return self._send(400, {"error": f"there is already a "
+                                            f"profile called {pname!r}"})
+                stem = re.sub(r"[^a-z0-9_-]+", "-", pname.lower()).strip("-")[:40] or "voice"
+                VOICES.mkdir(parents=True, exist_ok=True)
+                # Never overwrite a voice: its NAME is part of every chunk hash
+                # that used it, so putting different audio behind one would
+                # change what already-rendered cards mean without changing a
+                # single hash. Same rule as import and upload.
+                taken = {q.stem for q in VOICES.iterdir() if q.is_file()}
+                vname = stem if stem not in taken else _free_name(taken, stem, "new")
+                shutil.copy2(src, VOICES / f"{vname}.wav")
+                # The new profile starts as the card's own, so the knobs that
+                # shaped it carry over; only the clip changes. Kokoro speaks
+                # presets rather than clips, so a card of that kind hands the
+                # new profile to the engine that can actually use one.
+                base = dict(profs.get(c.get("profile", "Default"))
+                            or profs.get("Default") or BASE_PROFILE)
+                base.pop("fx", None)
+                base["voices"] = [vname]
+                base["active"] = 0
+                if base.get("engine") == "kokoro":
+                    base["engine"] = "chatterbox"
+                profs[pname] = base
+                save_profiles(profs)
+                return self._send(200, {"ok": True, "profile": pname,
+                                        "voice": vname, "engine": base["engine"],
+                                        "secs": clip_secs(VOICES / f"{vname}.wav")})
             if u.path == "/api/profile/delete":
                 nm = d.get("profile")
                 if nm == "Default":
@@ -5865,6 +6634,21 @@ class H(BaseHTTPRequestHandler):
                 subprocess.run([OPEN_CMD, str(target)], check=False)
                 return self._send(200, {"ok": True, "path": str(target),
                                         "assembled": out.is_dir()})
+            if u.path == "/api/open_link":
+                # A choice option's link, opened in the author's own browser.
+                # The stage asks the server rather than calling window.open
+                # itself: the popped-out stage is a child window of the
+                # Electron shell, and a child does not inherit the handler
+                # that turns window.open into "the real browser" — so the one
+                # path that works from every stage is this one. The exported
+                # player is a web page with no server behind it and opens its
+                # own links; both go through clean_url first, so http and
+                # https are the only schemes either can reach.
+                link = clean_url(d.get("url"))
+                if not link:
+                    return self._send(400, {"error": "that is not an http link"})
+                subprocess.run([OPEN_CMD, link], check=False)
+                return self._send(200, {"ok": True})
             if u.path == "/api/rename":
                 # The title only. `name` is the folder and every path derived
                 # from it, and renaming that would move a project's audio,
@@ -5876,6 +6660,419 @@ class H(BaseHTTPRequestHandler):
                 doc["title"] = t[:120]
                 save(doc)
                 return self._send(200, {"ok": True, "title": doc["title"]})
+
+            # ── shelves ── a series is an ordered list of project names and
+            # nothing else. Every verb here writes series.json alone: no
+            # document is opened, no card is touched, no hash can move. That
+            # is deliberate, and it is what makes a shelf safe to rearrange
+            # while the story on it is open in the editor.
+            if u.path == "/api/series/new":
+                try:
+                    slug = series_new(d.get("title"))
+                except ValueError as ex:
+                    return self._send(400, {"error": str(ex)})
+                return self._send(200, {"ok": True, "slug": slug})
+            if u.path == "/api/series/edit":
+                recs = series()
+                rec = recs.get(d.get("slug") or "")
+                if rec is None:
+                    return self._send(404, {"error": "no such collection"})
+                for k, cap in (("title", 80), ("noun", 24), ("member", 24),
+                               ("blurb", 500), ("cover", 120)):
+                    if k not in d:
+                        continue
+                    v = _clean(d.get(k), cap)
+                    if not v and k in ("title", "noun", "member"):
+                        return self._send(400, {"error": f"a {k} is needed"})
+                    rec[k] = v
+                if "style" in d:
+                    # the shelf's picture style (CAST.md §5): words and refs
+                    # every card on the shelf paints under. Empty means none.
+                    st = d.get("style") or {}
+                    if not isinstance(st, dict):
+                        return self._send(400, {"error": "style is "
+                                                "{text, refs}"})
+                    txt = _clean(st.get("text"), 500)
+                    refs = ref_list(st.get("refs"))[:8]
+                    if txt or refs:
+                        rec["style"] = {"text": txt, "refs": refs}
+                    else:
+                        rec.pop("style", None)
+                save_series(recs)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/series/delete":
+                # the shelf goes, the stories do not. Nothing on disk outside
+                # series.json is even opened.
+                recs = series()
+                if recs.pop(d.get("slug") or "", None) is None:
+                    return self._send(404, {"error": "no such collection"})
+                save_series(recs)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/series/assign":
+                try:
+                    series_assign(d["name"], d.get("to") or None, d.get("at"))
+                except KeyError:
+                    return self._send(404, {"error": "no such collection"})
+                return self._send(200, {"ok": True})
+
+            # ── the cast ── every verb here writes cast.json alone (an
+            # upload adds one file under cast/<slug>/ and is handled above,
+            # before the JSON parse). No document is opened and no card is
+            # touched: the registry is a library-level thing, like a shelf.
+            # Slots may be renamed freely — a slot is a key in `plates`, and
+            # the file underneath never moves once a stored ref can name it.
+            if u.path == "/api/cast/new":
+                t = _clean(d.get("title"), 80)
+                if not t:
+                    return self._send(400, {"error": "a title is needed"})
+                c = cast()
+                slug = series_slug(t, c, fallback="member")
+                c[slug] = {"kind": _clean(d.get("kind"), 24).lower() or "character",
+                           "title": t,
+                           "brief": _clean(d.get("brief"), 500),
+                           "scope": _clean(d.get("scope"), 60),
+                           "key": "", "plates": {},
+                           "created": time.strftime("%Y-%m-%d %H:%M")}
+                save_cast(c)
+                return self._send(200, {"ok": True, "slug": slug})
+            if u.path == "/api/cast/edit":
+                c = cast()
+                m = c.get(d.get("slug") or "")
+                if m is None:
+                    return self._send(404, {"error": "no such cast member"})
+                for k, cap in (("title", 80), ("kind", 24), ("brief", 500),
+                               ("scope", 60)):
+                    if k not in d:
+                        continue
+                    v = _clean(d.get(k), cap)
+                    if not v and k == "title":
+                        return self._send(400, {"error": "a title is needed"})
+                    m[k] = v.lower() if k == "kind" else v
+                if "key" in d:
+                    v = str(d.get("key") or "")
+                    if v and v not in (m.get("plates") or {}):
+                        return self._send(400, {"error": f'no plate "{v}" '
+                                                "to be the key"})
+                    m["key"] = v
+                if "voice" in d:
+                    # engine → profile name in profiles.json. A LINK, never a
+                    # copy: a profile is engine-bound and a character is not,
+                    # which is why the map has one seat per engine.
+                    v = d.get("voice")
+                    if not isinstance(v, dict):
+                        return self._send(400, {"error": "voice is a map of "
+                                                "engine to profile"})
+                    m["voice"] = {e: _clean(v[e], 60) for e in ENGINES
+                                  if isinstance(v.get(e), str) and v[e].strip()}
+                    if not m["voice"]:
+                        m.pop("voice", None)
+                save_cast(c)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/cast/delete":
+                # the member leaves the registry; its folder and files stay
+                # on disk. Nothing in the app deletes a picture — pool law.
+                c = cast()
+                if c.pop(d.get("slug") or "", None) is None:
+                    return self._send(404, {"error": "no such cast member"})
+                save_cast(c)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/cast/plate/rename":
+                c = cast()
+                m = c.get(d.get("slug") or "")
+                if m is None:
+                    return self._send(404, {"error": "no such cast member"})
+                old = str(d.get("from") or "")
+                new = re.sub(r"[^a-z0-9_-]+", "-",
+                             str(d.get("to") or "").lower()).strip("-")[:40]
+                plates = m.get("plates") or {}
+                if old not in plates:
+                    return self._send(404, {"error": f'no plate "{old}"'})
+                if not new:
+                    return self._send(400, {"error": "a slot name is needed"})
+                if new != old and new in plates:
+                    return self._send(400, {"error": f'"{new}" is already '
+                                            "a slot here"})
+                # one key rewritten in place, order kept, no bytes touched
+                m["plates"] = {(new if k == old else k): v
+                               for k, v in plates.items()}
+                if m.get("key") == old:
+                    m["key"] = new
+                save_cast(c)
+                return self._send(200, {"ok": True, "plate": new})
+            if u.path == "/api/cast/plate/edit":
+                # look and view are labels, not addresses: free text, either
+                # may be empty, and the slot stays the only name a ref holds
+                c = cast()
+                m = c.get(d.get("slug") or "")
+                p = (m or {}).get("plates", {}).get(str(d.get("plate") or ""))
+                if p is None:
+                    return self._send(404, {"error": "no such plate"})
+                for k in ("look", "view"):
+                    if k not in d:
+                        continue
+                    v = _clean(d.get(k), 60)
+                    if v:
+                        p[k] = v
+                    else:
+                        p.pop(k, None)
+                save_cast(c)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/cast/plate/remove":
+                # unlink, never delete: the slot goes, the file stays in the
+                # member's folder as a candidate — the same law as dropping a
+                # variant from a card's shortlist, and the reason no undo
+                # machinery is needed here.
+                c = cast()
+                m = c.get(d.get("slug") or "")
+                if m is None:
+                    return self._send(404, {"error": "no such cast member"})
+                nm = str(d.get("plate") or "")
+                p = (m.get("plates") or {}).pop(nm, None)
+                if p is None:
+                    return self._send(404, {"error": f'no plate "{nm}"'})
+                if p.get("file"):
+                    cand = m.setdefault("candidates", [])
+                    if p["file"] not in cand:
+                        cand.append(p["file"])
+                if m.get("key") == nm:
+                    m["key"] = next(iter(m.get("plates") or {}), "")
+                save_cast(c)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/cast/plate/order":
+                c = cast()
+                m = c.get(d.get("slug") or "")
+                if m is None:
+                    return self._send(404, {"error": "no such cast member"})
+                plates = m.get("plates") or {}
+                want = [str(x) for x in (d.get("order") or [])
+                        if str(x) in plates]
+                # the listed slots in their new order, then anything the list
+                # missed — a stale view must not be able to drop a plate
+                m["plates"] = {k: plates[k] for k in
+                               want + [k for k in plates if k not in want]}
+                save_cast(c)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/cast/promote":
+                # §6: the gesture that was missing — a pool picture becomes
+                # canon. The file is COPIED into the member's folder and the
+                # pool copy stays: pool law untouched, and any card showing
+                # it goes on showing it. The member may be new: promotion is
+                # one of the three doors a member arrives through (§7e).
+                name = re.sub(r"[^a-z0-9_-]", "", str(d.get("media") or ""))
+                try:
+                    src = media_file(name) if name else None
+                except FileNotFoundError:
+                    src = None
+                if src is None:
+                    return self._send(404, {"error": f'no media "{name}"'})
+                if src.suffix.lower() not in IMG_EXT:
+                    return self._send(400, {"error": "only a picture can be "
+                                            "a plate — not film"})
+                c = cast()
+                slug = str(d.get("slug") or "")
+                if d.get("new_title"):
+                    t = _clean(d.get("new_title"), 80)
+                    if not t:
+                        return self._send(400, {"error": "a title is needed"})
+                    slug = series_slug(t, c, fallback="member")
+                    c[slug] = {"kind": _clean(d.get("new_kind"), 24).lower()
+                               or "character",
+                               "title": t, "brief": "",
+                               "scope": _clean(d.get("scope"), 60),
+                               "key": "", "plates": {},
+                               "created": time.strftime("%Y-%m-%d %H:%M")}
+                m = c.get(slug)
+                if m is None:
+                    return self._send(404, {"error": "no such cast member"})
+                plates = m.setdefault("plates", {})
+                want = re.sub(r"[^a-z0-9_-]+", "-",
+                              str(d.get("plate") or "").lower()).strip("-")[:40]
+                if want and want in plates:
+                    return self._send(400, {"error": f'"{want}" is already '
+                                            "a slot here"})
+                slot = want or _free_name(set(plates),
+                                          src.stem[:40] or "plate", "new")
+                folder = CAST / slug
+                folder.mkdir(parents=True, exist_ok=True)
+                taken = {p.stem for p in folder.iterdir() if p.is_file()}
+                fname = _free_name(taken, slot, "new") + src.suffix.lower()
+                shutil.copy2(src, folder / fname)
+                plates[slot] = {"file": fname}
+                if d.get("key") or not m.get("key"):
+                    m["key"] = slot
+                save_cast(c)
+                return self._send(200, {"ok": True, "slug": slug,
+                                        "plate": slot})
+            if u.path == "/api/cast/accept":
+                # a candidate chosen into a named slot: canon by decision,
+                # never by accumulation (§7c). The file does not move.
+                c = cast()
+                m = c.get(d.get("slug") or "")
+                if m is None:
+                    return self._send(404, {"error": "no such cast member"})
+                f = str(d.get("file") or "")
+                cand = m.get("candidates") or []
+                if f not in cand:
+                    return self._send(404, {"error": "no such candidate"})
+                slot = re.sub(r"[^a-z0-9_-]+", "-",
+                              str(d.get("plate") or "").lower()).strip("-")[:40]
+                if not slot:
+                    return self._send(400, {"error": "a slot name is needed"})
+                plates = m.setdefault("plates", {})
+                if slot in plates and not d.get("replace"):
+                    # occupied — the caller asks the author and comes back
+                    # with replace:true, never overwriting on a name clash
+                    return self._send(400, {"error": f'"{slot}" is already '
+                                            "a slot here — accepting again "
+                                            "replaces its picture"})
+                cand.remove(f)
+                if slot in plates:
+                    # the slot keeps its name, its look and view, and every
+                    # stored ref pointing at it; only the art changes. The
+                    # old picture steps down into the candidates row — the
+                    # never-delete law, walked backwards.
+                    old = plates[slot].get("file")
+                    if old and old != f and old not in cand:
+                        cand.append(old)
+                    plates[slot]["file"] = f
+                else:
+                    plates[slot] = {"file": f}
+                if not cand:
+                    m.pop("candidates", None)
+                if d.get("key") or not m.get("key"):
+                    m["key"] = slot
+                save_cast(c)
+                return self._send(200, {"ok": True, "plate": slot})
+            if u.path == "/api/cast/candidate/drop":
+                # off the row, not off the disk — the same law as dropping a
+                # variant from a card's shortlist
+                c = cast()
+                m = c.get(d.get("slug") or "")
+                if m is None:
+                    return self._send(404, {"error": "no such cast member"})
+                f = str(d.get("file") or "")
+                cand = m.get("candidates") or []
+                if f not in cand:
+                    return self._send(404, {"error": "no such candidate"})
+                cand.remove(f)
+                if not cand:
+                    m.pop("candidates", None)
+                save_cast(c)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/cast/dup_look":
+                # §7c: one gesture for "she becomes a cosmonaut". Every plate
+                # carrying the look is copied into a new look, and each copy
+                # points at the very file its original shows — the repaint
+                # that follows then has something to match, and accepting a
+                # repaint repoints only the copy.
+                c = cast()
+                m = c.get(d.get("slug") or "")
+                if m is None:
+                    return self._send(404, {"error": "no such cast member"})
+                look = _clean(d.get("look"), 60)
+                to = _clean(d.get("to"), 60)
+                if not to:
+                    return self._send(400, {"error": "a name for the new "
+                                            "look is needed"})
+                plates = m.setdefault("plates", {})
+                src_p = [(s, p) for s, p in plates.items()
+                         if (p.get("look") or "") == look]
+                if not src_p:
+                    return self._send(404, {"error": "no plates carry "
+                                            "that look"})
+                tos = (re.sub(r"[^a-z0-9_-]+", "-", to.lower())
+                       .strip("-")[:24] or "look")
+                made = []
+                for s, p in src_p:
+                    view = re.sub(r"[^a-z0-9_-]+", "-",
+                                  (p.get("view") or s).lower()).strip("-")
+                    ns = _free_name(set(plates),
+                                    f"{tos}-{view}"[:40].strip("-"), "new")
+                    plates[ns] = {**p, "look": to}
+                    made.append(ns)
+                save_cast(c)
+                return self._send(200, {"ok": True, "plates": made})
+            if u.path == "/api/cast/dup_member":
+                # the whole member, brief and voice bindings included (§7c).
+                # Plates live in the member's OWN folder, so the files are
+                # copied across — a slug in a path is a fence, not a label.
+                c = cast()
+                slug = str(d.get("slug") or "")
+                m = c.get(slug)
+                if m is None:
+                    return self._send(404, {"error": "no such cast member"})
+                t = f"{m.get('title') or slug} copy"[:80]
+                new = series_slug(t, c, fallback="member")
+                nm = json.loads(json.dumps(m))
+                nm["title"] = t
+                nm["created"] = time.strftime("%Y-%m-%d %H:%M")
+                files = [p.get("file") for p in (nm.get("plates") or {}).values()]
+                files += nm.get("candidates") or []
+                (CAST / new).mkdir(parents=True, exist_ok=True)
+                for fn in files:
+                    if fn and (CAST / slug / fn).is_file():
+                        shutil.copy2(CAST / slug / fn, CAST / new / fn)
+                c[new] = nm
+                save_cast(c)
+                return self._send(200, {"ok": True, "slug": new})
+            if u.path == "/api/cast/paint":
+                # slow and lockless, like /api/media/generate — cast_paint
+                # takes the lock itself for the one registry append at the end
+                try:
+                    fname = cast_paint(str(d.get("slug") or ""),
+                                       str(d.get("prompt") or ""),
+                                       str(d.get("plate") or ""),
+                                       str(d.get("stem") or ""),
+                                       str(d.get("file") or ""))
+                except (ValueError, RuntimeError) as ex:
+                    return self._send(400, {"error": str(ex)})
+                return self._send(200, {"ok": True, "file": fname})
+            if u.path == "/api/media/open":
+                # any pool picture or film, in whatever this machine opens
+                # it with — the viewer gesture the cast board taught, now
+                # answering for the pool and the visual cards too. The path
+                # is built from the pool name, never from the request.
+                nm = re.sub(r"[^a-z0-9_-]", "", str(d.get("media") or ""))
+                try:
+                    f = media_file(nm) if nm else None
+                except FileNotFoundError:
+                    f = None
+                if f is None:
+                    return self._send(404, {"error": f'no media "{nm}"'})
+                subprocess.run([OPEN_CMD, str(f)], check=False)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/cast/reveal":
+                # the member's folder in Finder — where its plates live, and
+                # the honest answer to "where did my picture go"
+                slug = str(d.get("slug") or "")
+                if not CAST_SLUG_RE.match(slug) or cast().get(slug) is None:
+                    return self._send(404, {"error": "no such cast member"})
+                folder = CAST / slug
+                if not folder.is_dir():
+                    return self._send(404, {"error": "no plates on disk yet — "
+                                            "drop a picture on the board first"})
+                subprocess.run([OPEN_CMD, str(folder)], check=False)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/cast/open":
+                # one plate or candidate, in whatever this machine opens
+                # pictures with. The file name must be one the REGISTRY
+                # holds for this member — the path is never the request's.
+                slug = str(d.get("slug") or "")
+                if not CAST_SLUG_RE.match(slug):
+                    return self._send(404, {"error": "no such cast member"})
+                m = cast().get(slug) or {}
+                p = m.get("plates", {}).get(str(d.get("plate") or ""))
+                fn = (p or {}).get("file") or ""
+                if not fn and str(d.get("file") or "") in (m.get("candidates")
+                                                          or []):
+                    fn = str(d["file"])
+                f = (CAST / slug / fn) if fn else None
+                if (f is None or not f.is_file()
+                        or not re.fullmatch(r"[a-z0-9_.-]{1,80}", fn)
+                        or ".." in fn):
+                    return self._send(404, {"error": "no file for that plate"})
+                subprocess.run([OPEN_CMD, str(f)], check=False)
+                return self._send(200, {"ok": True})
 
             # ── drafts ── the discuss agent's sandbox. A draft is an
             # ordinary project with two extra fields: `draft: true`, which is

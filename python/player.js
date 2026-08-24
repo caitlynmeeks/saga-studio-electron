@@ -54,11 +54,36 @@ const SagaPlay = (() => {
     return j
   }
 
+  // What a silence chooses. `wait` seconds on the card, and the option
+  // carrying `dflt` — or, if the story has closed that one with a condition,
+  // simply the first still open. A default that is no longer on offer is not
+  // a default, and a clock that ran out into nothing would strand the
+  // listener on a card that had already stopped asking.
+  //
+  // It lives HERE, beside the grammar, rather than in each player's chooser:
+  // the whole point of this file is that a story cannot branch one way live
+  // and another way after export, and "what happens if nobody answers" is a
+  // branch like any other. The players own the countdown you SEE; they are
+  // handed the answer.
+  function timeoutOf (open, c) {
+    const secs = Math.max(0, Math.min(600, +(c && c.wait) || 0))
+    if (!secs) return null
+    // A link with nowhere to go leaves the chooser standing (see walk), so a
+    // clock aimed at one would open that page again every N seconds until
+    // somebody stopped it. The silence may only take an option that actually
+    // moves the story.
+    const live = open.filter(o => !(o.url && !o.goto))
+    if (!live.length) return null
+    return { secs, option: live.find(o => o.dflt) || live[0] }
+  }
+
   // The walk. Both players drive it with hooks:
   //   playRun(fromId, uptoIdOrNull, fromIndex) -> Promise<boolean>
   //       speak cards [from, upto); resolve true at the natural end, false if
   //       the listener stopped the story and the walk should abandon.
-  //   ask(options, card) -> Promise<option>   render the chooser, wait.
+  //   ask(options, card, timeout) -> Promise<option>   render the chooser,
+  //       wait. `timeout` is null, or {secs, option}: show the clock and
+  //       resolve with that option if the listener says nothing in time.
   //   onEnd(reason)                           'end' | 'dangling:<tag>'
   // Muted cards are the mixdown's business, not ours: they are silent inside
   // a run and a muted choice card simply does not stop the story.
@@ -72,9 +97,17 @@ const SagaPlay = (() => {
         const live = (c.options || []).filter(o => o.label || o.goto)
         const open = live.filter(o => passes(state, o.when))
         if (!open.length) { i++; continue }
-        const o = c.auto ? open[0] : await hooks.ask(open, c)
+        const o = c.auto ? open[0] : await hooks.ask(open, c, timeoutOf(open, c))
         if (!o) return                       // the listener walked away
         applySet(state, o.set)
+        // A link with no destination is a side door, not an ending: the page
+        // opens, the chooser stays up, and the listener comes back and
+        // answers properly. It is what a sponsor or a footnote wants, and it
+        // is why an option that has a URL reads "(stay here)" in the editor
+        // where a plain one reads "(The End)". Never on an auto card: nobody
+        // pressed anything there, so nothing opened, and re-asking a question
+        // that is never asked would spin.
+        if (o.url && !o.goto && !c.auto) continue
         if (!o.goto) { hooks.onEnd('end'); return }
         const t = findTag(chunks, o.goto)
         if (t < 0) { hooks.onEnd('dangling:' + o.goto); return }
@@ -241,6 +274,7 @@ const SagaPlay = (() => {
     return { at, fi, hold, fo, end: at + fi + hold + fo, text: card.text || '' }
   }
 
-  return { applySet, passes, findTag, runEnd, walk, segments, typeCaption, captions, titlePlan }
+  return { applySet, passes, findTag, runEnd, walk, segments, timeoutOf,
+    typeCaption, captions, titlePlan }
 })()
 if (typeof module !== 'undefined') module.exports = SagaPlay

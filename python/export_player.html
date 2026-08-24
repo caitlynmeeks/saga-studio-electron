@@ -79,6 +79,20 @@ background:linear-gradient(180deg,transparent,rgba(0,0,0,.72) 45%,rgba(0,0,0,.9)
 button{background:#131a17;border:1px solid var(--line);color:var(--fg);
 border-radius:7px;padding:10px 18px;font:14px var(--mono);cursor:pointer;max-width:44ch}
 button:hover{border-color:var(--green);color:var(--green)}
+/* An option that sends you out of the story says so on its face: the arrow
+   and the host it goes to, quiet enough to ignore and specific enough to be
+   a warning. Nobody should leave a story for a browser tab by surprise. */
+#chooser .ext{font-size:11px;color:var(--dim);margin-left:7px;white-space:nowrap}
+#chooser button:hover .ext{color:var(--green)}
+/* the option the clock will take, when a choice has one */
+#chooser button.dflt{border-color:#4a3d22}
+/* And the clock itself: a line that drains, not a number. A number is
+   something to read; this is something to notice out of the corner of an eye
+   while you are still deciding. */
+.cdown{flex-basis:100%;height:2px;background:var(--line);border-radius:2px;overflow:hidden}
+.cdown i{display:block;height:100%;background:var(--amber);opacity:.6}
+@keyframes cdrain{from{width:100%}to{width:0}}
+@media(prefers-reduced-motion:reduce){.cdown i{animation:none!important;width:100%}}
 /* The bar floats over the room instead of owning a layout row: the picture
    keeps the whole viewport, and the knobs sleep while the story plays.
    Opacity, not display, so the room never resizes and the fade is calm.
@@ -303,7 +317,7 @@ async function story(){
   CAPST={txt:'',chain:false}; CAPQ=[]; CAPI=-1;   // a fresh ride, a fresh block
   await SagaPlay.walk(CH,{
     playRun:(from,upto)=>playChain(tok,from,upto),
-    ask:opts=>ask(tok,opts),
+    ask:(opts,c,to)=>ask(tok,opts,to),
     onEnd:r=>{ if(tok===TOKEN)ended(r); },
   },{},0);
 }
@@ -340,21 +354,43 @@ function playOne(tok,seg){
     $('playb').textContent='⏸ pause';
   });
 }
-function ask(tok,opts){
+// The host a link goes to, which is the whole of the warning:
+// "amalgamated.example" tells a listener what they are about to open in a way
+// the full URL does not.
+const linkHost=u=>{ try{ return new URL(u,location.href).host.replace(/^www\./,''); }
+  catch(e){ return 'a web page'; } };
+let CLOCK=null;
+function ask(tok,opts,to){
   return new Promise(res=>{
     if(tok!==TOKEN)return res(null);
     CAPST={txt:'',chain:false};           // a choice breaks the chain
     $('playb').textContent='▶ play';
     barLit();                             // a stop: the knobs come back
     const ch=$('chooser');
-    ch.innerHTML=opts.map((o,i)=>`<button data-i="${i}">${esc(o.label)||'…'}</button>`).join('');
+    const di=to?opts.indexOf(to.option):-1;
+    ch.innerHTML=opts.map((o,i)=>{
+      const u=o.url||'';
+      return `<button data-i="${i}"${i===di?' class="dflt"':''}`+
+        (u?` title="opens ${esc(linkHost(u))} in a new tab"`:'')+
+        `>${esc(o.label)||'…'}${u?` <span class="ext">↗ ${esc(linkHost(u))}</span>`:''}</button>`;
+    }).join('')+(to?`<div class="cdown"><i style="animation:cdrain ${to.secs}s linear forwards"></i></div>`:'');
     ch.classList.add('on'); $('room').classList.add('choosing');
-    ch.onclick=e=>{ const b=e.target.closest('button'); if(!b)return;
-      hideChooser(); res(tok===TOKEN?opts[+b.dataset.i]:null); };
-    ASKOFF=()=>res(null);
+    let done=false;
+    const fin=o=>{ if(done)return; done=true; hideChooser(); res(tok===TOKEN?o:null); };
+    // A pressed option opens its page — in a tab of its own, with no handle
+    // back on this window. A clock that ran out does NOT: sending somebody's
+    // browser somewhere because they said nothing is not a thing a story
+    // gets to do.
+    ch.onclick=e=>{ const b=e.target.closest('button[data-i]'); if(!b)return;
+      const o=opts[+b.dataset.i]; if(!o)return;
+      if(o.url)window.open(o.url,'_blank','noopener,noreferrer');
+      fin(o); };
+    if(to)CLOCK=setTimeout(()=>fin(to.option),to.secs*1000);
+    ASKOFF=()=>{ done=true; res(null); };
   });
 }
 function hideChooser(){ const ch=$('chooser');
+  clearTimeout(CLOCK); CLOCK=null;      // no clock outlives the question it ran on
   ch.classList.remove('on'); ch.onclick=null; $('room').classList.remove('choosing'); ASKOFF=null; }
 function ended(){
   $('playb').textContent='▶ play';

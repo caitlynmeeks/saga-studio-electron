@@ -83,7 +83,7 @@ def card_view(c):
         "silence": ("secs",),
         "visual": ("media", "ref", "note", "tags", "when"),
         "title": ("text", "secs", "fade", "tags", "when"),
-        "choice": ("options", "auto", "tags", "when"),
+        "choice": ("options", "auto", "wait", "tags", "when"),
         "group": ("gname", "tags"),
     }.get(kind, ("text",))
     for k in keep:
@@ -169,7 +169,7 @@ def t_create_story(a):
 
 
 EDIT_FIELDS = ("text", "note", "tags", "sub", "label", "when", "runon",
-               "mute", "profile", "options", "auto", "params", "seed",
+               "mute", "profile", "options", "auto", "wait", "params", "seed",
                "clip", "media", "ref", "mode", "after", "gain", "fade",
                "secs", "chain", "tw", "twsfx")
 
@@ -354,10 +354,16 @@ CARD_FIELD_PROPS = {
     "mute": BOOL,
     "options": {"type": "array", "description":
                 "choice options: {label, goto (a tag; empty ends the story), "
-                "set (list like ['brave','!x','coins+1']), when}",
+                "set (list like ['brave','!x','coins+1']), when, "
+                "url (an http/https page the option opens in the listener's "
+                "browser; with no goto the chooser stays up instead of "
+                "ending), dflt (this option is taken when the card's wait "
+                "runs out — at most one per card)}",
                 "items": {"type": "object"}},
     "auto": {**BOOL, "description": "choice takes the first passing option "
              "silently — if/else in a card"},
+    "wait": {**NUM, "description": "seconds a choice waits before taking its "
+             "dflt option; 0 waits for the listener forever"},
     "params": {"type": "object", "description":
                "per-card delivery overrides incl. engine"},
     "clip": {**STR, "description": "audio-card clip name"},

@@ -41,6 +41,7 @@ aside .pane{overflow-y:auto;padding:12px;min-height:0;display:none}
 body[data-side=stories] #sideStories,
 body[data-side=voices] #sideVoices,
 body[data-side=clips] #sideClips,
+body[data-side=cast] #sideCast,
 body[data-side=publish] #sidePublish,
 body[data-side=settings] #sideSettings{display:block}
 /* the settings tab's little forms: label above field, quiet and narrow */
@@ -50,7 +51,7 @@ body[data-side=settings] #sideSettings{display:block}
 .stlab .approw input{margin-top:0;flex:1;min-width:0}
 /* The right column is an inspector: what it shows belongs to whatever is
    selected, and it is wider than the sidebar, which the profile editor had
-   outgrown. Discuss shares it as a second tab rather than a second column —
+   outgrown. The Drama Manager shares it as a second tab, not a second column,
    three panels of chrome around one column of cards is more frame than
    picture. */
 #right{border-left:1px solid var(--line);display:grid;
@@ -71,6 +72,26 @@ body[data-tab=chat] #chat{display:flex;flex-direction:column}
    flex parent growing past the viewport. */
 #center{display:flex;flex-direction:column;min-height:0}
 #frbar{flex:none;padding:8px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+/* The cast list above the stack: every voice this episode uses, with its
+   tally, and one click to see only those cards. It earns its line of the
+   window only when there is a choice to make, so a single-voice story never
+   sees it. */
+#vfbar{flex:none;display:flex;gap:5px;align-items:center;flex-wrap:wrap;
+padding:5px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+#vfbar[hidden]{display:none}
+.vchip{border:1px solid var(--line);background:none;box-shadow:none;
+border-radius:99px;padding:1px 9px;font-size:10.5px;line-height:17px;color:var(--dim)}
+.vchip i{font-style:normal;color:var(--faint);margin-left:4px}
+.vchip:hover{border-color:var(--amber);color:var(--amber)}
+.vchip.on{border-color:var(--amber);color:var(--amber);background:#1b1710}
+.vchip.on i{color:var(--amber)}
+/* A filtered-out card is hidden, not removed: bindDrag numbers the insert
+   strips by where they sit in the document, so a strip that vanished would
+   shift every drop slot after it. Same bargain a folded group strikes.
+   The strips, the indents and the group bars each set a display of their
+   own further down this sheet, and a bare .vhide only ties with them — so
+   it is spelled out against each one rather than left to source order. */
+.vhide,.ins.vhide,.gmem.vhide,.gbar.vhide{display:none}
 /* overflow-anchor:none — the browser's scroll anchoring picks a node to hold
    steady and then compensates as the cards around it grow. renderDoc() brings
    every card back at its CSS height and fitAll() grows them all a moment
@@ -102,6 +123,67 @@ color:var(--faint);cursor:pointer;transition:.15s;font-size:12.5px}
 .proj .meta{font-size:11px;color:var(--faint)}
 .bar{height:3px;background:var(--line);border-radius:2px;margin-top:4px;overflow:hidden}
 .bar i{display:block;height:100%;background:var(--green)}
+/* ── shelves ──────────────────────────────────────────────────────────
+   A series bar in the sidebar is the same idea as a group bar in the card
+   stack: a name, a fold, and a drop target that means "in here". The rows
+   under it are ordinary .proj rows — a story on a shelf is not a different
+   kind of story, it is the same story with somebody's reading order around
+   it. Which is why the whole tree disappears the moment there are no
+   shelves, leaving the flat list exactly as it always was. */
+.sbar{display:flex;gap:6px;align-items:center;padding:5px 8px;border-radius:6px;
+  background:var(--chrome);margin:8px 0 3px;cursor:pointer;font-size:12.5px}
+.sbar b{color:var(--bright)}
+.sbar .fold{color:var(--faint);width:9px;flex:none}
+.sbar.hot,.sdrop.hot{outline:2px solid var(--green);outline-offset:-2px}
+/* Unfiled is a label, not a shelf: nothing folds, nothing exports */
+.sbar.unf{background:none;padding:5px 2px;cursor:default;margin-top:14px}
+.smem.in{margin-left:9px;padding-left:6px;padding-bottom:5px;
+  border-left:1px solid var(--line)}
+.sdrop{font-size:11px;color:var(--faint);padding:7px 8px;text-align:center;
+  border:1px dashed var(--line);border-radius:6px;margin-bottom:2px}
+/* ONE drop indicator, and it sits in the gap rather than on a row.
+   The first version marked the row instead, above or below depending on which
+   half you were over — which drew two different bars, on two different rows,
+   for one and the same landing place, and left you guessing which row a bar
+   belonged to. A line between two rows can only mean the one thing. (The card
+   stack keeps its two-sided marks on purpose: there a drop above or below a
+   card can also mean stepping in or out of a group's indent, so the two are
+   genuinely different landings. Here there is no indent to cross.)
+   pointer-events:none is load bearing: the bar lands where you are aiming,
+   so it must never become the thing under the cursor. */
+#projects{position:relative}
+.dropline{position:absolute;left:0;right:0;height:3px;border-radius:2px;
+  background:var(--green);pointer-events:none;z-index:3}
+/* Unfiled keeps no order of its own, so it is lit whole rather than aimed at */
+.smem.hot{outline:1px dashed var(--green);outline-offset:3px;border-radius:6px}
+/* the visuals pool wears the same bar as a shelf, plus a fold for the
+   variants a picture generated and did not keep. Indented to the thumbnail's
+   width so a variant reads as a version of the row above it, not a sibling. */
+.vfold{font-size:11px;color:var(--faint);cursor:pointer;padding:1px 8px 5px 50px}
+.vfold:hover{color:var(--fg)}
+.vkids{margin-left:24px;padding-left:6px;border-left:1px solid var(--line)}
+/* one filter box per list */
+.qry{width:100%;font-size:11.5px;padding:3px 7px;margin-bottom:5px}
+/* The app's own confirm. The native one cannot hold a checkbox, and a
+   question asked once per card is one worth answering once per session. */
+#askwrap{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:60;
+  display:flex;align-items:center;justify-content:center}
+#askwrap[hidden]{display:none}
+#askbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:16px 18px;width:min(420px,90vw);box-shadow:0 18px 50px rgba(0,0,0,.55)}
+#asktext{white-space:pre-line;line-height:1.5}
+#askagain{display:block;margin-top:14px;font-size:12px;color:var(--dim);
+  cursor:pointer;user-select:none}
+#askagain input{margin-right:6px;vertical-align:-1px}
+.askrow{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+/* a story in flight: every shelf it could land on should show itself.
+   Outline rather than border, because a border would nudge the whole list
+   sideways the instant a drag began. */
+body[data-dropproj="1"] .sbar,body[data-dropproj="1"] .sdrop{
+  outline:1px dashed var(--line);outline-offset:-1px}
+/* the shelf maker and the sort buttons share one row */
+#projsort{display:flex;align-items:center;gap:6px}
+#projsort .sortbar{flex:1;margin-bottom:0}
 .chunk{border:1px solid var(--line);border-radius:7px;margin-bottom:9px;background:#0e1211}
 .chunk.sel{border-color:var(--green)}
 /* The card you are working in. Amber, not green: green already means "this is
@@ -156,7 +238,7 @@ input[type=number]{width:62px}
   border-radius:5px;padding:2px 7px;margin:5px 0;white-space:normal;
   overflow-wrap:anywhere}
 #log .tchip.warn{color:var(--amber);border-color:#5c4a26}
-/* first-run cards: what Discuss needs and how to get it, in place of an
+/* first-run cards: what Brenda needs and how to get it, in place of an
    error nobody asked for */
 #log .setup{border:1px solid var(--line);border-radius:7px;padding:9px 11px;
   margin:6px 0;color:var(--fg);white-space:normal;line-height:1.55}
@@ -164,14 +246,70 @@ input[type=number]{width:62px}
 #log .setup a{color:var(--amber);cursor:pointer}
 #log .setup .cpy{cursor:pointer;color:var(--dim);border:1px solid var(--line);
   border-radius:4px;padding:0 5px;font-size:10.5px;margin-left:5px}
-/* a draft is Claude's sandbox: this bar is where the author disposes of what
-   the agent proposed */
+/* a draft is Brenda's sandbox: this bar is where the author disposes of what
+   she proposed */
 #draftbar{display:flex;gap:8px;align-items:center;padding:7px 12px;
   font-size:12.5px;color:var(--amber);background:#161206;
   border-bottom:1px solid #5c4a26}
 #draftbar[hidden]{display:none}
 .draftb{font-size:10px;color:var(--amber);border:1px solid #5c4a26;
   border-radius:4px;padding:0 5px;margin-left:6px;vertical-align:1px}
+/* ── the cast board ── a mode over the deck, not a place (CAST.md §7b):
+   body[data-mode=cast] swaps the card stack for one member's plates, with a
+   bar over it the way the draft bar sits over a draft. The stage dock is
+   untouched — a render set going keeps playing under the board. The doc's
+   own bars step aside with the deck: they are about cards, and no cards
+   are showing. */
+#castbar{display:none;gap:8px;align-items:center;padding:7px 12px;flex:none;
+  font-size:12.5px;color:var(--green);background:#0e1611;
+  border-bottom:1px solid #274b31}
+body[data-mode=cast] #castbar{display:flex}
+#castboard{display:none;flex:1;min-height:0;overflow-y:auto;padding:14px 18px}
+body[data-mode=cast] #castboard{display:block}
+body[data-mode=cast] #main,body[data-mode=cast] #frbar,
+body[data-mode=cast] #draftbar,body[data-mode=cast] #vfbar{display:none}
+#castboard .bhead,#castboard .bwrap{max-width:860px;margin:0 auto}
+/* each look gets its own shelf of plates; a tile is the picture with its
+   slot name under it, and the key wears the star */
+.lookbar{display:flex;gap:8px;align-items:baseline;margin:18px 0 8px;
+  border-bottom:1px solid var(--line);padding-bottom:4px}
+.lookbar b{color:var(--bright);font-size:12px}
+.plategrid{display:flex;flex-wrap:wrap;gap:10px}
+.plate{width:150px;border:1px solid var(--line);border-radius:8px;
+  overflow:hidden;cursor:grab;background:var(--panel)}
+.plate img{width:100%;height:104px;object-fit:cover;display:block}
+.plate .pcap{display:flex;gap:4px;align-items:center;padding:3px 7px 2px;
+  font-size:11px}
+.plate .pcap .star{color:var(--amber)}
+.plate .pview{font-size:10px;color:var(--faint);padding:0 7px 4px}
+.plate.key{border-color:#4a3d22}
+.plate.dragging{opacity:.4}
+.plate.hot{outline:2px solid var(--green);outline-offset:-2px}
+/* a candidate: painted or unlinked, waiting to be chosen — dashed because
+   it is not canon, amber-capped so the row reads at a glance */
+.plate.cand{border-style:dashed;cursor:pointer}
+.plate.cand .pcap{color:var(--amber)}
+#castdrop{border:1.5px dashed var(--line);border-radius:8px;padding:18px 10px;
+  text-align:center;color:var(--faint);cursor:pointer;font-size:12px;
+  margin:16px 0 6px}
+#castdrop.hot{border-color:var(--green);color:var(--green);background:#131a17}
+/* the reference picker: the flat <select> grown into a thumbnail grid,
+   cast members first, then the raw pool for what the cast does not cover */
+.ctx.refpick{width:340px;max-height:420px;overflow-y:auto;padding:6px}
+.refpick .rphead{font-size:10.5px;color:var(--dim);text-transform:uppercase;
+  letter-spacing:.08em;margin:8px 4px 3px}
+.refpick .rcell{display:flex;gap:7px;align-items:center;padding:3px 6px;
+  border-radius:5px;cursor:pointer;font-size:12px}
+.refpick .rcell:hover{background:var(--panel);color:var(--bright)}
+.refpick .rcell img{width:44px;height:30px;object-fit:cover;border-radius:4px;
+  flex:none}
+.refpick .rcell span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.refpick .rcell .star{color:var(--amber);flex:none}
+/* a reference chip whose target has gone — visible, never silent */
+.refchip.broken{color:var(--amber);border-color:var(--amber)}
+/* a cast row mid-drag lights the visual cards it may land on */
+.chunk.reftgt{outline:1px dashed var(--green);outline-offset:2px}
+.chunk.refhot{outline:2px solid var(--green);outline-offset:2px}
 #ask{width:100%;height:64px;resize:vertical}
 .pill{font-size:10.5px;border:1px solid var(--line);border-radius:99px;padding:1px 7px;color:var(--faint)}
 /* Tag chips live in the card head. Quiet by default — a tag is a label until a
@@ -186,15 +324,32 @@ color:var(--dim);white-space:nowrap}
 .tagin{width:92px;font-size:11px;padding:0 6px;border-radius:99px}
 .tag.whenc{color:var(--amber);border-color:#4a3d22;cursor:pointer}
 /* a choice card's option rows: what the listener sees, where it goes, what it
-   sets, and when it is offered at all */
-.opt{display:flex;gap:6px;align-items:center;padding:5px 9px;border-bottom:1px solid var(--line)}
+   sets, when it is offered at all, and the page it opens. Six fields is more
+   than one line of a narrow pane holds, so the row wraps rather than crushing
+   the label everything else is about. */
+.opt{display:flex;gap:6px;align-items:center;flex-wrap:wrap;
+padding:5px 9px;border-bottom:1px solid var(--line)}
 .opt .olabel{flex:2;min-width:90px}
 .opt .oscript{flex:1;min-width:70px;font-size:11px;color:var(--dim)}
+.opt .ourl{flex:1.6;min-width:130px;font-size:11px;color:var(--dim)}
+.opt .ourl:not(:placeholder-shown){color:var(--amber)}
 .opt select{max-width:150px;font-size:11px}
+/* the option the card's clock takes when nobody answers — lit only when a
+   clock is actually running, because a default with no timeout behind it is
+   a mark that means nothing */
+.opt .odflt.on{color:var(--amber);border-color:#4a3d22}
+.opt .odflt.on.idle{color:var(--faint);border-color:transparent}
+.opt.isdflt{box-shadow:inset 2px 0 0 #4a3d22}
 /* what the stage shows, when it differs from what is spoken */
 .subrow input{flex:1;color:var(--bright)}
 /* a collapsed card: the header bar carries the whole identity */
 .chunk.min{background:#101413}
+/* and part of that identity is who is speaking — the dropdown that would say
+   so is inside the card you just closed, so the voice rides ahead of the words */
+.vpill{border:1px solid var(--line);background:none;box-shadow:none;
+border-radius:4px;padding:0 5px;font-size:10px;line-height:16px;color:var(--dim);
+white-space:nowrap;max-width:22ch;overflow:hidden;text-overflow:ellipsis;flex:none}
+.vpill:hover{border-color:var(--amber);color:var(--amber)}
 /* a group's bar — fold, name, drag-handle for the whole run */
 .gbar{display:flex;gap:8px;align-items:center;padding:5px 10px;margin:2px 0 7px;
 border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:6px;
@@ -209,7 +364,11 @@ background:#14120d;cursor:grab;font-size:12px}
 .gfold,.ins.gfold{display:none}
 .cardname{color:var(--bright);overflow:hidden;text-overflow:ellipsis;
 white-space:nowrap;max-width:42ch}
-button.tiny{padding:0 5px;font-size:12px;line-height:17px;border-color:transparent;color:var(--faint)}
+/* resting tiny buttons used to wear --faint with no border — the disabled
+   costume — and were read as greyed out. --dim text and a quiet standing
+   border keep them modest but legibly PRESSABLE; --faint now means only
+   "actually disabled". */
+button.tiny{padding:0 5px;font-size:12px;line-height:17px;border-color:var(--line);color:var(--dim)}
 .proj:hover button.tiny{border-color:var(--line)}
 /* same bargain in a card header: invisible until the card is under the mouse,
    so the row reads as text and not as a strip of controls */
@@ -262,7 +421,7 @@ width:13px;height:13px;border-radius:50%;background:var(--green);border:none;mar
 border-radius:50%;background:var(--green);border:none;cursor:ew-resize}
 /* the two orders a list can be in */
 .sortbar{display:flex;gap:3px;justify-content:flex-end;margin-bottom:6px}
-.sortbar button{border:0;background:none;color:var(--faint);font-size:10.5px;
+.sortbar button{border:0;background:none;color:var(--dim);font-size:10.5px;
 padding:1px 6px;border-radius:99px}
 .sortbar button:hover{color:var(--fg)}
 .sortbar button.on{background:var(--chrome);color:var(--bright)}
@@ -346,19 +505,19 @@ color:var(--fg);font-size:11px}
 .prev,.mvrow{display:flex;gap:6px;align-items:center;font-size:11px;flex-wrap:wrap}
 .prev .mut{flex:1}
 .mvrow select{max-width:110px}
-/* The discuss panel is off by default and the third column simply stops
+/* The Drama Manager panel is off by default and the third column simply stops
    existing — collapsing it rather than hiding it is what gives the width back
    to the cards, which is the column you actually read. */
 body[data-panel=off]{grid-template-columns:var(--sidew,270px) 1fr}
 body[data-panel=off] #right{display:none}
-/* "send this as context" only means something while discuss is the visible tab */
+/* "send this as context" only means something while Brenda is the visible tab */
 body:not([data-tab=chat]) .dchk,body[data-panel=off] .dchk{display:none}
 #chatb.on,#frb.on,#dockb.on,#followb.on{border-color:var(--green);color:var(--green)}
 /* take stepper: which roll of the dice this card is speaking */
 .take{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--line);
   border-radius:5px;padding:0 2px;margin-left:2px}
 .take .n{font-size:10.5px;color:var(--dim);padding:0 2px;min-width:44px;text-align:center}
-.take button{border:0;padding:0 4px;line-height:17px;font-size:12px;color:var(--faint);background:none}
+.take button{border:0;padding:0 4px;line-height:17px;font-size:12px;color:var(--dim);background:none}
 .take button:hover:not(:disabled){color:var(--green)}
 /* the stage's engine room: the embedded player, mounted but never shown —
    it owns the sound (same-origin autoplay); the visible stage is a window */
@@ -382,7 +541,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 <header>
   <b>SAGA STUDIO</b>
   <span class="mut" id="hdr">no project</span>
-  <button class="tiny" onclick="toggleStoryPanel()" title="story settings — title, typewriter, typing sound">⚙</button>
+  <button class="tiny" onclick="toggleStoryPanel()" title="stack settings — title, typewriter, typing sound, picture style">⚙</button>
   <span style="flex:1"></span>
   <span class="pill warn" id="busy"></span>
   <span class="pill" id="model">model: cold</span>
@@ -397,7 +556,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 </header>
 
 <div id="storypanel" hidden>
-  <h3>story settings</h3>
+  <h3>stack settings</h3>
   <div class="srow"><label>title</label>
     <input id="st_title" onchange="storyRename(this.value)"></div>
   <div class="srow"><label>typewriter</label>
@@ -408,32 +567,55 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
       <option value="0">off</option><option value="1">on</option></select></div>
   <div class="mut" style="font-size:10.5px;margin-bottom:8px">how captions arrive, on the stage
     and in the exported story — any card can override both on its subtitle row</div>
+  <div class="srow"><label>picture style</label>
+    <input id="st_stx" placeholder="words every paint leads with — night and rain…"
+      onchange="storyStyleSave()"></div>
+  <div class="srow"><label>style refs</label>
+    <input id="st_srefs" placeholder="@adventure-time/board … (space-separated)"
+      onchange="storyStyleSave()"></div>
+  <div class="mut" style="font-size:10.5px;margin-bottom:8px">this stack's tier of the
+    picture style. Its collection has a tier underneath (right-click the
+    collection), every visual card shows what it wears on its paint row, and
+    any card can switch style off there</div>
   <div style="display:flex"><span style="flex:1"></span>
     <button class="tiny" onclick="toggleStoryPanel()">Close</button></div>
 </div>
 
 <aside>
  <div id="stabs">
-   <button id="sbStories" onclick="setSide('stories')">Stories</button>
+   <button id="sbStories" onclick="setSide('stories')">Stacks</button>
    <button id="sbVoices" onclick="setSide('voices')">Voices</button>
    <button id="sbClips" onclick="setSide('clips')">Media</button>
+   <button id="sbCast" onclick="setSide('cast')">Cast</button>
    <button id="sbPublish" onclick="setSide('publish')">Publish</button>
    <button id="sbSettings" onclick="setSide('settings')" title="Editor settings"
      style="margin-left:auto;padding:3px 7px 5px">⚙</button>
  </div>
  <div class="pane" id="sideStories">
-  <h2>Stories</h2>
-  <button class="pri" onclick="newStoryPanel()" style="width:100%"
-    title="Start a story — empty, or from a markdown file">+ New Story</button>
+  <h2>Stacks</h2>
+  <!-- a stack is a stack of cards, HyperCard's own word for it; a collection
+       keeps stacks in reading order. Two peer verbs, side by side — the
+       collection maker used to hide in the sort bar dressed as a view
+       control, and read as disabled. -->
+  <div style="display:flex;gap:5px">
+    <button class="pri" onclick="newStoryPanel()" style="flex:1"
+      title="Start a stack — empty, or from a markdown file">+ New Stack</button>
+    <button onclick="newSeries(event)"
+      title="a collection to keep stacks in. The order you put them in is the order they are read.">+ Collection</button>
+  </div>
   <div id="newstory" hidden style="margin-top:8px;border:1px solid var(--line);border-radius:7px;padding:10px">
-    <input id="ns_title" placeholder="Story title…" style="width:100%"
+    <input id="ns_title" placeholder="Stack title…" style="width:100%"
       onkeydown="if(event.key==='Enter')createStory()">
-    <button class="pri" onclick="createStory()" style="width:100%;margin-top:6px">Create Empty Story</button>
+    <label class="stlab">into
+      <select id="ns_into"></select></label>
+    <button class="pri" onclick="createStory()" style="width:100%;margin-top:6px">Create Empty Stack</button>
     <div class="mut" style="text-align:center;margin:6px 0;font-size:11px">— or —</div>
     <div id="drop">Drop .md or .sagaproj here<br><span style="font-size:11px">or click to choose</span></div>
   </div>
   <input type="file" id="file" accept=".md,.markdown,.txt,.sagaproj" multiple hidden>
-  <div id="projsort" style="margin-top:12px"></div>
+  <input class="qry" id="qprojects" placeholder="filter stacks…"
+    style="margin-top:12px" oninput="setQry('projects')">
+  <div id="projsort"></div>
   <div id="projects"></div>
 
   <h2 style="margin-top:18px">Backup &amp; Transfer</h2>
@@ -465,11 +647,17 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 
  <div class="pane" id="sideVoices">
   <h2>Voice Profiles</h2>
-  <div id="profiles"></div>
-  <div style="display:flex;gap:5px;margin-top:7px">
-    <input id="newprof" placeholder="new profile name" style="flex:1">
-    <button onclick="addProfile()">+</button>
+  <button class="pri" onclick="newProfilePanel()" style="width:100%"
+    title="a character: one reference clip, and how it is spoken">+ New Profile</button>
+  <div id="newprofpanel" hidden style="margin-top:8px;border:1px solid var(--line);border-radius:7px;padding:10px">
+    <input id="newprof" placeholder="character name…" style="width:100%"
+      onkeydown="if(event.key==='Enter')addProfile()">
+    <button class="pri" onclick="addProfile()" style="width:100%;margin-top:6px">Create Profile</button>
+    <div class="mut" style="font-size:11px;margin-top:7px">It arrives with no
+      voice. Drop a .wav on it, or choose one you already have.</div>
   </div>
+  <input class="qry" id="qprofiles" placeholder="filter profiles…" oninput="setQry('profiles')">
+  <div id="profiles"></div>
 
   <h2 style="margin-top:18px">Voice Engines</h2>
   <div class="mut" style="font-size:11px">Who can speak. Kokoro comes with the
@@ -481,7 +669,9 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
  <div class="pane" id="sideClips">
   <h2>Audio Clips</h2>
   <div class="mut" style="font-size:11px;margin-bottom:8px">Music and sound
-    effects, shared by every episode. Click one to hear it.</div>
+    effects, shared by every episode. ▶ plays one and stops it again;
+    double-click opens it in your audio editor.</div>
+  <input class="qry" id="qclips" placeholder="filter clips…" oninput="setQry('clips')">
   <div id="clipsort"></div>
   <div id="clips"></div>
   <div style="display:flex;gap:5px;margin-top:8px">
@@ -490,7 +680,9 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 
   <h2 style="margin-top:18px">visuals</h2>
   <div class="mut" style="font-size:11px;margin-bottom:8px">Pictures and film
-    for the stage, shared like clips. Drag one into the episode.</div>
+    for the stage, shared like clips. Drag one into the episode;
+    double-click to open it in your viewer.</div>
+  <input class="qry" id="qmedia" placeholder="filter pictures…" oninput="setQry('media')">
   <div id="mediasort"></div>
   <div id="media"></div>
   <div style="display:flex;gap:5px;margin-top:8px">
@@ -500,6 +692,29 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
   </div>
   <input type="file" id="mediafile" hidden
     accept="image/*,video/*,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov">
+ </div>
+
+ <div class="pane" id="sideCast">
+  <h2>Cast</h2>
+  <div class="mut" style="font-size:11px;margin-bottom:8px">Characters, places,
+    props and styles the pictures hold to. Open one to arrange its reference
+    plates.</div>
+  <button class="pri" onclick="newMemberPanel()" style="width:100%"
+    title="a thing the library knows by name — its pictures stop drifting because they are all painted against the same plates">+ New Member</button>
+  <div id="newmember" hidden style="margin-top:8px;border:1px solid var(--line);border-radius:7px;padding:10px">
+    <input id="nm_title" placeholder="e.g. Maisie Ardilla…" style="width:100%"
+      onkeydown="if(event.key==='Enter')createMember()">
+    <input id="nm_kind" list="kindlist" placeholder="kind — character, location, prop, style…"
+      style="width:100%;margin-top:6px" onkeydown="if(event.key==='Enter')createMember()">
+    <datalist id="kindlist"></datalist>
+    <button class="pri" onclick="createMember()" style="width:100%;margin-top:6px">Create</button>
+  </div>
+  <input class="qry" id="qcast" placeholder="filter the cast…"
+    style="margin-top:12px" oninput="setQry('cast')">
+  <label class="mut" style="font-size:11px;display:block;margin:4px 0 6px"
+    title="a member's scope decides where it is SHOWN, never which one a ref finds">
+    <input type="checkbox" id="castall" onchange="renderCast()"> every scope, not just this collection's</label>
+  <div id="cast"></div>
  </div>
 
  <div class="pane" id="sidePublish">
@@ -513,9 +728,9 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
     machine. Keys are kept outside the library, so an exported story pack
     never carries one.</div>
 
-  <h2>Discuss</h2>
-  <div class="mut" style="font-size:11px;margin-bottom:2px">The model behind
-    the Discuss panel.</div>
+  <h2>Drama Manager</h2>
+  <div class="mut" style="font-size:11px;margin-bottom:2px">The model Brenda
+    thinks with. She is herself whichever one you pick.</div>
   <label class="stlab">Provider
     <select id="st_llm_p" onchange="settingsVis();saveSettings()">
       <option value="claude">Claude (Claude Code sign-in)</option>
@@ -537,7 +752,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 
   <h2 style="margin-top:18px">Illustration</h2>
   <div class="mut" style="font-size:11px;margin-bottom:2px">Who paints when a
-    visual card asks to be painted, here and in Discuss.</div>
+    visual card asks to be painted, here and when Brenda paints.</div>
   <label class="stlab">Provider
     <select id="st_img_p" onchange="settingsVis();saveSettings()">
       <option value="nanobanana">Nanobanana (Gemini)</option>
@@ -596,7 +811,10 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 <div id="center">
   <div id="frbar" hidden></div>
   <div id="draftbar" hidden></div>
+  <div id="vfbar" hidden></div>
+  <div id="castbar"></div>
   <main id="main"><p class="mut">Drop a markdown file on the left to begin.</p></main>
+  <div id="castboard"></div>
   <!-- The stage's engine room, permanently hidden. A same-origin iframe
        inherits the editor's clicks for the autoplay permission, so the
        SOUND lives here and always has; display:none does not stop an
@@ -610,7 +828,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 <div id="right">
  <div id="rtabs">
    <button id="tabInspect" onclick="setTab('inspect')">Inspector</button>
-   <button id="tabChat" onclick="setTab('chat')">Discuss</button>
+   <button id="tabChat" onclick="setTab('chat')">Drama Manager</button>
    <span style="flex:1"></span>
    <button class="tiny" onclick="setPanel(false)" title="hide this panel">×</button>
  </div>
@@ -622,8 +840,8 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
    </div>
  </div>
  <div id="chat" class="rpane">
-  <h2>Discuss</h2>
-  <div id="log"><div class="m mut" id="chatintro">Ask about pacing or a passage — or hand over real work: a new scene, a casting, a whole story. Claude works in a draft; you apply it or discard it.
+  <h2>Brenda</h2>
+  <div id="log"><div class="m mut" id="chatintro">Ask Brenda about pacing or a passage, or hand her real work: a new scene, a casting, a whole story. She works in a draft; you apply it or discard it.
 Selected cards go along as context.</div></div>
   <textarea id="ask" placeholder="e.g. tighten the foghorn scene, keep my phrasing"></textarea>
   <div style="display:flex;gap:6px;margin-top:6px">
@@ -651,16 +869,28 @@ Selected cards go along as context.</div></div>
   <button id="revealb" onclick="revealOut()" title="Show this episode’s renders in the Finder">Open Renders Folder ↗</button>
 </footer>
 
+<div id="askwrap" hidden>
+  <div id="askbox">
+    <div id="asktext"></div>
+    <label id="askagain"><input type="checkbox" id="askcb">
+      Don’t ask again this session</label>
+    <div class="askrow">
+      <button onclick="askDone(false)">Cancel</button>
+      <button class="pri" id="askok" onclick="askDone(true)">OK</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $=i=>document.getElementById(i);
 let DOC=null, SEL=new Set(), STATE={}, JOBS={}, POLL=null, HEIGHT={};
 let BAKETIMER=null, WASBAKING=false;
 // CUR is the card you are working in — the one edit-then-listen starts from.
-// SEL is a different idea entirely (which cards go to the discuss panel as
+// SEL is a different idea entirely (which cards go to Brenda as
 // context), so it gets a different colour and its own control.
 let CUR=null;
 
-// ── the discuss panel ─────────────────────────────────────
+// ── the drama manager panel ───────────────────────────────
 // Off by default: it is the panel you want twice an afternoon, and the rest of
 // the afternoon it is 340px that the cards could be using.
 // The right column is one panel with two tabs. Both bits of state are worth
@@ -700,9 +930,26 @@ function paintCur(){
   if(CUR!=null){ const el=$('c'+CUR); if(el)el.classList.add('cur'); }
   syncBookBtn();
 }
-function setCur(id){ if(CUR===id)return; CUR=id; paintCur();
+function setCur(id){ if(CUR===id)return; CUR=id; paintCur(); followVoice(id);
   // the stage is a viewfinder: idle, it shows the moment being edited
   if(STAGE&&DOC)STAGE.postMessage({type:'cur',to:'embed',card:id,name:DOC.name});
+}
+// The inspector is a second viewfinder, on the voice rather than the picture:
+// select a card that speaks and the panel is already showing what it speaks
+// with. ⌥-clicking the dropdown got you there before, which meant knowing the
+// gesture existed at all.
+//
+// It asks for nothing and opens nothing. A closed panel stays closed, the
+// Drama Manager stays on its tab, an unsaved profile edit is left where it is,
+// clicking a card is not the moment to be stopped by a dialog you did not open.
+function followVoice(id){
+  if(document.body.dataset.panel!=='on'||document.body.dataset.tab!=='inspect')return;
+  const c=DOC&&DOC.chunks.find(x=>x.id===id), n=c&&cardVoice(c);
+  if(!n||!(STATE.profiles||{})[n])return;
+  if(EDITING===n)return;      // already open; rebuilding it would only jump the scroll
+  if(!profClean())return;
+  EDITING=n; DRAFT=draftOf(n); IMPACT=null;
+  renderProfiles();
 }
 // The viewfinder again, by hand: setCur skips repeat clicks on the same card,
 // so a change that redresses the CURRENT one — a repaint, another variant, a
@@ -727,6 +974,36 @@ function syncBookBtn(){
 async function api(p,b){const r=await fetch(p,b?{method:'POST',body:JSON.stringify(b)}:undefined);
   return r.json()}
 const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+// esc() is for text between tags. A name going INSIDE an attribute needs its
+// quotes taken too, or a profile called 6" of Rain closes the title early and
+// spills the rest of the tag onto the screen.
+const attr=s=>esc(s).replace(/"/g,'&quot;');
+
+// ── filtering ─────────────────────────────────────────────
+// One box per list. Each lives in the PAGE rather than in the html a render
+// builds, because a box rebuilt as you type loses the caret on the first
+// keystroke and there is no graceful way to put it back.
+//
+// Searching flattens whatever it searches: a story inside a shut shelf, or a
+// picture inside a shut folder, is not a match anyone can see. So while a
+// filter is on, the tree stands aside and the matches are simply a list.
+//
+// Declared up here, above every render that reads QRY, and dispatching to
+// hoisted function declarations rather than through a registry: a registry
+// filled by top-level assignment has to be ordered against the definitions it
+// names, and the first version of this threw on load for exactly that reason.
+const QRY={};
+function setQry(list){
+  const el=$('q'+list);
+  QRY[list]=(el?el.value:'').trim().toLowerCase();
+  ({projects:paintProjects, clips:renderClips,
+    media:renderMedia, profiles:renderProfileList,
+    cast:renderCast}[list]||function(){})();
+}
+const hits=(q,...fields)=>!q||fields.some(
+  f=>String(f||'').toLowerCase().includes(q));
+const nomatch='<span class="mut" style="font-size:12px">nothing matches</span>';
+
 
 // ── import ────────────────────────────────────────────────
 const drop=$('drop');
@@ -786,15 +1063,18 @@ async function doExport(qs){
   // The download only begins once the server has packed the whole archive, so
   // say what is happening rather than sitting there looking broken.
   const nclips=Object.keys(plan.clips||{}).length;
+  const ncast=Object.keys(plan.cast||{}).length;
   m.innerHTML=`packing ${plan.projects.length} episode(s), ${rendered} rendered chunk(s), `+
     `${Object.keys(plan.voices).length} voice(s)`+
     (nclips?`, ${nclips} audio clip(s)`:'')+
+    (ncast?`, ${ncast} cast plate(s)`:'')+
     ` — about <b>${size(plan.bytes)}</b>.<br>`+
     `<span class="mut">your browser saves it when it is ready`+
     (plan.bytes>2e8?' — a minute or so at this size':'')+`</span>`+
     (plan.unreadable.length?`<br><span class="warn">left out, unreadable: ${plan.unreadable.map(esc).join(', ')}</span>`:'')+
     (plan.missing_voices.length?`<br><span class="warn">voice clip missing from disk, so not in the backup: ${plan.missing_voices.map(esc).join(', ')}</span>`:'')+
-    ((plan.missing_clips||[]).length?`<br><span class="warn">audio clip missing from disk, so not in the backup: ${plan.missing_clips.map(esc).join(', ')}</span>`:'');
+    ((plan.missing_clips||[]).length?`<br><span class="warn">audio clip missing from disk, so not in the backup: ${plan.missing_clips.map(esc).join(', ')}</span>`:'')+
+    ((plan.missing_cast||[]).length?`<br><span class="warn">cast plate missing from disk, so not in the backup: ${plan.missing_cast.map(esc).join(', ')}</span>`:'');
   window.location='/api/export?'+q;
 }
 
@@ -829,6 +1109,7 @@ async function archDone(j){
   if(j.error) return void(m.innerHTML=`<span class="warn">${esc(j.error)}</span>`);
   const bits=[`restored ${j.projects.length} episode(s)`];
   if(j.audio) bits.push(`${j.audio} rendered chunk(s)`);
+  if((j.cast||[]).length) bits.push(`${j.cast.length} cast member(s) joined`);
   if(j.skipped.length) bits.push(`${j.skipped.length} already here, left alone`);
   // Renames are the one thing worth reading: they mean a name collided and the
   // incoming copy landed beside yours rather than over it.
@@ -936,24 +1217,12 @@ async function refresh(){
   if(STATE.omnivoice&&!LANGS)
     loadLangs().then(()=>{ if(EDITING)renderProfiles(); });
   if(!PLUGINS)loadPlugins().then(()=>{ if(EDITING)renderProfiles(); });
+  // the collection maker moved up beside + New Stack — a peer verb, not a
+  // view control; this row keeps only the sorting of the unfiled half
   $('projsort').innerHTML=sortBar('projects','Recent');
-  // by name, not by title: the episodes are numbered, so the slug order is the
-  // reading order — which is the answer "alphabetical" is really being asked for
-  $('projects').innerHTML=sortedBy(STATE.projects,'projects','edited').map(p=>`
-    <div class="proj ${DOC&&DOC.name===p.name?'sel':''}" onclick="openProject('${p.name}')"
-      oncontextmenu="projMenu(event,'${p.name}')">
-      <div style="display:flex;gap:6px;align-items:center">
-        <span style="flex:1">${esc(p.draft?p.title.replace(/\s*\(draft\)$/,''):p.title)}${
-          p.draft?'<span class="draftb">✎ draft</span>':''}</span>
-        <button class="tiny" title="show this episode's folder"
-          onclick="event.stopPropagation();reveal('${p.name}')">↗</button>
-        <button class="tiny" title="export this episode"
-          onclick="event.stopPropagation();exportOne('${p.name}')">⤓</button>
-      </div>
-      <div class="meta">${p.ready}/${p.chunks} rendered · ${p.words.toLocaleString()} words${
-        fmtWhen(p.edited)?' · '+esc(fmtWhen(p.edited)):''}</div>
-      <div class="bar"><i style="width:${p.chunks?100*p.ready/p.chunks:0}%"></i></div>
-    </div>`).join('')||'<span class="mut" style="font-size:12px">none yet</span>';
+  paintProjects();
+  if(document.body.dataset.side==='cast')renderCast();
+  if(document.body.dataset.mode==='cast')renderBoard();
   const b=STATE.bake;
   $('bakeb').disabled=b.running;
   $('stopb').hidden=!b.running;
@@ -983,7 +1252,11 @@ async function refresh(){
 }
 
 // Switching document throws the card list away, so bank the edits first.
-async function openProject(name){ await flushAll(); await open_(name);
+// Opening a story is an intent to EDIT it, so the cast board steps aside and
+// the deck comes back — the Cast tab itself stays wherever it was.
+async function openProject(name){
+  if(document.body.dataset.mode==='cast')closeBoard();
+  await flushAll(); await open_(name);
   if(STAGE)STAGE.postMessage({type:'open',name});     // the stage follows along
 }
 
@@ -1034,8 +1307,14 @@ async function open_(name,quiet,anchor){
   // a card removed under you, or another document opened, leaves nothing to
   // start from — say so rather than pointing the preview at a stranger
   if(!quiet||!DOC.chunks.some(c=>c.id===CUR))CUR=null;
+  // Another story is another cast, and a filter set on this one's voices means
+  // nothing there. A card ARRIVING under a filter — inserted, pasted, a clip
+  // dropped in a gap — would be born invisible, so whatever made the story
+  // longer wins and the filter steps aside to let you see what you just made.
+  if(wasName!==DOC.name||(VFLEN!=null&&DOC.chunks.length>VFLEN))VFILTER=null;
+  VFLEN=DOC.chunks.length;
   // fit before observing, so the initial sizing is never mistaken for a drag
-  renderFR(); renderDoc(); fitAll(); watchHeights(); renderProfiles();
+  renderFR(); renderVF(); renderDoc(); fitAll(); watchHeights(); renderProfiles();
   keepPlace(an,was);          // after fitAll: the heights must be final first
   syncBookBtn();
   paintMinAll();
@@ -1112,7 +1391,10 @@ function draftData(){
 // changes.
 function renderProfileList(){
   const P=STATE.profiles||{}, N=STATE.profile_counts||{};
-  $('profiles').innerHTML=profNames().map((n,i)=>{
+  // like the clips, the index is the profile's place in profNames(): editing
+  // and the context menu both reach for it, and a filter must not renumber
+  const rows=profNames().map((n,i)=>[n,i]).filter(([n])=>hits(QRY.profiles,n));
+  $('profiles').innerHTML=rows.length?rows.map(([n,i])=>{
     const pr=P[n], c=N[n]||0;
     const ov=(pr.engine||'chatterbox')==='omnivoice', ko=(pr.engine||'chatterbox')==='kokoro';
     const v=ko?(pr.kvoice||'af_heart'):(pr.voices||[])[pr.active||0]||'—';
@@ -1129,7 +1411,7 @@ function renderProfileList(){
       <div class="meta">${esc(v)} · ${c?c+' card'+(c===1?'':'s'):'not used yet'}${
         ov?' · OmniVoice':ko?' · Kokoro':''}</div></div>`+
       (n==='Default'?'<div class="pdiv"></div>':'');
-  }).join('');
+  }).join(''):nomatch;
 }
 function renderProfiles(){
   renderProfileList();
@@ -1179,8 +1461,8 @@ function profEditor(n){
     ${vs.length?vs.map((v,i)=>{
       const meta=VS.find(x=>x.name===v);
       return `<div class="vrow">
-        <input type="radio" name="av" ${i===(pr.active||0)?'checked':''}
-          onchange="draftSet('active',${i})" title="speak with this one">
+        ${vs.length>1?`<input type="radio" name="av" ${i===(pr.active||0)?'checked':''}
+          onchange="draftSet('active',${i})" title="speak with this one">`:''}
         <span class="vn">${esc(v)}</span>
         ${meta?`<span class="mut vs">${fmtSecs(meta.secs)}</span>`
               :'<span class="warn vs">missing</span>'}
@@ -1192,9 +1474,11 @@ function profEditor(n){
       </div>`}).join('')
       :'<div class="mut" style="font-size:11px;padding:2px 0">no voice yet</div>'}
     <select onchange="addDraftVoice(this.value);this.value=''" style="width:100%;margin:5px 0">
-      <option value="">+ Add an existing voice…</option>
+      <option value="">${vs.length===1?'Speak with a different voice…'
+                        :vs.length?'+ Add another voice…':'Choose a voice…'}</option>
       ${VS.map(v=>`<option value="${esc(v.name)}">${esc(v.name)} (${fmtSecs(v.secs)})</option>`).join('')}</select>
-    <div id="vdrop" class="vdrop">Drop a .wav here to add a new voice</div>
+    <div id="vdrop" class="vdrop">Drop a .wav here to ${
+      vs.length===1?'speak with it instead':'use it as the voice'}</div>
     `}
 
     ${ko?`
@@ -1271,6 +1555,15 @@ function profEditor(n){
 
     <div id="pimpact" class="pimpact"></div>
 
+    ${castOfProfile(n)
+      ?`<div class="phelp">in the cast as
+         <button class="tiny" onclick="openBoard('${castOfProfile(n)}')"
+           title="open the board — plates, brief, looks">@${castOfProfile(n)}</button></div>`
+      :`<div class="pact">
+         <button onclick="castFromProfile()"
+           title="a good number of these profiles are characters that exist nowhere else in the app — this makes a cast member already linked to this voice, its look to be filled in on the board">Make a Cast Member from this Voice</button>
+        </div>`}
+
     <div class="pact main">
       <button id="psave" class="pri" onclick="saveProf()" disabled>Save Changes</button>
       <button id="pdisc" onclick="discardProf()" disabled>Discard</button>
@@ -1302,10 +1595,15 @@ function closeProf(){
   if(!confirmDiscard())return;
   EDITING=null; DRAFT=null; IMPACT=null; renderProfiles();
 }
-function confirmDiscard(){
+// Is the open editor holding anything unsaved? confirmDiscard asks before
+// throwing it away; followVoice asks so it can stay out of the way instead.
+const profClean=()=>{
   if(!EDITING||!DRAFT)return true;
   const saved=(STATE.profiles||{})[EDITING]||{};
-  if(sameSound(DRAFT,saved)&&(DRAFT.note||'')===(saved.note||''))return true;
+  return sameSound(DRAFT,saved)&&(DRAFT.note||'')===(saved.note||'');
+};
+function confirmDiscard(){
+  if(profClean())return true;
   return confirm('Discard the unsaved changes to this profile?');
 }
 
@@ -1333,11 +1631,19 @@ function draftSet(k,v,quiet){
   if(quiet){ paintProfDirty(); return; }   // the note changes nothing about sound
   paintProfDirty(); scheduleImpact();
 }
+// A profile speaks with exactly ONE clip: the rest of the list was only ever
+// a shelf of alternates with a radio button over it, and switching the radio
+// changes every chunk hash the profile touches, so it was never a casual act.
+// Choosing another voice therefore REPLACES the one that is there. Nothing is
+// lost by it — no voice file is ever deleted — so it is undone by choosing the
+// old one again. A profile that somehow holds several keeps its radios and
+// keeps appending, so nothing already built is taken away.
 function addDraftVoice(v){
   if(!v||!DRAFT)return;
-  const vs=[...(DRAFT.voices||[])];
-  if(!vs.includes(v))vs.push(v);
-  DRAFT.voices=vs; renderProfiles(); paintProfDirty(); scheduleImpact();
+  const vs=DRAFT.voices||[];
+  if(vs.length>1){ if(!vs.includes(v))DRAFT.voices=[...vs,v]; }
+  else { DRAFT.voices=[v]; DRAFT.active=0; }
+  renderProfiles(); paintProfDirty(); scheduleImpact();
 }
 function dropDraftVoice(i){
   if(!DRAFT)return;
@@ -1493,10 +1799,19 @@ async function moveCards(){
     ?`<span class="ok">moved ${r.moved} card${r.moved===1?'':'s'} to “${esc(EDITING)}”</span> · ⌘Z undoes it`
     :'nothing to move — those cards already use it';
 }
+// It was always here, but it sat UNDER the profile list — which at
+// twenty-five profiles is a long way under, and out of sight is out of the
+// program. Making a thing belongs at the top, beside every other new-thing
+// button in this app.
+function newProfilePanel(){
+  const p=$('newprofpanel'); p.hidden=!p.hidden;
+  if(!p.hidden)$('newprof').focus();
+}
 async function addProfile(){
   const n=$('newprof').value.trim(); if(!n)return;
   if(!confirmDiscard())return;
   $('newprof').value='';
+  $('newprofpanel').hidden=true;
   await api('/api/profile',{profile:n,data:{}});
   EDITING=n; await refresh(); DRAFT=draftOf(n); renderProfiles(); }
 async function delProfile(n){
@@ -1613,7 +1928,7 @@ async function updateApply(){
 }
 
 // ── the sidebar's tabs ────────────────────────────────────
-const SIDES=['stories','voices','clips','publish','settings'];
+const SIDES=['stories','voices','clips','cast','publish','settings'];
 function setSide(t){
   if(!SIDES.includes(t))t='stories';
   document.body.dataset.side=t;
@@ -1624,6 +1939,7 @@ function setSide(t){
   // Guarded on STATE: this runs once at parse time to restore the last tab,
   // and renderClips leans on helpers declared further down the file.
   if(t==='clips'&&STATE.clips){ renderClips(); renderMedia(); }
+  if(t==='cast'&&STATE.cast)renderCast();
   if(t==='voices')loadEngines();
   if(t==='publish'&&STATE.projects)renderPublish();
   if(t==='settings')loadSettings();
@@ -1661,7 +1977,7 @@ if(!/mac/i.test(navigator.platform||''))
   document.querySelectorAll('.appbrowse').forEach(b=>b.remove());
 
 // ── editor settings ───────────────────────────────────────
-// One small file on this machine, never in the library: which model Discuss
+// One small file on this machine, never in the library: which model Brenda
 // speaks with, who paints the pictures, which apps open a clip for surgery.
 // Loaded once at boot too, because the clip and media menus read it.
 let SETTINGS=null;
@@ -1753,6 +2069,29 @@ async function openExternal(kind,name){
   else $('status').textContent=`sent to ${appLabel(r.app)}`;
   return !r.error;
 }
+// Double-click on a clip or a picture opens it in the app kept for that kind
+// of thing. With none set, ask right here and open the picker: sending someone
+// to a settings tab to discover what the double-click wanted is a worse answer
+// than handing them the chooser, and the message still says where it lives so
+// it can be changed later.
+async function openIn(what,i){
+  const item=what==='clip'?CLIPVIEW[i]:MEDIAVIEW[i];
+  if(!item)return;
+  const kind=what==='clip'?'clip':(item.kind==='video'?'video':'image');
+  if(!appFor(kind)){
+    const thing={clip:'audio clips',image:'pictures',video:'film'}[kind];
+    const eg={clip:'Audacity',image:'Pixelmator Pro',video:'DaVinci Resolve'}[kind];
+    if(!confirm(`Nothing is set to open ${thing} yet.\n\n`+
+      `Choose an app now? Something like ${eg} — whatever you pick is `+
+      `remembered under “Open in…” in Settings (⚙), and every card and media `+
+      `list will offer it from then on. Saving over the file there updates it here.`))
+      return;
+    // the slot is named for the KIND OF FILE, so a clip's app is the audio one
+    await chooseApp({clip:'audio',image:'image',video:'video'}[kind]);
+    if(!appFor(kind))return;                       // the picker was cancelled
+  }
+  editExternal(kind,item.name);
+}
 // an app setting may be a plain name or a full .app path; show the short name
 const appLabel=p=>(p||'').split('/').filter(Boolean).pop().replace(/\.app$/,'');
 // which app opens this kind of thing, per the settings tab
@@ -1788,6 +2127,26 @@ async function editExternal(kind,name){
     w.t=setTimeout(poll,2500);
   };
   poll();
+}
+
+// A voiced card is where voices that never existed come from: your timing and
+// delivery, somebody else's timbre. What comes out is a performance nothing in
+// the library can repeat, and until now the only way to keep it was to go
+// looking for its wav in the content-addressed cache by hand. This lifts it
+// out and makes it a profile, so anything can speak that way.
+function voiceFromCard(e,id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  openCtx(e,[]);
+  ctxAsk('','name the new character','create',async name=>{
+    const r=await api('/api/voice/from_card',{name:DOC.name,id,profile:name});
+    if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+    if(!confirmDiscard())return;              // an unsaved profile edit first
+    setSide('voices');
+    EDITING=r.profile; await refresh(); DRAFT=draftOf(r.profile); renderProfiles();
+    $('status').innerHTML=`<span class="ok">“${esc(r.profile)}” speaks with `+
+      `<b>${esc(r.voice)}</b></span> · ${fmtSecs(r.secs)} taken from this card`+
+      (r.secs>10?' — <span class="warn">only the first 10s is ever used</span>':'');
+  });
 }
 
 // ── plugins ───────────────────────────────────────────────
@@ -1878,6 +2237,44 @@ function setFxParam(name,v){
   draftFx({params});
 }
 
+// ── the app's own confirm ─────────────────────────────────
+// A native confirm() cannot carry a checkbox, and some of these questions are
+// asked once per card: reassigning the voice on thirty cards asked thirty
+// times. Answering with the box ticked stores THAT ANSWER, not merely "stop
+// asking" — ticking it and pressing Cancel means "never render these
+// automatically" just as clearly as OK means "always do".
+//
+// Session-scoped on purpose, and it says so: standing answers should not
+// outlive the sitting that made sense of them. A reload asks afresh.
+const ASKED={};
+let ASKRESOLVE=null;
+function askConfirm(text,key){
+  if(key&&key in ASKED)return Promise.resolve(ASKED[key]);
+  $('asktext').textContent=text;
+  $('askcb').checked=false;
+  $('askagain').hidden=!key;              // no checkbox on a one-off question
+  $('askwrap').hidden=false;
+  $('askok').focus();
+  return new Promise(res=>{ ASKRESOLVE=v=>{
+    if(key&&$('askcb').checked)ASKED[key]=v;
+    $('askwrap').hidden=true; ASKRESOLVE=null;
+    res(v);
+  }; });
+}
+function askDone(v){ if(ASKRESOLVE)ASKRESOLVE(v); }
+// Enter answers, Escape declines, and the keys are caught before the editor's
+// own shortcuts see them: ⌘Z and the rest have no business firing behind a
+// question that is still standing.
+document.addEventListener('keydown',e=>{
+  if(!ASKRESOLVE)return;
+  if(e.key==='Enter'){ e.preventDefault(); e.stopPropagation(); askDone(true); }
+  else if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); askDone(false); }
+  else if(e.key!=='Tab'&&e.key!==' ')e.stopPropagation();
+},true);
+$('askwrap').addEventListener('mousedown',e=>{
+  if(e.target===$('askwrap'))askDone(false);      // the ground means no
+});
+
 // ── list sorting ──────────────────────────────────────────
 // Two orders, because they answer different questions. By name is how you find
 // something you already know the name of; by date is how you find the thing you
@@ -1916,6 +2313,257 @@ const fmtWhen=t=>{
   return isNaN(d)?'':d.toLocaleDateString(undefined,{day:'numeric',month:'short'});
 };
 
+// ── shelves ───────────────────────────────────────────────
+// A series is a playlist over the library: an ordered list of project names
+// that the projects themselves know nothing about. So the sidebar becomes a
+// tree whose branches live in series.json and whose leaves are the same rows
+// as ever, and with no series at all it is precisely the flat list it was.
+// Folds are per-machine taste, so they live in localStorage beside the sorts.
+let SFOLD={};
+try{ SFOLD=JSON.parse(localStorage.getItem('saga.sfold')||'{}'); }catch(e){}
+function foldSeries(slug){
+  SFOLD[slug]=!SFOLD[slug];
+  try{ localStorage.setItem('saga.sfold',JSON.stringify(SFOLD)); }catch(e){}
+  paintProjects();          // a fold is a view, not a fact: no round trip
+}
+// One row, wherever it sits. `slug` and `i` are where a drop aims: the shelf
+// this row is on, and its place on it. Unfiled rows carry an empty slug.
+function projRow(p,slug,i,why){
+  if(!p)return '';
+  return `<div class="proj ${DOC&&DOC.name===p.name?'sel':''}" draggable="true"
+      data-name="${p.name}" data-slug="${slug}" data-i="${i}"
+      ondragstart="projDragStart(event,'${p.name}')" ondragend="projDragEnd()"
+      onclick="openProject('${p.name}')"
+      oncontextmenu="projMenu(event,'${p.name}')">
+      <div style="display:flex;gap:6px;align-items:center">
+        <span style="flex:1">${esc(p.draft?p.title.replace(/\s*\(draft\)$/,''):p.title)}${
+          p.draft?'<span class="draftb">✎ draft</span>':''}</span>
+        <button class="tiny" title="show this episode's folder"
+          onclick="event.stopPropagation();reveal('${p.name}')">↗</button>
+        <button class="tiny" title="export this episode"
+          onclick="event.stopPropagation();exportOne('${p.name}')">⤓</button>
+      </div>
+      <div class="meta">${p.ready}/${p.chunks} rendered · ${p.words.toLocaleString()} words${
+        fmtWhen(p.edited)?' · '+esc(fmtWhen(p.edited)):''}${
+        why?' · <b>'+esc(why)+'</b>':''}</div>
+      <div class="bar"><i style="width:${p.chunks?100*p.ready/p.chunks:0}%"></i></div>
+    </div>`;
+}
+function projectList(){
+  const q=QRY.projects;
+  if(q){
+    const found=sortedBy((STATE.projects||[]).filter(p=>hits(q,p.name,p.title)),
+                         'projects','edited');
+    return `<div class="smem" data-slug="">`+
+      (found.length?found.map(p=>projRow(p,'',-1,hits(q,p.title)?'':p.name))
+        .join(''):nomatch)+`</div>`;
+  }
+  const ser=STATE.series||[], by=new Map((STATE.projects||[]).map(p=>[p.name,p]));
+  const filed=new Set();
+  ser.forEach(s=>s.order.forEach(n=>filed.add(n)));
+  const loose=(STATE.projects||[]).filter(p=>!filed.has(p.name));
+  let h='';
+  for(const s of ser){
+    const fold=!!SFOLD[s.slug], n=s.order.length;
+    h+=`<div class="sbar" data-slug="${s.slug}" onclick="foldSeries('${s.slug}')"
+        oncontextmenu="seriesMenu(event,'${s.slug}')"
+        title="drag stacks in and out. The order here is the order they are read.">
+      <span class="fold">${fold?'▸':'▾'}</span>
+      <b>${esc(s.title)}</b>
+      <span class="mut" style="font-size:11px">${n
+        ?n+' '+esc(s.member)+(n===1?'':'s'):'empty'}</span>
+      <span style="flex:1"></span>
+      <button class="tiny" title="export the whole ${esc(s.noun)} as one .sagaproj"
+        onclick="event.stopPropagation();exportSeries('${s.slug}')">⤓</button>
+    </div>`;
+    // The empty shelf still gets a landing strip. A shelf you cannot drop the
+    // first story onto is a shelf you can never start.
+    if(!fold)h+=`<div class="smem in" data-slug="${s.slug}">`+(n
+      ?s.order.map((nm,i)=>projRow(by.get(nm),s.slug,i)).join('')
+      :`<div class="sdrop">drop a stack here</div>`)+`</div>`;
+  }
+  // Unfiled announces itself only once there is something to be filed AGAINST
+  if(ser.length)h+=`<div class="sbar unf" data-slug=""><b class="mut">Unfiled</b>
+    <span class="mut" style="font-size:11px">${loose.length} stack${
+      loose.length===1?'':'s'}</span></div>`;
+  // the sort buttons order this half; a shelf's order is the author's own
+  h+=`<div class="smem" data-slug="">`+(sortedBy(loose,'projects','edited')
+    .map(p=>projRow(p,'',-1)).join('')
+    ||'<span class="mut" style="font-size:12px">none yet</span>')+`</div>`;
+  return h;
+}
+function paintProjects(){ $('projects').innerHTML=projectList(); bindProjDrag(); }
+
+// The sidebar keeps its OWN drag flag. dragging() over the card stack asks
+// after cards, clips, media and groups; a story is none of those, so a story
+// dragged across the editor can never be mistaken for one and dropped in.
+let DRAGPROJ=null;
+function projDragStart(e,name){
+  DRAGPROJ=name;
+  e.dataTransfer.effectAllowed='move';
+  try{ e.dataTransfer.setData('text/plain',name); }catch(_){}
+  document.body.dataset.dropproj='1';
+}
+function projDragEnd(){
+  DRAGPROJ=null; delete document.body.dataset.dropproj; clearMarks();
+}
+// Which gap the cursor is in: the first row whose middle it has not passed,
+// and the end of the list if it has passed them all. Every y answers, so
+// there is no dead strip between two rows where a drop means nothing — which
+// is exactly where a person aims when they want "between these two".
+function dropIndex(host,y){
+  const rows=host.querySelectorAll('.proj');
+  for(let i=0;i<rows.length;i++){
+    const r=rows[i].getBoundingClientRect();
+    if(y<r.top+r.height/2)return i;
+  }
+  return rows.length;
+}
+// One line for the whole sidebar, moved rather than made: dragover fires
+// continuously, and building an element per event would be per-frame garbage.
+let DROPLINE=null;
+function showDropLine(host,i){
+  const rows=host.querySelectorAll('.proj');
+  if(!rows.length)return;                     // an empty shelf lights its strip
+  const box=$('projects').getBoundingClientRect();
+  DROPLINE.style.top=(i<rows.length
+    ? rows[i].getBoundingClientRect().top-box.top-1
+    : rows[rows.length-1].getBoundingClientRect().bottom-box.top-1)+'px';
+  DROPLINE.hidden=false;
+}
+function bindProjDrag(){
+  DROPLINE=document.createElement('div');     // innerHTML just wiped the old one
+  DROPLINE.className='dropline'; DROPLINE.hidden=true;
+  $('projects').appendChild(DROPLINE);
+  // The shelf bar means "file it here", with no opinion about where: it lands
+  // at the end, and it is the only target a folded shelf has.
+  document.querySelectorAll('#projects .sbar').forEach(el=>{
+    el.addEventListener('dragover',e=>{
+      if(DRAGPROJ==null)return;
+      e.preventDefault(); e.dataTransfer.dropEffect='move';
+      clearMarks(); el.classList.add('hot');
+    });
+    el.addEventListener('drop',e=>{
+      if(DRAGPROJ==null)return;
+      e.preventDefault(); e.stopPropagation();
+      assignSeries(DRAGPROJ,el.dataset.slug,null);
+    });
+  });
+  // The LIST takes the drop, not the rows in it. A container has no gaps in
+  // it, so every pixel between the first row and the last one lands somewhere.
+  document.querySelectorAll('#projects .smem').forEach(host=>{
+    const shelf=host.dataset.slug;
+    host.addEventListener('dragover',e=>{
+      if(DRAGPROJ==null)return;
+      e.preventDefault(); e.dataTransfer.dropEffect='move';
+      clearMarks();
+      // Unfiled is not an order, it is the absence of one, so pointing at a
+      // place in it would be a promise the sidebar cannot keep.
+      if(!shelf)return void host.classList.add('hot');
+      const strip=host.querySelector('.sdrop');
+      if(strip)strip.classList.add('hot');
+      showDropLine(host,dropIndex(host,e.clientY));
+    });
+    host.addEventListener('drop',e=>{
+      if(DRAGPROJ==null)return;
+      e.preventDefault(); e.stopPropagation();
+      assignSeries(DRAGPROJ,shelf,shelf?dropIndex(host,e.clientY):null);
+    });
+  });
+}
+async function assignSeries(name,to,at){
+  DRAGPROJ=null; clearMarks(); delete document.body.dataset.dropproj;
+  // `at` counts the shelf WITHOUT this story, which is what the server
+  // inserts against: dragging one slot down must land one slot down rather
+  // than back in the place it just left.
+  const s=(STATE.series||[]).find(x=>x.slug===to);
+  if(s&&at!=null){ const from=s.order.indexOf(name); if(from>=0&&from<at)at--; }
+  const r=await api('/api/series/assign',{name,to:to||null,at});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await refresh();
+}
+function newSeries(e){
+  openCtx(e,[]);
+  ctxAsk('','collection title, e.g. Saga','create',async t=>{
+    const r=await api('/api/series/new',{title:t});
+    if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+    await refresh();
+    $('status').innerHTML=`<span class="ok">“${esc(t)}” is a collection</span> — drag stacks onto it, or start one with + New Stack`;
+  });
+}
+function seriesMenu(e,slug){
+  const s=(STATE.series||[]).find(x=>x.slug===slug); if(!s)return;
+  openCtx(e,[
+    {label:'Rename…', run:()=>{ openCtx(e,[]);
+      ctxAsk(s.title,'collection title','rename',t=>editSeries(slug,{title:t})); }},
+    // what this shelf calls itself, and what it calls its parts. Only labels,
+    // but they are the labels darkride will print: a serial has episodes, a
+    // collection has poems, and neither wants the other's word. Terse on
+    // purpose: the sentence-shaped versions read as annotations, not buttons.
+    {label:`Noun: “${s.noun}”…`, run:()=>{ openCtx(e,[]);
+      ctxAsk(s.noun,'serial · collection · book','set',v=>editSeries(slug,{noun:v})); }},
+    {label:`Parts: “${s.member}s”…`, run:()=>{ openCtx(e,[]);
+      ctxAsk(s.member,'episode · chapter · poem','set',v=>editSeries(slug,{member:v})); }},
+    {label:'Picture Style…', run:()=>seriesStyleAsk(e,slug)},
+    '-',
+    {label:'Export…', run:()=>exportSeries(slug)},
+    '-',
+    {label:'Delete collection…', danger:true, run:()=>deleteSeries(slug)},
+  ]);
+}
+async function editSeries(slug,fields){
+  const r=await api('/api/series/edit',{slug,...fields});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await refresh();
+}
+// the shelf's tier of the picture style (CAST.md §5): words every paint on
+// the shelf leads with, and refs that ride along — the Adventure Time line,
+// typed once here instead of once per card
+function seriesStyleAsk(e,slug){
+  const s=(STATE.series||[]).find(x=>x.slug===slug); if(!s)return;
+  const st=s.style||{};
+  openCtx(e,[]); if(!CTX)return;
+  CTX.innerHTML=`<div class="ctxask" style="flex-direction:column;align-items:stretch;min-width:300px">
+    <div class="mut" style="font-size:11px">the collection's picture style — every ${esc(s.member)}'s paints lead with it; clear both fields to remove it</div>
+    <input id="ss_tx" value="${attr(st.text||'')}" placeholder="words — flat vector, thick even line, cel shading…">
+    <input id="ss_rf" value="${attr((st.refs||[]).join(' '))}" placeholder="refs — @adventure-time/board … (space-separated)">
+    <button class="pri">set</button></div>`;
+  const go=async()=>{
+    const text=$('ss_tx').value.trim();
+    const refs=$('ss_rf').value.split(/[\s,]+/).filter(Boolean);
+    closeCtx();
+    await editSeries(slug,{style:{text,refs}});
+    if(DOC)open_(DOC.name,true);   // open paint rows redraw their style line
+    $('status').innerHTML=(text||refs.length)
+      ?'<span class="ok">collection style set</span> — its stacks paint under it'
+      :'<span class="ok">collection style cleared</span>';
+  };
+  CTX.querySelector('button.pri').onclick=go;
+  ['ss_tx','ss_rf'].forEach(i=>$(i).onkeydown=ev=>{ ev.stopPropagation();
+    if(ev.key==='Enter'){ ev.preventDefault(); go(); }
+    if(ev.key==='Escape'){ ev.preventDefault(); closeCtx(); } });
+  $('ss_tx').focus();
+}
+async function deleteSeries(slug){
+  const s=(STATE.series||[]).find(x=>x.slug===slug); if(!s)return;
+  const n=s.order.length;
+  if(!confirm(`Delete the collection “${s.title}”?\n\nOnly the collection goes. Its ${n} `+
+    `${s.member}${n===1?'':'s'} are untouched and move to Unfiled.`))return;
+  const r=await api('/api/series/delete',{slug});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await refresh();
+  $('status').innerHTML=`<span class="ok">collection “${esc(s.title)}” deleted</span> — its stacks are in Unfiled`;
+}
+// One archive, every story on the shelf, in shelf order. plan_export has taken
+// a LIST of projects since the day it was written, so this is the same button
+// Export Everything presses, aimed at fewer names.
+const exportSeries=slug=>{
+  const s=(STATE.series||[]).find(x=>x.slug===slug);
+  if(!s||!s.order.length)
+    return void($('status').innerHTML='<span class="warn">that collection has no stacks in it yet</span>');
+  doExport(s.order.map(n=>'name='+encodeURIComponent(n)).join('&'));
+};
+
 // ── audio clips ───────────────────────────────────────────
 // The clip library had no window of its own: you could only meet a clip
 // through an audio card's dropdown, which meant no way to hear one before
@@ -1925,14 +2573,21 @@ function renderClips(){
   const n=STATE.clip_counts||{};
   CLIPVIEW=sortedBy(STATE.clips||[],'clips','added');
   $('clipsort').innerHTML=sortBar('clips','Newest');
-  $('clips').innerHTML = CLIPVIEW.length ? CLIPVIEW.map((c,i)=>{
+  // the index is the clip's place in CLIPVIEW, which the filter must not
+  // disturb: playing, dragging and renaming all address a clip by it
+  const rows=CLIPVIEW.map((c,i)=>[c,i]).filter(([c])=>hits(QRY.clips,c.name));
+  $('clips').innerHTML = !CLIPVIEW.length
+    ? '<span class="mut" style="font-size:12px">none yet — import one below</span>'
+    : rows.length ? rows.map(([c,i])=>{
     const used=n[c.name]||0, when=fmtWhen(c.added);
+    const on=PLAYCLIP===c.name;
     return `<div class="proj" draggable="true" oncontextmenu="clipMenu(event,${i})"
       ondragstart="clipDragStart(event,${i})" ondragend="clipDragEnd()"
-      title="drag into the episode to place it · right-click to rename">
+      ondblclick="openIn('clip',${i})"
+      title="drag into the episode to place it · double-click to open it in your audio editor · right-click to rename">
       <div style="display:flex;gap:6px;align-items:center">
-        <button class="tiny" title="hear it"
-          onclick="event.stopPropagation();playClipAt(${i})">▶</button>
+        <button class="tiny" title="${on?'stop':'hear it'}" ondblclick="event.stopPropagation()"
+          onclick="event.stopPropagation();playClipAt(${i})">${on?'■':'▶'}</button>
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
           >${esc(c.name)}</span>
         <span class="mut" style="font-size:11px">${fmtSecs(c.secs)}</span>
@@ -1940,12 +2595,31 @@ function renderClips(){
       <div class="meta">${used?used+' card'+(used===1?'':'s'):'not used yet'}${
         when?' · '+esc(when):''}</div>
     </div>`;
-  }).join('') : '<span class="mut" style="font-size:12px">none yet — import one below</span>';
+  }).join('') : nomatch;
 }
+// Which clip the shared player is on, so its own row can offer to stop it.
+// Every other preview in the studio pauses AUDIO before taking it over, which
+// is what makes one flag enough: a card, a take or a voice starting to speak
+// fires the handler below and the clip's button goes back to ▶ by itself.
+let PLAYCLIP=null;
 function playClipAt(i){
   const c=CLIPVIEW[i]; if(!c)return;
+  if(PLAYCLIP===c.name&&AUDIO&&!AUDIO.paused){     // pressing it again stops it
+    AUDIO.pause(); AUDIO.currentTime=0;            // onpause repaints the row
+    $('status').textContent=`stopped “${c.name}”`;
+    return;
+  }
   if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
-  AUDIO=new Audio('/api/clip?f='+encodeURIComponent(c.name)); AUDIO.play();
+  const a=AUDIO=new Audio('/api/clip?f='+encodeURIComponent(c.name));
+  PLAYCLIP=c.name;
+  // Guarded on both: by the time this fires the player may have been handed
+  // to something else, and that something else owns the button now.
+  const done=()=>{ if(AUDIO===a&&PLAYCLIP===c.name){ PLAYCLIP=null; renderClips(); } };
+  a.onended=done; a.onpause=done;
+  // A refused play (no device, an autoplay gate) never fires pause, and the
+  // button would sit on ■ over silence. Treat the refusal as the end.
+  Promise.resolve(a.play()).catch(done);
+  renderClips();
   $('status').textContent=`playing “${c.name}” · ${fmtSecs(c.secs)}`;
 }
 function importClip(){ CLIPTARGET=null; $('clipfile').click(); }
@@ -2014,38 +2688,130 @@ async function renameClip(old,to){
 // the stack and it becomes a visual card. A visual takes no time on the audio
 // timeline — it is what the stage shows from that point until the next one.
 let MEDIAVIEW=[];
+// ── the visuals pool, as folders ──────────────────────────
+// A hundred and fifty pictures in one list is a pile, not a library. Nothing
+// here is filed by hand, because nothing needs to be: a picture belongs to the
+// story whose card SHOWS it, or that painted AGAINST it, or that generated it
+// and kept a different one. The documents already record all three, so this
+// tree is READ rather than maintained, and a picture files itself the moment
+// it is placed. What is left over is its own answer: pictures nothing knows.
+let MFOLD={};
+try{ MFOLD=JSON.parse(localStorage.getItem('saga.mfold')||'{}'); }catch(e){}
+// Folded unless you have said otherwise, except the story you have open —
+// those are the pictures you are reaching for. Variants stay folded always:
+// they are the takes you rejected, and they should be findable, not present.
+const mFolded=k=>k in MFOLD?MFOLD[k]:!(DOC&&k==='p:'+DOC.name);
+function foldMedia(k){
+  MFOLD[k]=!mFolded(k);
+  try{ localStorage.setItem('saga.mfold',JSON.stringify(MFOLD)); }catch(e){}
+  renderMedia();
+}
+const aq=s=>esc(String(s==null?'':s)).replace(/"/g,'&quot;');
+// `i` indexes MEDIAVIEW, which stays flat however the tree is drawn: the drag
+// and the context menu both address a picture by its place in that array.
+function mediaRow(m,i,used){
+  const when=fmtWhen(m.added);
+  const thumb=m.kind==='image'
+    ?`<img src="/api/media?f=${encodeURIComponent(m.name)}&v=${m.added}" loading="lazy"
+       style="height:30px;width:44px;object-fit:cover;border-radius:4px;flex:none">`
+    :`<span style="width:44px;text-align:center;flex:none" title="film">🎞</span>`;
+  return `<div class="proj" draggable="true" oncontextmenu="mediaMenu(event,${i})"
+    ondragstart="mediaDragStart(event,${i})" ondragend="mediaDragEnd()"
+    ondblclick="openIn('media',${i})"
+    title="drag into the episode to place it · double-click to open it in your viewer · right-click to rename">
+    <div style="display:flex;gap:6px;align-items:center">
+      ${thumb}
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+        >${esc(m.name)}</span>
+    </div>
+    <div class="meta">${m.kind==='video'?'film · ':''}${
+      used?used+' card'+(used===1?'':'s'):'not used yet'}${when?' · '+esc(when):''}</div>
+  </div>`;
+}
 function renderMedia(){
-  const n=STATE.media_counts||{};
+  const n=STATE.media_counts||{}, home=STATE.media_home;
   MEDIAVIEW=sortedBy(STATE.media||[],'media','added');
   $('mediasort').innerHTML=sortBar('media','Newest');
-  $('media').innerHTML = MEDIAVIEW.length ? MEDIAVIEW.map((m,i)=>{
-    const used=n[m.name]||0, when=fmtWhen(m.added);
-    const thumb=m.kind==='image'
-      ?`<img src="/api/media?f=${encodeURIComponent(m.name)}&v=${m.added}" loading="lazy"
-         style="height:30px;width:44px;object-fit:cover;border-radius:4px;flex:none">`
-      :`<span style="width:44px;text-align:center;flex:none" title="film">🎞</span>`;
-    return `<div class="proj" draggable="true" oncontextmenu="mediaMenu(event,${i})"
-      ondragstart="mediaDragStart(event,${i})" ondragend="mediaDragEnd()"
-      title="drag into the episode to place it · right-click to rename">
-      <div style="display:flex;gap:6px;align-items:center">
-        ${thumb}
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-          >${esc(m.name)}</span>
-      </div>
-      <div class="meta">${m.kind==='video'?'film · ':''}${
-        used?used+' card'+(used===1?'':'s'):'not used yet'}${when?' · '+esc(when):''}</div>
-    </div>`;
-  }).join('') : '<span class="mut" style="font-size:12px">none yet — import one below</span>';
+  const at=new Map(MEDIAVIEW.map((m,i)=>[m.name,i]));
+  if(!MEDIAVIEW.length)
+    return void($('media').innerHTML='<span class="mut" style="font-size:12px">'+
+      'none yet — import one below</span>');
+  // an older server sends no attribution: draw the flat list it expects
+  if(!home)
+    return void($('media').innerHTML=MEDIAVIEW.map(
+      (m,i)=>mediaRow(m,i,n[m.name]||0)).join(''));
+  const q=QRY.media;
+  if(q){
+    const found=MEDIAVIEW.filter(m=>hits(q,m.name));
+    return void($('media').innerHTML=found.length
+      ?found.map(m=>mediaRow(m,at.get(m.name),n[m.name]||0)).join(''):nomatch);
+  }
+  const groups=new Map(), kids=new Map();
+  const grp=(key,title)=>{
+    if(!groups.has(key))groups.set(key,{key,title,rows:[]});
+    return groups.get(key);
+  };
+  for(const m of MEDIAVIEW){
+    const h=home[m.name];
+    // A variant hangs under the picture that was kept, wherever that picture
+    // is filed; one that outlived its keeper stands on its own rather than
+    // vanishing into a fold that is never drawn.
+    if(h&&h.how==='variant'&&h.of&&at.has(h.of)){
+      if(!kids.has(h.of))kids.set(h.of,[]);
+      kids.get(h.of).push(m);
+      continue;
+    }
+    grp(h?'p:'+h.project:'orphans',
+        h?(h.title||h.project):'Nothing knows these').rows.push(m);
+  }
+  const order=[...groups.values()].sort((a,b)=>{
+    if((a.key==='orphans')!==(b.key==='orphans'))return a.key==='orphans'?1:-1;
+    const ao=!!(DOC&&a.key==='p:'+DOC.name), bo=!!(DOC&&b.key==='p:'+DOC.name);
+    if(ao!==bo)return ao?-1:1;
+    return a.title.localeCompare(b.title);
+  });
+  let html='';
+  for(const G of order){
+    const fold=mFolded(G.key);
+    const deep=G.rows.reduce((k,m)=>k+1+(kids.get(m.name)||[]).length,0);
+    html+=`<div class="sbar mgrp" data-k="${aq(G.key)}"
+      title="${G.key==='orphans'?'no card shows these, no card painted against them'
+        :'what this story shows, painted against, or generated'}">
+      <span class="fold">${fold?'▸':'▾'}</span><b>${esc(G.title)}</b>
+      <span style="flex:1"></span>
+      <span class="mut" style="font-size:11px">${deep}</span></div>`;
+    if(fold)continue;
+    html+='<div class="smem in">';
+    for(const m of G.rows){
+      html+=mediaRow(m,at.get(m.name),n[m.name]||0);
+      const ks=kids.get(m.name)||[];
+      if(!ks.length)continue;
+      const vk='v:'+m.name, vf=mFolded(vk);
+      html+=`<div class="vfold" data-k="${aq(vk)}">${vf?'▸':'▾'} ${ks.length} variant${
+        ks.length===1?'':'s'} not kept</div>`;
+      if(!vf)html+='<div class="vkids">'+ks.map(
+        k=>mediaRow(k,at.get(k.name),n[k.name]||0)).join('')+'</div>';
+    }
+    html+='</div>';
+  }
+  $('media').innerHTML=html;
+  // delegated rather than inline: a pool name is a filename, and filenames
+  // are not obliged to be safe inside a quoted handler
+  document.querySelectorAll('#media [data-k]').forEach(el=>
+    el.addEventListener('click',e=>{ e.stopPropagation(); foldMedia(el.dataset.k); }));
 }
 function mediaMenu(e,i){
   const m=MEDIAVIEW[i]; if(!m)return;
   const used=(STATE.media_counts||{})[m.name]||0;
   const mk=m.kind==='video'?'video':'image', eapp=appFor(mk);
   openCtx(e,[
+    {label:'Open in your Viewer', run:()=>api('/api/media/open',{media:m.name})},
     ...(eapp?[{label:'Edit in '+appLabel(eapp),
       run:()=>editExternal(mk,m.name)}]:[]),
     {label:'Rename…', run:()=>{ openCtx(e,[]);
        ctxAsk(m.name,'media name','rename',t=>renameMedia(m.name,t)); }},
+    ...(m.kind!=='video'?[{label:'→ Make This a Reference…',
+       run:()=>promotePicker(e,m.name)}]:[]),
     '-',
     // no delete, as clips: undo can resurrect a card that points at it
     {label:used?`used by ${used} card${used===1?'':'s'}`:'not used by any card',disabled:true},
@@ -2076,7 +2842,7 @@ async function dropMediaAt(at,grp){
   document.body.dataset.dropclip='';
   if(!media)return;
   if(!DOC)return void($('status').innerHTML=
-    '<span class="warn">open an episode first</span> — a visual needs somewhere to land');
+    '<span class="warn">open a stack first</span> — a visual needs somewhere to land');
   await flushAll();
   const r=await api('/api/insert',{name:DOC.name,at,kind:'visual',group:grp||''});
   if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
@@ -2119,6 +2885,630 @@ $('mediafile').onchange=async e=>{
   await refresh(); renderMedia();
   if(id!=null&&DOC)open_(DOC.name,true,id);
 };
+
+// ── the cast ──────────────────────────────────────────────
+// Characters, locations, props and styles as things the library knows by
+// name (CAST.md). Two surfaces for two jobs: the sidebar tab is for
+// REACHING — a narrow list grouped by kind, filtered by the open story's
+// shelf — and the board is for WORKING, one member's plates grouped by
+// look, with the deck's width. The board takes over the deck (this app has
+// no modals, on purpose) and is a function of the member and its plates
+// ALONE: it must never read DOC, which is what would keep it able to
+// become its own window on a second display one day.
+let CASTSEL=null;                 // whose board the deck is wearing
+let DRAGPLATE=null;               // a plate mid-reorder, so file drops stand aside
+let DRAGCAST=null;                // a member mid-drag towards a visual card
+let PAINTTGT='';                  // the plate the board's Paint varies, '' = the key
+let PAINTCAND='';                 // or a candidate file to vary — never both
+let BOARDPAINTING=false;          // one candidate at a time; the button says so
+// §7d: prompts that paint well, kept as buttons because the phrasing matters
+// and should not have to be remembered. [label, file stem, the prompt]
+const CASTPRESETS=[
+  ['turnaround','sheet','the same character, model sheet, front / three-quarter / profile / back, neutral grey background, consistent height and proportion, no text'],
+  ['expressions','expressions','the same character, expression sheet: a grid of six faces — joy, anger, fear, surprise, weariness, resolve — neutral grey background, consistent proportion, no text'],
+  ['three angles','angles','the same character in this outfit, from three angles: front, three-quarter and back, neutral grey background, consistent height and proportion, no text'],
+];
+let CFOLD={};                     // folded kind groups, per machine
+try{ CFOLD=JSON.parse(localStorage.getItem('saga.cfold')||'{}'); }catch(e){}
+function foldCast(k){
+  CFOLD[k]=!CFOLD[k];
+  try{ localStorage.setItem('saga.cfold',JSON.stringify(CFOLD)); }catch(e){}
+  renderCast();
+}
+// which shelf the open story sits on. The claim rule already ran in
+// series_state, so the first shelf listing this story is the one that owns
+// it — the TAB may ask this (filtering is its job); the board never does.
+function castShelf(){
+  if(!DOC)return '';
+  for(const s of STATE.series||[])
+    if((s.order||[]).includes(DOC.name))return s.slug;
+  return '';
+}
+const KINDORDER=['character','location','prop','style'];
+// slugs ride inside quoted inline handlers, so only the ref alphabet gets
+// drawn at all — the server never mints anything else; this guards the
+// hand-edited registry
+const castRows=()=>Object.entries(STATE.cast||{})
+  .filter(([slug])=>/^[a-z0-9_-]{1,60}$/.test(slug))
+  .map(([slug,m])=>({slug,...m}));
+// one wrapper for every cast verb: errors land in the footer; success
+// refreshes the state and re-dresses whatever cast surface is showing
+async function castApi(p,b,quiet){
+  let r; try{ r=await api(p,b); }catch(ex){ r={error:String(ex)}; }
+  if(r.error){ $('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`; return null; }
+  if(!quiet){ await refresh(); renderBoard(true); }
+  return r;
+}
+function castThumb(m){
+  const p=(m.plates||{})[m.key]||Object.values(m.plates||{})[0];
+  return p&&p.file
+    ?`<img src="/api/plate?slug=${m.slug}&f=${encodeURIComponent(p.file)}" loading="lazy"
+       style="height:30px;width:44px;object-fit:cover;border-radius:4px;flex:none">`
+    :`<span style="width:44px;text-align:center;flex:none" title="no plates yet">🎭</span>`;
+}
+function castRow(m){
+  const n=Object.keys(m.plates||{}).length;
+  return `<div class="proj ${CASTSEL===m.slug?'sel':''}" draggable="true"
+    ondragstart="castDragStart(event,'${m.slug}')" ondragend="castDragEnd()"
+    onclick="openBoard('${m.slug}')" oncontextmenu="castMenu(event,'${m.slug}')"
+    title="open the board — plates, looks, the key · drag onto a visual card to reference it">
+    <div style="display:flex;gap:6px;align-items:center">
+      ${castThumb(m)}
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.title||m.slug)}</span>
+    </div>
+    <div class="meta">@${m.slug} · ${n||'no'} plate${n===1?'':'s'}${
+      m.scope?' · '+esc(m.scope):''}</div>
+  </div>`;
+}
+function renderCast(){
+  const box=$('cast'); if(!box)return;
+  const all=castRows();
+  if(!all.length)
+    return void(box.innerHTML='<span class="mut" style="font-size:12px">'+
+      'nobody yet — a cast member is a character, a place, a prop or a '+
+      'style the pictures hold to</span>');
+  // scope decides where a member is SHOWN, never which one is found: with
+  // no story open there is nothing to filter against, so everyone shows
+  const shelf=castShelf(), showall=!!($('castall')&&$('castall').checked);
+  const rows=all.filter(m=>showall||!DOC||!m.scope||m.scope===shelf);
+  const q=QRY.cast;
+  if(q){   // searching flattens, as everywhere: a match in a shut fold is no match
+    const found=rows.filter(m=>hits(q,m.slug,m.title,m.kind,m.brief));
+    return void(box.innerHTML=found.length?found.map(castRow).join(''):nomatch);
+  }
+  const groups=new Map();
+  for(const m of rows){
+    const k=(m.kind||'').trim()||'other';
+    if(!groups.has(k))groups.set(k,[]);
+    groups.get(k).push(m);
+  }
+  const order=[...groups.keys()].sort((a,b)=>{
+    const ia=KINDORDER.indexOf(a), ib=KINDORDER.indexOf(b);
+    if((ia<0)!==(ib<0))return ia<0?1:-1;      // the four that name themselves first
+    return ia<0?a.localeCompare(b):ia-ib;
+  });
+  let html='';
+  for(const k of order){
+    const mem=groups.get(k).sort((a,b)=>
+      String(a.title||a.slug).localeCompare(String(b.title||b.slug)));
+    const fold=!!CFOLD[k];
+    html+=`<div class="sbar mgrp" data-k="${aq(k)}">
+      <span class="fold">${fold?'▸':'▾'}</span>
+      <b style="text-transform:uppercase;font-size:10.5px;letter-spacing:.08em">${
+        esc(k+(/s$/.test(k)?'':'s'))}</b>
+      <span style="flex:1"></span>
+      <span class="mut" style="font-size:11px">${mem.length}</span></div>`;
+    if(fold)continue;
+    html+='<div class="smem in">'+mem.map(castRow).join('')+'</div>';
+  }
+  const hid=all.length-rows.length;
+  if(hid)html+=`<div class="mut" style="font-size:11px;margin-top:6px">${hid} more scoped to other shelves</div>`;
+  box.innerHTML=html;
+  // delegated, as the pool tree: a kind is free text, and free text has no
+  // business inside a quoted handler
+  document.querySelectorAll('#cast .mgrp[data-k]').forEach(el=>
+    el.addEventListener('click',e=>{ e.stopPropagation(); foldCast(el.dataset.k); }));
+}
+// ── dragging a member onto a card ── the reaching half of the Cast tab
+// (CAST.md §7a): the row lands ON a visual card and leaves `@slug` in its
+// references. The deck's own drop gates all check their own payloads, so a
+// cast drag slides past them; these two delegated listeners are its only
+// audience. The paint row opens on the card that took the drop, so the new
+// chip is seen and not just believed in.
+function castDragStart(e,slug){
+  DRAGCAST=slug;
+  e.dataTransfer.effectAllowed='copy';
+  try{ e.dataTransfer.setData('text/plain','@'+slug); }catch(_){}
+  let n=0;
+  if(DOC)for(const c of DOC.chunks)if(c.type==='visual'){
+    const el=$('c'+c.id); if(el){ el.classList.add('reftgt'); n++; }
+  }
+  $('status').textContent=n
+    ?`drop “@${slug}” on a lit visual card to paint against it`
+    :(DOC?'no visual cards in this stack — a reference lands on a visual card'
+         :'open a stack first — a reference needs a card to land on');
+}
+function castDragEnd(){
+  DRAGCAST=null;
+  document.querySelectorAll('#main .reftgt,#main .refhot').forEach(el=>
+    el.classList.remove('reftgt','refhot'));
+}
+$('main').addEventListener('dragover',e=>{
+  if(!DRAGCAST)return;
+  const el=e.target.closest('.chunk.reftgt'); if(!el)return;
+  e.preventDefault(); e.dataTransfer.dropEffect='copy';
+  document.querySelectorAll('#main .refhot').forEach(x=>x.classList.remove('refhot'));
+  el.classList.add('refhot');
+});
+$('main').addEventListener('drop',e=>{
+  if(!DRAGCAST)return;
+  const el=e.target.closest('.chunk.reftgt');
+  const slug=DRAGCAST; castDragEnd();
+  if(!el)return;
+  e.preventDefault(); e.stopPropagation();
+  const id=+el.id.slice(1);
+  PAINTS.add(id);                 // surface the chip that just landed
+  addRef(id,'@'+slug);
+  $('status').innerHTML=`<span class="ok">“@${slug}” referenced on card #${id}</span>`+
+    ' — its plate and brief ride along when it paints';
+});
+function castMenu(e,slug){
+  const m=(STATE.cast||{})[slug]; if(!m)return;
+  openCtx(e,[
+    {label:'Rename…', run:()=>{ openCtx(e,[]);
+      ctxAsk(m.title||slug,'what a human calls it','rename',
+        t=>castApi('/api/cast/edit',{slug,title:t})); }},
+    {label:'Show its Folder', run:()=>castApi('/api/cast/reveal',{slug},true)},
+    {label:'Duplicate the Member', run:()=>dupMember(slug)},
+    '-',
+    {label:'Remove from the Cast…', danger:true, run:()=>removeMember(slug)},
+  ]);
+}
+async function removeMember(slug){
+  const m=(STATE.cast||{})[slug]; if(!m)return;
+  const n=Object.keys(m.plates||{}).length;
+  if(!confirm(`Remove “${m.title||slug}” from the cast?\n\n`+
+    (n?`Its ${n} plate${n===1?'':'s'} stay on disk in cast/${slug}/ — only the registry forgets it.`
+      :'Nothing on disk goes with it.')))return;
+  if(CASTSEL===slug)closeBoard();
+  await castApi('/api/cast/delete',{slug});
+}
+function newMemberPanel(){
+  const p=$('newmember'); p.hidden=!p.hidden;
+  if(!p.hidden){
+    const kinds=new Set(KINDORDER);
+    for(const m of castRows())if((m.kind||'').trim())kinds.add(m.kind.trim());
+    $('kindlist').innerHTML=[...kinds].map(k=>`<option value="${aq(k)}">`).join('');
+    $('nm_title').focus();
+  }
+}
+async function createMember(){
+  const t=$('nm_title').value.trim(); if(!t)return $('nm_title').focus();
+  const kind=$('nm_kind').value.trim().toLowerCase();
+  // born scoped to the shelf being worked on: a global debut is a choice
+  // (one field on the board), not a default that clutters every story
+  const r=await castApi('/api/cast/new',{title:t,kind,scope:castShelf()});
+  if(!r)return;
+  $('nm_title').value=''; $('nm_kind').value=''; $('newmember').hidden=true;
+  openBoard(r.slug);
+}
+
+// ── the board ── it swaps in for the deck; body.dataset.mode carries it
+function openBoard(slug){
+  if(CASTSEL!==slug){         // another member is another painting session
+    PAINTTGT=''; PAINTCAND='';
+    const cp=$('cpaint'); if(cp)cp.value='';
+  }
+  CASTSEL=slug;
+  document.body.dataset.mode='cast';
+  if(document.body.dataset.side!=='cast')setSide('cast');
+  renderCast();               // the row lights up
+  renderBoard(true);
+}
+function closeBoard(){
+  CASTSEL=null;
+  document.body.dataset.mode='';
+  $('castboard').innerHTML='';
+  renderCast();               // the light goes out
+}
+function renderBoard(force){
+  if(!CASTSEL)return;
+  const m=(STATE.cast||{})[CASTSEL];
+  if(!m)return void closeBoard();          // removed under this board
+  const bd=$('castboard');
+  if(!force){
+    // a refresh mid-typing must not rebuild the field out from under the
+    // caret — the same bargain togglePaint strikes with its prompt box
+    const el=document.activeElement;
+    if(el&&bd.contains(el)&&/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))return;
+  }
+  if(PAINTTGT&&!(m.plates||{})[PAINTTGT])PAINTTGT='';
+  if(PAINTCAND&&!(m.candidates||[]).includes(PAINTCAND))PAINTCAND='';
+  // a rebuild must not eat a half-typed paint prompt (a fresh board never
+  // inherits one: openBoard clears the box on a member switch)
+  const oldPrompt=($('cpaint')||{}).value||'';
+  $('castbar').innerHTML=`<span>✎ ${esc(m.title||CASTSEL)} · ${esc(m.kind||'member')}</span>
+    <span class="mut" style="font-size:11px">@${CASTSEL}</span>
+    <span style="flex:1"></span>
+    <button class="tiny" onclick="castApi('/api/cast/reveal',{slug:'${CASTSEL}'},true)"
+      title="the member's folder on disk — where its plates live">Show Folder</button>
+    <button class="tiny" onclick="closeBoard()">← back to the deck</button>`;
+  const profs=STATE.profiles||{}, engines=STATE.engines||[], voice=m.voice||{};
+  const shelves=STATE.series||[];
+  let html=`<div class="bhead">
+    <label class="stlab" style="margin:0"
+      title="goes into every prompt as words, next to the plates — a picture and a sentence agreeing beat either alone">brief
+    <textarea id="cbrief" rows="2" style="width:100%;resize:vertical;margin-top:2px"
+      placeholder="what every picture of ${aq(m.title||CASTSEL)} must agree on: species, clothes, age, mood…"
+      onblur="castApi('/api/cast/edit',{slug:'${CASTSEL}',brief:this.value})">${esc(m.brief||'')}</textarea></label>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;align-items:end">
+      <label class="stlab" style="margin:0;flex:1;min-width:120px">kind
+        <input value="${aq(m.kind||'')}" list="kindlist"
+          onchange="castApi('/api/cast/edit',{slug:'${CASTSEL}',kind:this.value})"></label>
+      <label class="stlab" style="margin:0;flex:1;min-width:140px"
+        title="where this member is SHOWN in the Cast tab — a ref finds it from anywhere either way">shown on
+        <select onchange="castApi('/api/cast/edit',{slug:'${CASTSEL}',scope:this.value})">
+          <option value="">every collection</option>
+          ${shelves.map(s=>`<option value="${aq(s.slug)}" ${m.scope===s.slug?'selected':''}>${esc(s.title)}</option>`).join('')}
+          ${m.scope&&!shelves.some(s=>s.slug===m.scope)
+            ?`<option value="${aq(m.scope)}" selected>${esc(m.scope)} (a collection that has gone)</option>`:''}
+        </select></label>
+      ${engines.map(e=>`<label class="stlab" style="margin:0;flex:1;min-width:130px"
+        title="a LINK to a voice profile — the profile stays what it is; the character just knows it">voice · ${esc(e)}
+        <select onchange="setVoiceLink('${esc(e)}',this.value)">
+          <option value="">none</option>
+          ${Object.keys(profs).filter(n=>(profs[n].engine||'chatterbox')===e).sort().map(n=>
+            `<option value="${aq(n)}" ${voice[e]===n?'selected':''}>${esc(n)}</option>`).join('')}
+        </select></label>`).join('')}
+    </div>
+  </div><div class="bwrap">`;
+  const plates=Object.entries(m.plates||{});
+  if(!plates.length){
+    html+=`<div class="mut" style="font-size:12.5px;margin-top:14px">No plates
+      yet. A plate is reference artwork this member is painted against — the
+      turnaround, the three-quarter, the expressions — grouped by <i>look</i>
+      (the outfit, or the weather) once you name one.</div>`;
+  }else{
+    const looks=new Map();
+    for(const [slot,p] of plates){
+      const lk=(p.look||'').trim();
+      if(!looks.has(lk))looks.set(lk,[]);
+      looks.get(lk).push([slot,p]);
+    }
+    for(const [lk,ps] of looks){
+      // one unnamed group is just "the plates" — a header would be noise
+      if(!(looks.size===1&&!lk))
+        html+=`<div class="lookbar"><b>${lk?esc(lk):'<span class="mut" style="font-weight:400">no look named</span>'}</b>
+          <span class="mut" style="font-size:11px">${ps.length}</span>
+          <span style="flex:1"></span>
+          <button class="tiny lookdup" data-look="${aq(lk)}"
+            title="duplicate this look — every plate copied into a new look, each pointing at the picture it came from, ready to repaint. One gesture for “she becomes a cosmonaut”.">⧉ dup</button></div>`;
+      else html+='<div style="margin-top:14px"></div>';
+      html+='<div class="plategrid">'+ps.map(([slot,p])=>plateTile(slot,p,m.key===slot)).join('')+'</div>';
+    }
+  }
+  // ── candidates ── painted or unlinked, not canon until accepted (§7c)
+  const cand=(m.candidates||[]).filter(f=>/^[a-z0-9_.-]{1,80}$/.test(f)&&!f.includes('..'));
+  if(cand.length){
+    html+=`<div class="lookbar"><b style="color:var(--amber)">candidates</b>
+      <span class="mut" style="font-size:11px">${cand.length} waiting — click one to accept it into a slot, or drop it from the row</span></div>
+      <div class="plategrid">`+cand.map(f=>`<div class="plate cand" data-file="${aq(f)}"
+        title="a candidate — click to choose what becomes of it">
+        <img src="/api/plate?slug=${CASTSEL}&f=${encodeURIComponent(f)}" loading="lazy" draggable="false">
+        <div class="pcap"><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.replace(/\.[a-z0-9]+$/,''))}</span></div>
+      </div>`).join('')+'</div>';
+  }
+  // ── painting ── candidates only, assembled exactly as a card's paint is
+  const nb=!!STATE.nanobanana, some=!!Object.keys(m.plates||{}).length;
+  html+=`<div style="display:flex;gap:6px;margin-top:16px;align-items:start">
+    <textarea id="cpaint" rows="2" style="flex:1;resize:vertical;min-height:38px"
+      placeholder="${nb?'paint a candidate — '+(PAINTCAND?'that candidate and the brief ride'
+        :some?'the '+(PAINTTGT||'key')+' plate and the brief ride':'the brief rides')+' along; every press is a few cents and ~15s'
+        :'painting needs an image provider — a Gemini key or Draw Things, in ⚙ Settings'}"
+      onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))boardPaint(this.value,'candidate')"></textarea>
+    <button id="cpb" class="pri" ${nb&&!BOARDPAINTING?'':'disabled'}
+      onclick="boardPaint($('cpaint').value,'candidate')">${BOARDPAINTING?'painting…':'Paint'}</button>
+  </div>
+  <div style="display:flex;gap:5px;margin-top:5px;align-items:center;flex-wrap:wrap">
+    ${PAINTTGT?`<button class="tiny" onclick="PAINTTGT='';renderBoard(true)"
+      title="painting against @${CASTSEL}/${PAINTTGT} — click to go back to painting against the key">against: ${esc(PAINTTGT)} ✕</button>`:''}
+    ${PAINTCAND?`<button class="tiny" onclick="PAINTCAND='';renderBoard(true)"
+      title="painting against this candidate ALONE — the key stays out of it, so the paint is not dragged back toward the look the candidate may be escaping. Click to go back to the key.">against candidate: ${esc(PAINTCAND.replace(/\.[a-z0-9]+$/,''))} ✕</button>`:''}
+    ${CASTPRESETS.map((p,i)=>`<button class="tiny" ${nb&&some&&!BOARDPAINTING?'':'disabled'}
+      onclick="boardPaint(CASTPRESETS[${i}][2],CASTPRESETS[${i}][1])"
+      title="${aq(p[2])}">${esc(p[0])}</button>`).join('')}
+    <span class="mut" style="font-size:11px">${some?'what it paints lands above as a candidate':'no plates yet — a first painting works from the brief alone'}</span>
+  </div>`;
+  html+=`<div id="castdrop">drop pictures here to add plates — or click to choose</div>
+    <div class="mut" style="font-size:11px;margin-bottom:10px">right-click a
+      plate for its slot name, look, view, the key ★ and paint-against —
+      drag to reorder. Removing one unlinks it into the candidates; a pool
+      picture dragged here is copied in as a plate, the pool copy stays.</div>
+    <input type="file" id="platefile" hidden multiple
+      accept="image/*,.png,.jpg,.jpeg,.webp,.gif"></div>`;
+  bd.innerHTML=html;
+  wireBoard();
+  const cp=$('cpaint'); if(cp&&oldPrompt&&!cp.value)cp.value=oldPrompt;
+}
+function plateTile(slot,p,key){
+  return `<div class="plate ${key?'key':''}" draggable="true" data-slot="${aq(slot)}"
+    title="${aq(slot)} — drag to reorder · right-click for rename, key, look, view">
+    ${p.file?`<img src="/api/plate?slug=${CASTSEL}&f=${encodeURIComponent(p.file)}" loading="lazy" draggable="false">`
+      :'<div style="height:104px;display:grid;place-items:center" class="mut">no file</div>'}
+    <div class="pcap">${key?'<span class="star" title="the key — the default plate for the whole member">★</span>':''}
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(slot)}</span></div>
+    ${p.view?`<div class="pview">${esc(p.view)}</div>`:''}
+  </div>`;
+}
+function wireBoard(){
+  const bd=$('castboard');
+  bd.querySelectorAll('.plate.cand').forEach(el=>{
+    const open=e=>candMenu(e,el.dataset.file);
+    el.addEventListener('click',open);
+    el.addEventListener('contextmenu',open);
+  });
+  bd.querySelectorAll('.lookdup').forEach(el=>
+    el.addEventListener('click',e=>dupLook(e,el.dataset.look)));
+  bd.querySelectorAll('.plate:not(.cand)').forEach(el=>{
+    el.addEventListener('dragstart',e=>{
+      DRAGPLATE=el.dataset.slot; el.classList.add('dragging');
+      e.dataTransfer.effectAllowed='move';
+      try{ e.dataTransfer.setData('text/plain',el.dataset.slot); }catch(_){}
+    });
+    el.addEventListener('dragend',()=>{ DRAGPLATE=null;
+      bd.querySelectorAll('.plate').forEach(x=>x.classList.remove('dragging','hot')); });
+    el.addEventListener('dragover',e=>{
+      if(!DRAGPLATE||DRAGPLATE===el.dataset.slot)return;
+      e.preventDefault(); el.classList.add('hot');
+    });
+    el.addEventListener('dragleave',()=>el.classList.remove('hot'));
+    el.addEventListener('drop',e=>{
+      e.preventDefault(); e.stopPropagation();
+      const from=DRAGPLATE, to=el.dataset.slot; DRAGPLATE=null;
+      if(from&&to&&from!==to)reorderPlates(from,to);
+    });
+    el.addEventListener('contextmenu',e=>plateMenu(e,el.dataset.slot));
+  });
+  const dz=$('castdrop');
+  dz.onclick=()=>$('platefile').click();
+  ['dragenter','dragover'].forEach(k=>dz.addEventListener(k,e=>{
+    if(DRAGPLATE)return;                       // a reorder is not an arrival
+    e.preventDefault(); dz.classList.add('hot'); }));
+  ['dragleave','drop'].forEach(k=>dz.addEventListener(k,e=>{
+    e.preventDefault(); dz.classList.remove('hot'); }));
+  dz.addEventListener('drop',e=>{ if(!DRAGPLATE)boardDrop(e); });
+  $('platefile').onchange=e=>{ uploadPlates(e.target.files); e.target.value=''; };
+  // the whole board takes a drop, the gesture #drop already teaches: files
+  // from Finder become plates; a picture dragged over from the POOL is the
+  // promotion gesture (§6) with the member already answered
+  bd.ondragover=e=>{ if(!DRAGPLATE)e.preventDefault(); };
+  bd.ondrop=e=>{ if(!DRAGPLATE){ e.preventDefault(); boardDrop(e); } };
+}
+function boardDrop(e){
+  if(DRAGMEDIA){
+    const n=DRAGMEDIA; DRAGMEDIA=null; document.body.dataset.dropclip='';
+    promoteMedia({media:n,slug:CASTSEL});
+    return;
+  }
+  uploadPlates(e.dataTransfer.files);
+}
+async function setVoiceLink(engine,prof){
+  const m=(STATE.cast||{})[CASTSEL]; if(!m)return;
+  const v={...(m.voice||{})};
+  if(prof)v[engine]=prof; else delete v[engine];
+  await castApi('/api/cast/edit',{slug:CASTSEL,voice:v});
+}
+async function reorderPlates(from,to){
+  const m=(STATE.cast||{})[CASTSEL]; if(!m)return;
+  const order=Object.keys(m.plates||{}).filter(k=>k!==from);
+  const at=order.indexOf(to);
+  order.splice(at<0?order.length:at,0,from);   // dropped ON a tile lands before it
+  await castApi('/api/cast/plate/order',{slug:CASTSEL,order});
+}
+function plateMenu(e,slot){
+  const m=(STATE.cast||{})[CASTSEL]; if(!m)return;
+  const p=(m.plates||{})[slot]; if(!p)return;
+  openCtx(e,[
+    {label:m.key===slot?'It is the Key Plate':'Make it the Key',
+     disabled:m.key===slot,
+     run:()=>castApi('/api/cast/edit',{slug:CASTSEL,key:slot})},
+    {label:'Rename the Slot…', run:()=>{ openCtx(e,[]);
+      ctxAsk(slot,'slot name — 3q, sheet, angry…','rename',
+        t=>castApi('/api/cast/plate/rename',{slug:CASTSEL,from:slot,to:t})); }},
+    {label:'Set the Look…', run:()=>{ openCtx(e,[]);
+      ctxAsk(p.look||'','the outfit, or the weather — trenchcoat, night rain…','set',
+        t=>castApi('/api/cast/plate/edit',{slug:CASTSEL,plate:slot,look:t})); }},
+    {label:'Set the View…', run:()=>{ openCtx(e,[]);
+      ctxAsk(p.view||'','the angle — 3/4, front, turnaround, expression…','set',
+        t=>castApi('/api/cast/plate/edit',{slug:CASTSEL,plate:slot,view:t})); }},
+    ...(p.look||p.view?[{label:'Clear the Look and View',
+      run:()=>castApi('/api/cast/plate/edit',{slug:CASTSEL,plate:slot,look:'',view:''})}]:[]),
+    '-',
+    {label:'Paint a Variant of This One…', run:()=>{
+      PAINTTGT=slot; PAINTCAND=''; renderBoard(true);
+      const cp=$('cpaint'); if(cp)cp.focus();
+      $('status').textContent=`painting against @${CASTSEL}/${slot} — write the prompt and press Paint`;
+    }},
+    {label:'Open in your Viewer', run:()=>castApi('/api/cast/open',{slug:CASTSEL,plate:slot},true)},
+    '-',
+    {label:'Remove from its Slot', danger:true,
+     run:()=>castApi('/api/cast/plate/remove',{slug:CASTSEL,plate:slot})},
+  ]);
+}
+async function uploadPlates(list){
+  if(!CASTSEL||!list||!list.length)return;
+  const files=[...list].filter(f=>/\.(png|jpe?g|webp|gif)$/i.test(f.name));
+  if(!files.length)return void($('status').innerHTML=
+    '<span class="warn">a plate is a picture — png, jpg, webp or gif</span>');
+  let done=0;
+  for(const f of files){
+    $('status').textContent=`filing ${f.name}… (${done+1}/${files.length})`;
+    let j;
+    try{
+      const r=await fetch(`/api/cast/upload?slug=${CASTSEL}&fn=${encodeURIComponent(f.name)}`,
+        {method:'POST',body:f,headers:{'Content-Type':'application/octet-stream'}});
+      j=await r.json();
+    }catch(ex){ j={error:String(ex)}; }
+    if(j.error)return void($('status').innerHTML=`<span class="warn">${esc(j.error)}</span>`);
+    done++;
+  }
+  await refresh(); renderBoard(true);
+  $('status').innerHTML=`<span class="ok">${done} plate${done===1?'':'s'} filed</span>`+
+    ' — right-click one to name its slot, look and view';
+}
+
+// ── candidates, painting and promotion ── step 3 of CAST.md §10: the
+// gestures that make the registry worth having filled in.
+function candMenu(e,f){
+  const m=(STATE.cast||{})[CASTSEL]; if(!m||!(m.candidates||[]).includes(f))return;
+  const sug=f.replace(/\.[a-z0-9]+$/,'').replace(/-new(-\d+)?$/,'');
+  openCtx(e,[
+    {label:'Accept into a Slot…', run:()=>{ openCtx(e,[]);
+      ctxAsk(sug,'slot name — sheet, 3q, angry…','accept',
+        t=>acceptCand(f,t,false)); }},
+    {label:'Accept as the Key Plate…', run:()=>{ openCtx(e,[]);
+      ctxAsk(sug,'slot name','accept ★', t=>acceptCand(f,t,true)); }},
+    '-',
+    {label:'Paint a Variant of This One…', run:()=>{
+      PAINTCAND=f; PAINTTGT=''; renderBoard(true);
+      const cp=$('cpaint'); if(cp)cp.focus();
+      $('status').textContent=`painting against the candidate “${f}” alone — write the prompt and press Paint`;
+    }},
+    {label:'Open in your Viewer',
+     run:()=>castApi('/api/cast/open',{slug:CASTSEL,file:f},true)},
+    '-',
+    // the row forgets it; the file stays in the folder, as everywhere
+    {label:'Drop from the Row', danger:true,
+     run:()=>castApi('/api/cast/candidate/drop',{slug:CASTSEL,file:f})},
+  ]);
+}
+// accepting into an OCCUPIED slot is the repaint gesture: the slot keeps its
+// name, labels and every ref pointing at it, only the art changes, and the
+// old picture steps down into the candidates. Asked out loud first — the
+// server refuses the collision unless told replace, so nothing can be
+// clobbered by a name clash that nobody noticed.
+async function acceptCand(f,t,key){
+  const m=(STATE.cast||{})[CASTSEL]; if(!m)return;
+  const slot=String(t||'').toLowerCase().replace(/[^a-z0-9_-]+/g,'-')
+    .replace(/^-+|-+$/g,'').slice(0,40);
+  if(!slot)return;
+  const taken=!!(m.plates||{})[slot];
+  if(taken&&!confirm(`“${slot}” already holds a plate.\n\nReplace its picture with this candidate? The slot keeps its name, look and every ref pointing at it — the old picture steps down into the candidates row.`))return;
+  const r=await castApi('/api/cast/accept',
+    {slug:CASTSEL,file:f,plate:slot,key,replace:taken});
+  if(r)$('status').innerHTML=`<span class="ok">“${esc(slot)}” ${
+    taken?'repainted — the old picture waits in the candidates':'accepted'}</span>${
+    key?' — and it is the key ★':''}`;
+}
+async function boardPaint(prompt,stem){
+  if(!CASTSEL||BOARDPAINTING)return;
+  const slug=CASTSEL;
+  prompt=(prompt||'').trim();
+  if(!prompt){
+    $('status').textContent='write the prompt first — Paint paints what the prompt says';
+    const cp=$('cpaint'); if(cp)cp.focus();
+    return;
+  }
+  BOARDPAINTING=true;
+  const b=$('cpb'); if(b){ b.disabled=true; b.textContent='painting…'; }
+  $('status').textContent='painting a candidate — about 15 seconds';
+  let r; try{ r=await api('/api/cast/paint',{slug,prompt,plate:PAINTTGT,
+    file:PAINTCAND,stem:stem||'candidate'}); }
+  catch(ex){ r={error:String(ex)}; }
+  BOARDPAINTING=false;
+  if(r.error){
+    if(CASTSEL===slug)renderBoard(true);
+    return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  }
+  const cp=$('cpaint'); if(cp)cp.value='';
+  await refresh();
+  if(CASTSEL===slug)renderBoard(true);
+  $('status').innerHTML=`<span class="ok">“${esc(r.file)}” painted</span> — it waits in the candidates row; accept it into a slot or drop it`;
+}
+async function dupLook(e,look){
+  if(!CASTSEL)return;
+  openCtx(e,[]);
+  ctxAsk('','the new look — spacesuit red, winter coat…','copy',async to=>{
+    const r=await castApi('/api/cast/dup_look',{slug:CASTSEL,look,to});
+    if(r)$('status').innerHTML=`<span class="ok">${r.plates.length} plate${r.plates.length===1?'':'s'} copied into “${esc(to)}”</span>`+
+      ' — each still shows the original; repaint one against it and accept the result into its slot';
+  });
+}
+async function dupMember(slug){
+  const r=await castApi('/api/cast/dup_member',{slug});
+  if(r){ openBoard(r.slug);
+    $('status').innerHTML=`<span class="ok">@${r.slug}</span> — the whole member, brief and voices included`; }
+}
+async function promoteMedia(p){
+  const r=await castApi('/api/cast/promote',p);
+  if(!r)return null;
+  $('status').innerHTML=`<span class="ok">filed as @${r.slug}/${r.plate}</span>`+
+    ' — the pool copy stays; right-click the plate to rename or label it';
+  return r;
+}
+// §6's dialog, in the CTX shell: which member (existing or new), then the
+// slot and whether it is the key. Two steps, one popover.
+function promotePicker(e,name){
+  openCtx(e,[]); if(!CTX)return;
+  CTX.classList.add('refpick');
+  const sug=name.replace(/-new(-\d+)?$/,'').slice(0,40);
+  const ask=slug=>{
+    CTX.innerHTML=`<div class="ctxask" style="flex-direction:column;align-items:stretch">
+      <div class="mut" style="font-size:11px">“${esc(name)}” → @${slug} — name its slot</div>
+      <input id="pslot" value="${aq(sug)}" placeholder="slot name — 3q, sheet, angry…">
+      <label class="mut" style="font-size:11px"><input type="checkbox" id="pkey"> make it the key plate</label>
+      <button class="pri">file it</button></div>`;
+    const inp=$('pslot'), btn=CTX.querySelector('button.pri');
+    const go=()=>{ const v=inp.value.trim(); if(!v)return inp.focus();
+      closeCtx();
+      promoteMedia({media:name,slug,plate:v,key:$('pkey')&&$('pkey').checked}); };
+    btn.onclick=go;
+    inp.onkeydown=ev=>{ ev.stopPropagation();
+      if(ev.key==='Enter'){ ev.preventDefault(); go(); }
+      if(ev.key==='Escape'){ ev.preventDefault(); closeCtx(); } };
+    inp.focus(); inp.select();
+  };
+  let html=`<div class="rphead" data-find="">“${esc(name)}” becomes a reference of…</div>`;
+  html+=castRows().map(m=>`<div class="rcell" data-slug="${m.slug}">
+    ${castThumb(m)}<span>${esc(m.title||m.slug)} · ${esc(m.kind||'member')}</span></div>`).join('');
+  html+=`<div class="rcell" data-new="1">
+    <span style="width:44px;text-align:center;flex:none">＋</span><span>someone new…</span></div>`;
+  CTX.innerHTML=html;
+  CTX.style.left=Math.max(6,Math.min(e.clientX,innerWidth-CTX.offsetWidth-8))+'px';
+  CTX.style.top=Math.max(6,Math.min(e.clientY,innerHeight-CTX.offsetHeight-8))+'px';
+  CTX.addEventListener('click',ev=>{
+    const r=ev.target.closest('.rcell'); if(!r)return;
+    if(r.dataset.new){
+      CTX.classList.remove('refpick');
+      ctxAsk('','who is this? their name — the rest is set on the board','create',
+        async t=>{
+          const got=await castApi('/api/cast/promote',
+            {media:name,new_title:t,scope:castShelf()});
+          if(got)$('status').innerHTML=`<span class="ok">@${got.slug} joins the cast</span>`+
+            ` — “${esc(name)}” filed as its ${esc(got.plate)} plate and its key`;
+        });
+      return;
+    }
+    ask(r.dataset.slug);
+  });
+}
+// door three of §7e: a voice profile that is already a character becomes one
+function castOfProfile(n){
+  for(const [slug,m] of Object.entries(STATE.cast||{}))
+    if(Object.values(m.voice||{}).includes(n))return slug;
+  return '';
+}
+async function castFromProfile(){
+  const n=EDITING;                 // the profile open in the editor
+  const prof=n&&(STATE.profiles||{})[n]; if(!prof)return;
+  const r=await castApi('/api/cast/new',{title:n,kind:'character',scope:castShelf()});
+  if(!r)return;
+  await castApi('/api/cast/edit',{slug:r.slug,
+    voice:{[prof.engine||'chatterbox']:n}});
+  openBoard(r.slug);
+  $('status').innerHTML=`<span class="ok">@${r.slug} joins the cast</span>`+
+    ' — linked to this voice; give it a brief and a first plate';
+}
 
 // ── publish ───────────────────────────────────────────────
 // Three doors out of the studio, all working on the open episode. The
@@ -2319,6 +3709,22 @@ document.addEventListener('contextmenu',e=>{
   const card=top.closest('.chunk');
   cardMenu(e,+card.id.slice(1));
 });
+// The picture on a visual card answers a right-click of its own: the viewer
+// gesture the cast board taught, now app-wide. Stills only — a film keeps
+// the browser's native menu, which carries its playback controls.
+document.addEventListener('contextmenu',e=>{
+  if(e.target.tagName!=='IMG')return;
+  const el=e.target.closest('#main .chunk'); if(!el)return;
+  const c=DOC&&DOC.chunks.find(x=>x.id===+el.id.slice(1));
+  if(!c||c.type!=='visual'||!c.media)return;
+  const eapp=appFor('image');
+  openCtx(e,[
+    {label:'Open in your Viewer', run:()=>api('/api/media/open',{media:c.media})},
+    ...(eapp?[{label:'Edit in '+appLabel(eapp),
+      run:()=>editExternal('image',c.media)}]:[]),
+    {label:`→ make “${c.media}” a reference…`, run:()=>promotePicker(e,c.media)},
+  ]);
+});
 function cardMenu(e,id){
   const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
   const items=[
@@ -2357,11 +3763,20 @@ async function removeSweep(id,scope){
 
 function projMenu(e,name){
   const p=(STATE.projects||[]).find(x=>x.name===name); if(!p)return;
+  // The shelves, as a menu. Dragging is the gesture, but a shelf scrolled off
+  // the top of the sidebar cannot be dragged to, and a story you have just
+  // made is exactly the one furthest from where it belongs.
+  const ser=STATE.series||[], on=ser.find(s=>s.order.includes(name)), shelf=[];
+  for(const s of ser)
+    if(!on||s.slug!==on.slug)
+      shelf.push({label:`Move to “${s.title}”`, run:()=>assignSeries(name,s.slug,null)});
+  if(on)shelf.push({label:`Take out of “${on.title}”`, run:()=>assignSeries(name,'',null)});
   openCtx(e,[
     {label:'Open', run:()=>openProject(name)},
     {label:'Rename…', run:()=>{ openCtx(e,[]); ctxAsk(p.title,'episode title','rename',
         t=>renameProject(name,t)); }},
     {label:'Duplicate', run:()=>duplicateProject(name)},
+    ...(shelf.length?['-',...shelf]:[]),
     '-',
     {label:'Show in Finder', run:()=>reveal(name)},
     {label:'Export…', run:()=>exportOne(name)},
@@ -2475,6 +3890,7 @@ function renderDoc(){
   }).join('');
   DOC.chunks.forEach(c=>{ if(c.type==='audio')fadeUi(c.id); });
   bindDrag(); paintClip();          // the strips are new, so their paste buttons are too
+  paintVFilter();                   // and so are the cards a voice filter hides
 }
 // ── groups ────────────────────────────────────────────────
 // A contiguous run of cards under one name — a scene, a beat — with a bar
@@ -2677,6 +4093,23 @@ function cardHTML(c){
 // two-hundred-card stack. The name is yours if you set one ("Maisie discovers
 // the plan"), the card's own gist otherwise.
 const cardName=c=>c.label||clipLabel(c)||'(empty card)';
+// Which voice a card speaks with. Speech and voiced cards have one and nothing
+// else does — the same line the renderer draws. Default counts: it is a profile
+// like any other, and a card speaking as Default should say so rather than
+// leave you to assume it.
+const cardVoice=c=>!c?null
+  :((c.type||'speech')==='speech'||c.type==='voiced')?(c.profile||'Default'):null;
+// A folded card is a bar, and a bar with only words on it is anonymous. So the
+// voice goes ahead of the words, and pressing it opens that profile in the
+// inspector — the one place the name was ever a link to anything.
+const vpill=c=>{ const n=cardVoice(c); return n?`<button class="vpill"
+    onclick="event.stopPropagation();inspectCardProfile(${c.id})"
+    title="spoken by “${attr(n)}” — click to open this voice in the inspector"
+    >${esc(n)}</button>`:''; };
+function inspectCardProfile(id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id);
+  if(c)inspectProfile(cardVoice(c));
+}
 const foldBtn=c=>c.min
   ?`<button class="tiny" onclick="setMin(${c.id},false)" title="expand">▸</button>`
   :`<button class="tiny" onclick="setMin(${c.id},true)"
@@ -2694,6 +4127,7 @@ function minCard(c){
       ${grip(c.id)}${foldBtn(c)}
       <span class="dot ${c.mute?'':(c.ready?'ready':'stale')}"></span>
       <span>#${c.id}</span>
+      ${vpill(c)}
       <span class="cardname" title="right-click to name this card">${esc(cardName(c))}</span>
       ${c.mute?'<span class="pill warn">muted</span>':''}
       ${tagsUi(c)}
@@ -2719,6 +4153,78 @@ async function minAll(){
   await api('/api/minall',{name:DOC.name,min:on});
   await open_(DOC.name,true);
 }
+// ── filter by voice ───────────────────────────────────────
+// A cast list above the stack, one chip per voice with how many cards it has,
+// and a click to see only those. It is how you find Maisie's eleven lines in
+// two hundred cards and work through them in one sitting.
+//
+// Nothing about it reaches the document: this is a pair of variables and a
+// class, so a filter is never something you can save by accident and never
+// something an export has to know about.
+let VFILTER=null, VFNAMES=[], VFLEN=null;
+function voiceCounts(){
+  const m=new Map();
+  (DOC?DOC.chunks:[]).forEach(c=>{ const v=cardVoice(c); if(v)m.set(v,(m.get(v)||0)+1); });
+  return m;
+}
+function renderVF(){
+  const b=$('vfbar'); if(!b)return;
+  const m=voiceCounts();
+  if(VFILTER&&!m.has(VFILTER))VFILTER=null;   // a voice this episode stopped using
+  // One voice is not a choice, and a strip that only ever says the same word
+  // is a line of the window the cards should have had.
+  b.hidden=!DOC||m.size<2;
+  if(b.hidden)return;
+  VFNAMES=[...m.keys()].sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base'}));
+  const tot=[...m.values()].reduce((a,b)=>a+b,0);
+  // the names go through VFNAMES rather than into the handler: a profile
+  // called Gertie's would otherwise end the string it was quoted in
+  b.innerHTML=`<span class="mut" style="font-size:10px;letter-spacing:.1em">VOICES</span>`+
+    `<button class="vchip${VFILTER?'':' on'}" onclick="setVoiceFilter(null)"
+      title="show every card again">all <i>${tot}</i></button>`+
+    VFNAMES.map((n,i)=>`<button class="vchip${VFILTER===n?' on':''}"
+      onclick="setVoiceFilter(VFNAMES[${i}])"
+      title="show only the cards spoken by “${attr(n)}”">${esc(n)} <i>${m.get(n)}</i></button>`).join('');
+}
+function setVoiceFilter(n){
+  VFILTER=n||null;
+  renderVF(); paintVFilter();
+  $('main').scrollTop=0;      // a filter is a fresh list; start it at the top
+  $('status').innerHTML=VFILTER
+    ?`showing the ${voiceCounts().get(VFILTER)||0} card(s) spoken by <b>${esc(VFILTER)}</b>`+
+     ` — the rest are only out of the way; press <b>all</b> to bring them back`
+    :'every voice again';
+}
+// Painted by class, never by rebuilding: this runs while a bake is repainting
+// the stack, and replacing a card's HTML would throw away the textarea you
+// happen to be typing in.
+function paintVFilter(){
+  if(!DOC)return;
+  const on=!!VFILTER, live=new Set();
+  DOC.chunks.forEach(c=>{
+    if(c.type==='group')return;                  // a bar answers to its members
+    const el=$('c'+c.id); if(!el)return;
+    const hide=on&&cardVoice(c)!==VFILTER;
+    if(!hide&&c.group)live.add(c.group);
+    el.classList.toggle('vhide',hide);
+    const nx=el.nextElementSibling;              // the gap under it goes too
+    if(nx&&nx.classList.contains('ins'))nx.classList.toggle('vhide',hide);
+    const wrap=el.parentElement;                 // and the group indent around it
+    if(wrap&&wrap.classList.contains('gmem'))wrap.classList.toggle('vhide',hide);
+  });
+  // A group whose every member is filtered out is a bar over nothing. One
+  // that still has a card keeps its bar, because knowing which scene a line
+  // belongs to is half of why you went looking for it.
+  DOC.chunks.forEach(c=>{
+    if(c.type!=='group')return;
+    const el=$('c'+c.id); if(!el)return;
+    const hide=on&&!live.has(c.gname||'Group');
+    el.classList.toggle('vhide',hide);
+    const nx=el.nextElementSibling;              // the group's own top slot
+    if(nx&&nx.classList.contains('gmem'))nx.classList.toggle('vhide',hide);
+  });
+}
+
 const insBar=at=>`<div class="ins">
     <button class="pb" onclick="pasteCard(${at},event)">+ Paste</button>
     <button onclick="insertCard(${at},'speech',event)" title="insert an empty text card here">+ Text</button>
@@ -2840,7 +4346,7 @@ function speechCard(c){return `
       ${runonBtn(c)}
       ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
       <label class="mut dchk" style="font-size:11px"><input type="checkbox" ${SEL.has(c.id)?'checked':''}
-        onchange="pick(${c.id},this.checked)"> Discuss</label>
+        onchange="pick(${c.id},this.checked)"> Brenda</label>
     </div>
     <textarea id="t${c.id}" oninput="touched(${c.id})" onblur="flush(${c.id})"
       onfocus="setCur(${c.id})"${c.locked?' readonly':''}${(HEIGHT[c.id]||c.height)?` style="height:${HEIGHT[c.id]||c.height}px"`:''}>${esc(c.text)}</textarea>
@@ -2980,6 +4486,8 @@ function voicedCard(c){
       ${takeUi(c)}
       <button id="sub${c.id}" class="${((c.sub||'').trim()||c.chain)?'dirty':''}" onclick="toggleSub(${c.id})"
         title="a voiced card has no prose — this is what the stage shows while your performance plays">Subtitle</button>
+      <button onclick="voiceFromCard(event,${c.id})" ${c.ready?'':'disabled'}
+        title="keep what this card sounds like: its rendered audio becomes the reference clip of a new profile, so anything can speak in it">New Voice Profile…</button>
       <button onclick="dup(${c.id})">Duplicate</button>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
@@ -3071,9 +4579,31 @@ function visualCard(c){
 // story's pictures one cast, and the variants menu holds every painting
 // this card has tried on.
 let PAINTS=new Set();
+// the tiers above a card (CAST.md §5), composed exactly as the server
+// composes them — the dim line and the paint must agree, or the line lies
+function effStyle(){
+  const out={texts:[],refs:[]};
+  if(!DOC)return out;
+  const ser=(STATE.series||[]).find(s=>s.slug===castShelf());
+  for(const st of [ser&&ser.style,DOC.style]){
+    if(!st)continue;
+    if((st.text||'').trim())out.texts.push(st.text.trim());
+    for(const r of st.refs||[])if(!out.refs.includes(r))out.refs.push(r);
+  }
+  return out;
+}
 function paintRow(c){
-  const media=STATE.media||[], nb=!!STATE.nanobanana;
+  const nb=!!STATE.nanobanana;
+  const eff=effStyle(), tiered=eff.texts.length||eff.refs.length;
   return `<div id="pr${c.id}">
+    ${tiered?`<div class="arow" style="align-items:center">
+      <span class="mut" style="font-size:10.5px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap${c.nostyle?';text-decoration:line-through;opacity:.6':''}"
+        title="the style this card paints under — the collection's tier, then the stack's (⚙ stack settings). Words lead the prompt, refs ride with the card's own. Visible because silent words in a prompt being debugged cost afternoons.">style: ${
+        esc(eff.texts.join(' · '))||'<i>references only</i>'}${
+        eff.refs.length?' '+eff.refs.map(r=>'+'+esc(r)).join(' '):''}</span>
+      <button class="tiny" onclick="setCard(${c.id},{nostyle:${c.nostyle?'false':'true'}},true)"
+        title="${c.nostyle?'dress this card in the collection and stack style again':'paint this card bare — no collection or stack style'}">${c.nostyle?'style off ✕':'styled ✓'}</button>
+    </div>`:''}
     <div class="arow">
       <textarea id="vp${c.id}" rows="2" style="flex:1;resize:vertical;min-height:38px"
         placeholder="${nb?'what to paint — subject, style, mood, light':'the paint prompt — a Gemini key is needed (hover the button below)'}"
@@ -3081,14 +4611,14 @@ function paintRow(c){
         onblur="setCard(${c.id},{note:this.value})"${c.locked?' readonly':''}>${esc(c.note||'')}</textarea>
     </div>
     <div class="arow" style="flex-wrap:wrap">
-      ${refsOf(c).map(n=>`<button class="tiny" onclick="dropRef(${c.id},'${esc(n)}')"
-        title="stop using “${esc(n)}” as a reference — the picture stays in the pool">ref: ${esc(n)} ✕</button>`).join('')}
-      <select onchange="addRef(${c.id},this.value)" style="max-width:150px"
-        title="reference images — the model matches their style or subject, which keeps a story's pictures one cast. Nanobanana takes them all; Draw Things paints over the first.">
-        <option value="">${refsOf(c).length?'+ another reference':'no reference'}</option>
-        ${media.filter(m=>m.kind!=='video'&&!refsOf(c).includes(m.name)).map(m=>
-          `<option value="${esc(m.name)}">ref: ${esc(m.name)}</option>`).join('')}
-      </select>
+      ${refsOf(c).map(n=>`<button class="tiny refchip ${refOk(n)?'':'broken'}"
+        onclick="dropRef(${c.id},'${esc(n)}')"
+        title="${refOk(n)
+          ?`stop using “${esc(n)}” as a reference — the ${n.startsWith('@')?'plate stays filed in the cast':'picture stays in the pool'}`
+          :`nothing answers to “${esc(n)}” any more — painting will refuse until it is dropped or restored`}">ref: ${esc(n)} ✕</button>`).join('')}
+      <button class="tiny" onclick="refPicker(event,${c.id})"
+        title="reference images — the model matches their style or subject, which keeps a story's pictures one cast. A cast member's plate arrives labelled, with its brief as words; nanobanana takes them all, Draw Things paints over the first.">${
+        refsOf(c).length?'+ reference':'no reference — add one'}</button>
       ${(c.gen||[]).length?`<button onclick="genMenu(event,${c.id})"
         title="the variants painted for this card — choose one, drop one, paint another">${
         (c.gen||[]).length} variant${(c.gen||[]).length===1?'':'s'} ▾</button>`:''}
@@ -3104,6 +4634,15 @@ function paintRow(c){
 // name (every doc from before), or a list. Stored back the same way — bare
 // name for one, list for more — so old docs and new stay interchangeable.
 const refsOf=c=>Array.isArray(c.ref)?c.ref.filter(Boolean):(c.ref?[c.ref]:[]);
+// whether anything still answers to a ref — the client-side mirror of
+// resolve_ref, for warning on the chip BEFORE a paint fails on it
+function refOk(n){
+  if(!n.startsWith('@'))return (STATE.media||[]).some(m=>m.name===n);
+  const [slug,plate]=n.slice(1).split('/');
+  const m=(STATE.cast||{})[slug]; if(!m)return false;
+  const plates=m.plates||{};
+  return plate?plate in plates:!!Object.keys(plates).length;
+}
 async function addRef(id,n){
   const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c||!n)return;
   const refs=refsOf(c); if(!refs.includes(n))refs.push(n);
@@ -3112,6 +4651,77 @@ async function addRef(id,n){
 async function dropRef(id,n){
   const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
   await setCard(id,{ref:refsOf(c).filter(x=>x!==n)},true);
+}
+// ── the reference picker ── the flat <select> grown into thumbnails
+// (CAST.md §7f): cast members first — the key plate under the member's own
+// name, then each plate — then the raw pool for what the cast does not
+// cover. Filled into the CTX shell the way ctxAsk does, so it closes and
+// positions like every other menu.
+function refPicker(e,id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  openCtx(e,[]); if(!CTX)return;
+  CTX.classList.add('refpick');
+  const have=refsOf(c), shelf=castShelf();
+  const pth=(slug,p)=>`/api/plate?slug=${slug}&f=${encodeURIComponent(p.file)}`;
+  const cell=(val,img,label,star,find)=>`<div class="rcell" data-ref="${val}"
+    data-find="${aq(find)}" title="${val}">
+    ${img?`<img src="${img}" loading="lazy">`:'<span style="width:44px;text-align:center;flex:none">🎭</span>'}
+    ${star?'<span class="star" title="follows the key, wherever it points">★</span>':''}
+    <span>${esc(label)}</span></div>`;
+  let html=`<input id="rpq" placeholder="filter…" style="width:100%;margin-bottom:2px">`;
+  const member=m=>{
+    const plates=Object.entries(m.plates||{});
+    if(!plates.length)return '';               // nothing to point at yet
+    const find=[m.slug,m.title,m.kind,m.brief].join(' ');
+    const rows=[];
+    if(!have.includes('@'+m.slug)){
+      const key=(m.plates||{})[m.key]||plates[0][1];
+      rows.push(cell('@'+m.slug,key&&key.file?pth(m.slug,key):'', '@'+m.slug,true,find));
+    }
+    for(const [slot,p] of plates)
+      if(!have.includes(`@${m.slug}/${slot}`))
+        rows.push(cell(`@${m.slug}/${slot}`,p.file?pth(m.slug,p):'',slot,false,
+          find+' '+slot+' '+(p.look||'')));
+    return rows.length
+      ?`<div class="rphead" data-find="${aq(find)}">${esc(m.title||m.slug)} · ${esc(m.kind||'member')}</div>`
+        +rows.join('')
+      :'';
+  };
+  // this shelf's cast leads, but everyone stays reachable: scope decides
+  // where a member is SHOWN, never which one a ref FINDS, and a picker
+  // that hides the findable would be a trap the tab's toggle cannot open
+  const near=castRows().filter(m=>!m.scope||m.scope===shelf);
+  const far=castRows().filter(m=>m.scope&&m.scope!==shelf);
+  html+=near.map(member).join('');
+  const farhtml=far.map(member).join('');
+  if(farhtml)html+=`<div class="rphead" data-find="">— other shelves —</div>`+farhtml;
+  const pool=(STATE.media||[]).filter(m=>m.kind!=='video'&&!have.includes(m.name));
+  if(pool.length){
+    html+=`<div class="rphead" data-find="">the pool</div>`
+      +pool.map(m=>cell(m.name,
+        `/api/media?f=${encodeURIComponent(m.name)}&v=${m.added}`,
+        m.name,false,m.name)).join('');
+  }
+  if(!/rcell/.test(html))
+    html+='<div class="mut" style="font-size:12px;padding:6px">nothing left to add</div>';
+  CTX.innerHTML=html;
+  // openCtx measured an empty shell; the filled grid is 340px of thumbnails,
+  // so take the screen-edge clamp again at the real size
+  CTX.style.left=Math.max(6,Math.min(e.clientX,innerWidth-CTX.offsetWidth-8))+'px';
+  CTX.style.top=Math.max(6,Math.min(e.clientY,innerHeight-CTX.offsetHeight-8))+'px';
+  CTX.addEventListener('click',ev=>{
+    const r=ev.target.closest('.rcell'); if(!r)return;
+    closeCtx(); addRef(id,r.dataset.ref);
+  });
+  const q=$('rpq');
+  q.oninput=()=>{
+    const v=q.value.trim().toLowerCase();
+    CTX.querySelectorAll('.rcell,.rphead').forEach(el=>
+      el.style.display=!v||(el.dataset.find||'').toLowerCase().includes(v)
+        ||(el.dataset.ref||'').includes(v)?'':'none');
+  };
+  q.onkeydown=ev=>ev.stopPropagation();
+  q.focus();
 }
 function togglePaint(id){
   const row=$('pr'+id);
@@ -3150,7 +4760,10 @@ async function genImage(id){
   const b=$('gb'+id); if(b){ b.disabled=true; b.textContent='painting…'; }
   $('s'+id).textContent='nanobanana is painting — about 15 seconds';
   const stem=(c.media||'').replace(/-new(-\d+)?$/,'')||(DOC.name+'-'+id);
-  const r=await api('/api/media/generate',{prompt,media:stem,ref:c.ref||''});
+  // name and id ride along so the style tiers above this card can dress the
+  // paint — and so the card's own `nostyle` is honoured where it is known
+  const r=await api('/api/media/generate',{prompt,media:stem,ref:c.ref||'',
+    name:DOC.name,id});
   if(r.error){
     if(b){ b.disabled=false; b.textContent=c.media?'Repaint':'Paint'; }
     $('s'+id).innerHTML=`<span style="color:var(--red)">${esc(r.error)}</span>`;
@@ -3172,6 +4785,9 @@ async function genMenu(e,id){
     run:()=>setCard(id,{media:n},true)}));
   items.push('-');
   items.push({label:'paint another variant',run:()=>genImage(id)});
+  if(c.media)
+    items.push({label:`→ make “${c.media}” a reference…`,
+      run:()=>promotePicker(e,c.media)});
   if(c.media&&gen.includes(c.media)&&gen.length>1)
     items.push({label:`✕ drop “${c.media}” — it's off`,danger:true,
       run:()=>dropVariant(id)});
@@ -3251,6 +4867,11 @@ function choiceCard(c){
       <label class="mut" style="font-size:11px"
         title="no chooser: the first option whose condition passes is taken silently — if/else in one card">
         <input type="checkbox" ${c.auto?'checked':''} onchange="setAuto(${c.id},this.checked)"> Auto</label>
+      <label class="mut wlab" id="wl${c.id}" style="font-size:11px${c.auto?';opacity:.4':''}"
+        title="how long the chooser waits before deciding for itself — then it takes the option marked ⏱, or the first one still on offer. 0 waits for the listener as long as it takes, which is what a choice card has always done.">
+        wait <input type="number" min="0" max="600" step="1" value="${+c.wait||0}"
+          style="width:48px;font-size:11px;padding:1px 4px" ${c.auto?'disabled':''}
+          onchange="setWait(${c.id},this.value)"> s</label>
       ${c.mute?'<span class="pill warn">muted</span>':''}
       ${tagsUi(c)}
       <span style="flex:1"></span>
@@ -3262,12 +4883,25 @@ function choiceCard(c){
       <button onclick="addOption(${c.id})">+ Option</button>
       <button id="sub${c.id}" class="tiny ${(c.sub||'').trim()?'dirty':''}" onclick="toggleSub(${c.id})"
         title="the question over the buttons — what the stage shows while it asks">Subtitle</button>
-      <span class="mut" id="ah${c.id}" style="font-size:11px">${
-        c.auto?'first passing option is taken silently':'the stage stops here and asks'}</span>
+      <span class="mut" id="ah${c.id}" style="font-size:11px">${choiceHint(c)}</span>
       <span style="flex:1"></span>
       <span class="mut" id="s${c.id}" style="font-size:11px"></span>
     </div>
    </div>`;
+}
+// What this card does, in the words you would use to describe it — under the
+// buttons, where it answers the question the settings above it raise.
+function choiceHint(c){
+  if(c.auto)return 'first passing option is taken silently';
+  const w=+c.wait||0;
+  if(!w)return 'the stage stops here and asks';
+  const opts=c.options||[];
+  const d=opts.find(o=>o.dflt)||opts[0];
+  const nm=d&&(d.label||'').trim();
+  // the runtime picks among the options still OPEN, so an unmarked card's
+  // guess here is only true while every condition passes
+  return `asks, and after ${w}s takes ${nm?'“'+esc(nm)+'”':'the first option on offer'}`+
+    (opts.some(o=>o.dflt)?'':' — mark one with ⏱ to choose which');
 }
 function optRow(c,o,i){
   // destinations by meaning, not memory: scenes first — every group, and
@@ -3284,13 +4918,13 @@ function optRow(c,o,i){
     const s=(cc.label||clipLabel(cc)).replace(/\s+/g,' ');
     return ' · '+(s.length>26?s.slice(0,26)+'…':s);
   };
-  return `<div class="opt">
+  return `<div class="opt${o.dflt?' isdflt':''}">
     <input class="olabel" value="${esc(o.label)}" placeholder="what the listener sees…"
       onchange="setOption(${c.id},${i},'label',this.value)">
     <span class="mut">→</span>
     <select onchange="setOption(${c.id},${i},'goto',this.value)"
       title="where this option jumps — a scene, or any tagged card; empty ends the story">
-      <option value="">(The End)</option>
+      <option value="">${o.url?'(stay here)':'(The End)'}</option>
       ${groups.length?`<optgroup label="Scenes">${groups.map(g=>{
         const t=gfirst.get(g);
         return `<option value="${t?esc(t):'g:'+g.id}" ${t&&t===o.goto?'selected':''
@@ -3307,6 +4941,13 @@ function optRow(c,o,i){
     <input class="oscript" value="${esc(o.when||'')}" placeholder="when: coins>=3"
       title="offer this option only when the condition holds — brave, !met_gertie, coins>=3"
       onchange="setOption(${c.id},${i},'when',this.value)">
+    <input class="ourl" value="${esc(o.url||'')}" placeholder="↗ https://…"
+      title="a page this option opens, in the listener's own browser and a tab of its own — http and https only, anything else is dropped on the way in. The button says ↗ and names the host, so nobody is sent out of the story without being told. A linked option with no destination leaves the chooser standing rather than ending the story, which is what you want for a sponsor or a footnote: read it, come back, choose properly."
+      onchange="setOption(${c.id},${i},'url',this.value)">
+    <button class="tiny odflt${o.dflt?' on':''}${o.dflt&&!(+c.wait>0)?' idle':''}"
+      onclick="setDefault(${c.id},${i})"
+      title="${o.dflt?'this is the option the card\u2019s clock takes when nobody answers — click to unmark it'
+        :'take this option if the listener says nothing — needs a wait on the card\u2019s header to have a clock to run'}">⏱</button>
     <button class="tiny" onclick="rmOption(${c.id},${i})" title="remove this option">×</button>
   </div>`;
 }
@@ -3345,11 +4986,15 @@ async function setOption(id,i,key,v){
   else opts[i][key]=v;
   await saveOptions(id,opts);
   const kept=((DOC.chunks.find(x=>x.id===id)||{}).options||[])[i]||{};
-  if((key==='set'&&(kept.set||[]).join(' ')!==opts[i].set.join(' '))||
+  if(key==='url'&&String(v).trim()&&!(kept.url||''))
+    $('status').innerHTML='<span class="warn">that link was dropped</span> — an option may open'+
+      ' an <b>http://</b> or <b>https://</b> page and nothing else';
+  else if((key==='set'&&(kept.set||[]).join(' ')!==opts[i].set.join(' '))||
      (key==='when'&&(kept.when||'')!==String(v).replace(/\s+/g,'')))
     $('status').innerHTML='<span class="warn">part of that failed the grammar and was dropped</span>'+
       ' — ops are <b>brave</b>, <b>!met_gertie</b>, <b>coins+1</b>, <b>coins=5</b>;'+
       ' conditions add <b>coins&gt;=3</b>';
+  if(key==='url')paintChoiceHint(id);   // a link changes what “(The End)” means
 }
 async function addOption(id){
   const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
@@ -3360,12 +5005,44 @@ async function rmOption(id,i){
   const opts=JSON.parse(JSON.stringify(c.options||[])); opts.splice(i,1);
   await saveOptions(id,opts);
 }
+// One default per card, so this clears the others rather than adding another:
+// two options both claiming the silence is not a stalemate a player should
+// have to break, and the server enforces the same rule on the way in.
+async function setDefault(id,i){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  const opts=JSON.parse(JSON.stringify(c.options||[]));
+  if(!opts[i])return;
+  const on=!opts[i].dflt;
+  opts.forEach(o=>{ delete o.dflt; });
+  if(on)opts[i].dflt=true;
+  await saveOptions(id,opts);
+  paintChoiceHint(id);
+  if(on&&!(+c.wait>0))$('status').innerHTML='marked — now give this card a '+
+    '<b>wait</b> in its header, or there is no clock for it to be the answer to';
+}
+async function setWait(id,v){
+  await api('/api/chunk',{name:DOC.name,id,wait:v});
+  await syncCards();
+  redrawOpts(id);              // the ⏱ marks mean something now, or stopped meaning it
+  paintChoiceHint(id);
+  // the header is patched in place rather than rebuilt, so the box has to be
+  // told what the server kept: 9999 left on screen beside a card that is
+  // actually waiting the 600 it was clamped to is a lie about the story
+  const c=DOC&&DOC.chunks.find(x=>x.id===id), inp=document.querySelector('#wl'+id+' input');
+  if(c&&inp)inp.value=+c.wait||0;
+}
+function paintChoiceHint(id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id), el=$('ah'+id);
+  if(c&&el)el.innerHTML=choiceHint(c);
+}
 async function setAuto(id,on){
   await api('/api/chunk',{name:DOC.name,id,auto:on});
   await syncCards();
-  const ah=$('ah'+id);
-  if(ah)ah.textContent=on?'first passing option is taken silently'
-                         :'the stage stops here and asks';
+  paintChoiceHint(id);
+  // auto never shows a chooser, so there is nothing for a clock to run out on
+  const wl=$('wl'+id);
+  if(wl){ wl.style.opacity=on?'.4':'';
+    const inp=wl.querySelector('input'); if(inp)inp.disabled=on; }
 }
 
 // Cards fit their text by default — no card should hide a line you are trying
@@ -3596,6 +5273,7 @@ async function syncCards(){
   // silently. The cards were already painted, so it looked like working.
   $('hdr').textContent=DOC.title+' · '+DOC.chunks.length+' chunks';
   paintUnrendered();
+  renderVF(); paintVFilter();   // a card that changed voice changes the tallies
 }
 // The footer's standing tally of cards with no render yet. syncCards runs on
 // every open, render, bake tick and undo, so the number moves as the work
@@ -4079,7 +5757,8 @@ async function del(id){
     :c.type==='voiced'?`◎ voiced — ${c.perfname||'no recording yet'}`
     :c.type==='visual'?`⛶ visual — ${c.media||'nothing chosen'} (the file stays in the library)`
     :c.type==='title'?`𝐓 title — “${(c.text||'').replace(/\s+/g,' ').trim().slice(0,40)||'no words yet'}”`
-    :c.type==='choice'?`⑂ choice — ${(c.options||[]).length} option${(c.options||[]).length===1?'':'s'}`
+    :c.type==='choice'?`⑂ choice — ${(c.options||[]).length} option${(c.options||[]).length===1?'':'s'}`+
+      (+c.wait>0?` · ${+c.wait}s`:'')
     :c.type==='group'?`⊞ group “${c.gname||''}” — its cards stay, only the bar goes`
     :c.text.slice(0,90)+'…';
   if(!confirm(`Remove card #${id}?\n\n${what}`))return;
@@ -4113,10 +5792,12 @@ async function setProfile(id,p){
   // a new voice usually means a stale card — offer the render while the
   // change is still the thing you are thinking about
   const cc=DOC&&DOC.chunks.find(x=>x.id===id);
-  if(cc&&!cc.ready&&!cc.mute&&confirm(
-      `Card #${id} now speaks with “${p}” and needs a render.\n\nRender it now?`)){
+  if(cc&&!cc.ready&&!cc.mute&&await askConfirm(
+      `Card #${id} now speaks with “${p}” and needs a render.\n\nRender it now?`,
+      'render-after-profile')){
     await api('/api/render',{name:DOC.name,id});
-    $('status').textContent=`rendering card #${id} with “${p}”…`;
+    $('status').textContent=`rendering card #${id} with “${p}”…`+
+      ('render-after-profile' in ASKED?' — not asking again this session':'');
   }
 }
 
@@ -4245,7 +5926,8 @@ const clipLabel=c=>!c?'':
   :c.type==='voiced'?`◎ ${c.perfname||'no recording'}`
   :c.type==='visual'?`⛶ ${c.media||'no visual'}`
   :c.type==='title'?`𝐓 ${(c.text||'title').replace(/\s+/g,' ').trim().slice(0,30)}`
-  :c.type==='choice'?`⑂ ${(c.options||[]).length} option${(c.options||[]).length===1?'':'s'}`
+  :c.type==='choice'?`⑂ ${(c.options||[]).length} option${(c.options||[]).length===1?'':'s'}`+
+    (+c.wait>0?` · ${+c.wait}s`:'')
   :c.type==='group'?`⊞ ${c.gname||'group'}`
   :'“'+(c.text||'').replace(/\s+/g,' ').trim().slice(0,44)+((c.text||'').length>44?'…':'')+'”';
 // The paste buttons live in strips that were built before the copy happened,
@@ -4271,7 +5953,7 @@ function cardClip(c){
   else if(k.type==='title')Object.assign(k,
     {text:c.text||'', secs:c.secs, fade:c.fade});
   else if(k.type==='choice')Object.assign(k,
-    {options:c.options||[], auto:!!c.auto});
+    {options:c.options||[], auto:!!c.auto, wait:+c.wait||0});
   else if(k.type==='group')k.gname=c.gname||'Group';
   else if(k.type==='voiced')Object.assign(k,
     {perf:c.perf||'', perfname:c.perfname||'', profile:c.profile, seed:c.seed});
@@ -4356,8 +6038,9 @@ function dragStart(e,id){
   const card=$('c'+id); if(card)e.dataTransfer.setDragImage(card,30,14);
 }
 function dragEnd(){ DRAGID=null; clearMarks(); }
-function clearMarks(){ document.querySelectorAll('.dropa,.dropb,.ins.hot,.gbar.hot')
-  .forEach(el=>el.classList.remove('dropa','dropb','hot')); }
+function clearMarks(){ document.querySelectorAll('.dropa,.dropb,.ins.hot,.gbar.hot,.sbar.hot,.sdrop.hot,.smem.hot')
+  .forEach(el=>el.classList.remove('dropa','dropb','hot'));
+  if(DROPLINE)DROPLINE.hidden=true; }
 // Two things can be dropped on the stack: a card being moved within it, and a
 // clip arriving from the sidebar. Same targets, same marks — only the landing
 // differs, so each handler asks which is in flight rather than which gate it is.
@@ -4529,12 +6212,22 @@ function popOut(){
   POPSEEN=Date.now();
   paintStageBtn(true); popWatch();
 }
-// when the stage stops and asks, the question is answerable from here too
-function paintStageChoices(opts){
+// When the stage stops and asks, the question is answerable from here too —
+// and it must read the same as the stage's own buttons: an option that opens
+// a page wears the arrow here as well, and the one the clock will take says
+// so. Pressing a link here still opens it over on the stage's side, which is
+// the window that owns the ride: one press is one tab, however many stages
+// are watching.
+function paintStageChoices(opts,wait,dflt){
   const el=$('stgask'); if(!el)return;
-  el.innerHTML=(opts&&opts.length)?'<span class="mut" style="font-size:11px">the stage asks:</span> '
-    +opts.map((o,i)=>`<button class="tiny" style="color:var(--fg)"
-      onclick="STAGE.postMessage({type:'choose',i:${i}})">${esc(o)}</button>`).join(' '):'';
+  if(!(opts&&opts.length))return void(el.innerHTML='');
+  el.innerHTML='<span class="mut" style="font-size:11px">the stage asks:</span> '
+    +opts.map((o,i)=>`<button class="tiny" style="color:var(--fg)${
+        i===dflt?';border-color:#4a3d22':''}"${
+        o.url?` title="opens ${attr(o.url)} in your browser"`:''}
+      onclick="STAGE.postMessage({type:'choose',i:${i}})">${esc(o.label||'…')}${
+        o.url?' ↗':''}${i===dflt?' ⏱':''}</button>`).join(' ')
+    +(wait>0?` <span class="mut" style="font-size:11px">· ${+wait}s to answer</span>`:'');
 }
 if(STAGE)STAGE.onmessage=e=>{
   const m=e.data||{};
@@ -4562,7 +6255,7 @@ if(STAGE)STAGE.onmessage=e=>{
   if(m.type==='popin'){ if(POPUP){ try{POPUP.close()}catch(_){} POPUP=null; }
     POPSEEN=0; clearInterval(POPWATCH); POPWATCH=null; paintStageBtn(false);
     if(STAGE)STAGE.postMessage({type:'pause',to:'embed'}); }
-  if(m.type==='choices')paintStageChoices(m.opts);
+  if(m.type==='choices')paintStageChoices(m.opts,+m.wait||0,m.dflt==null?-1:m.dflt);
   if(m.type==='playing'&&m.card!=null)followCard(m.card);
   if(m.type==='stopped'){ clearPlaying();
     if(m.card!=null){ CUR=m.card; paintCur(); } }   // stop, fix that one — as the local preview
@@ -4593,7 +6286,25 @@ function toggleStoryPanel(){
     $('st_title').value=DOC.title||'';
     $('st_tw').value=DOC.typewriter?'1':'0';
     $('st_sfx').value=DOC.typesfx?'1':'0';
+    const st=DOC.style||{};
+    $('st_stx').value=st.text||'';
+    $('st_srefs').value=(st.refs||[]).join(' ');
   }
+}
+async function storyStyleSave(){
+  if(!DOC)return;
+  const text=$('st_stx').value.trim();
+  const refs=$('st_srefs').value.split(/[\s,]+/).filter(Boolean);
+  const r=await api('/api/story',{name:DOC.name,style:{text,refs}});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  DOC.style=r.style||null;
+  // show what the server kept — a ref that failed the alphabet is gone, and
+  // the field saying so beats the paint failing later
+  $('st_srefs').value=((r.style||{}).refs||[]).join(' ');
+  open_(DOC.name,true);            // open paint rows redraw their style line
+  $('status').innerHTML=r.style
+    ?'<span class="ok">stack style set</span> — every visual card paints under it unless its paint row opts out'
+    :'<span class="ok">stack style cleared</span>';
 }
 async function storySet(k,v){
   if(!DOC)return;
@@ -4612,20 +6323,33 @@ async function storyRename(t){
 // a story begins
 function newStoryPanel(){
   const p=$('newstory'); p.hidden=!p.hidden;
-  if(!p.hidden){ $('ns_title').value=''; $('ns_title').focus(); }
+  if(!p.hidden){
+    // born filed, by default: the collection of the open stack is
+    // preselected, and Unfiled stays one flick away — optional in law
+    const cur=castShelf();
+    $('ns_into').innerHTML='<option value="">no collection — Unfiled</option>'+
+      (STATE.series||[]).map(s=>`<option value="${aq(s.slug)}" ${
+        s.slug===cur?'selected':''}>${esc(s.title)}</option>`).join('');
+    if(!cur&&(STATE.series||[]).length===1)$('ns_into').value=STATE.series[0].slug;
+    $('ns_title').value=''; $('ns_title').focus();
+  }
 }
 async function createStory(){
   const t=$('ns_title').value.trim();
   if(!t)return void $('ns_title').focus();
   const slug=t.toLowerCase().replace(/[^a-z0-9_-]+/g,'-').slice(0,60);
   if((STATE.projects||[]).some(p=>p.name===slug))
-    return void($('status').innerHTML='<span class="warn">A story by that name is already here</span>');
+    return void($('status').innerHTML='<span class="warn">A stack by that name is already here</span>');
   const r=await api('/api/import',{title:t,markdown:''});
   if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  const into=$('ns_into').value;
+  if(into)await api('/api/series/assign',{name:r.name,to:into});
   $('newstory').hidden=true;
   await refresh();
   open_(r.name,true);
-  $('status').innerHTML=`<span class="ok">“${esc(t)}” begins</span> — build it from the + strips below`;
+  const s=(STATE.series||[]).find(x=>x.slug===into);
+  $('status').innerHTML=`<span class="ok">“${esc(t)}” begins</span>${
+    s?` on “${esc(s.title)}”`:''} — build it from the + strips below`;
 }
 // Keep the speaking card on screen — the whole point is that when you hear a
 // problem, the card is already in front of you. But do not haul the list about
@@ -4777,10 +6501,10 @@ async function assemble(){
   }
   open_(DOC.name,true); }
 
-// ── discuss ───────────────────────────────────────────────
-// The discuss agent streams: text as it is written, tool calls as they land.
+// ── the drama manager ─────────────────────────────────────
+// Brenda streams: text as it is written, tool calls as they land.
 // While it runs the Ask button is a Stop button, and every mutating tool call
-// schedules a quiet reload, so the cards appear in the deck as Claude places
+// schedules a quiet reload, so the cards appear in the deck as Brenda places
 // them — in a draft, never in the story itself; the bar over the deck is
 // where the author applies or discards what it made.
 let CHAT={running:false,fresh:false,t:null};
@@ -4856,13 +6580,14 @@ function chatNew(){
   $('log').innerHTML='<div class="m mut">A fresh conversation — the old one is forgotten on the next ask.</div>';
 }
 
-// Discuss needs a Claude on the machine. When there is none, the panel is an
-// invitation rather than an error: what it is, that it is optional, and the
-// two steps to turn it on. Signed-in-ness is only knowable by asking, so
-// that half arrives as an "auth" card on the first ask instead (see send()).
-const CHAT_INTRO='Ask about pacing or a passage — or hand over real work: '+
-  'a new scene, a casting, a whole story. Claude works in a draft; you apply '+
-  'it or discard it.\nSelected cards go along as context.';
+// Brenda needs something to think with. When the machine has no Claude and
+// no local model is configured, the panel is an invitation rather than an
+// error: who she is, that she is optional, and the two steps to wake her.
+// Signed-in-ness is only knowable by asking, so that half arrives as an
+// "auth" card on the first ask instead (see send()).
+const CHAT_INTRO='Ask Brenda about pacing or a passage, or hand her real '+
+  'work: a new scene, a casting, a whole story. She works in a draft; you '+
+  'apply it or discard it.\nSelected cards go along as context.';
 function paintDiscuss(){
   // a local provider from the settings tab needs no claude on the machine;
   // the claude check only gates the two providers that speak through it
@@ -4873,38 +6598,44 @@ function paintDiscuss(){
   if(!CHAT.running)$('sendb').disabled=!ok;
   const i=$('chatintro'); if(!i)return;
   if(ok){
-    const t=local?CHAT_INTRO.replace('Claude works','Your model works'):CHAT_INTRO;
+    // Brenda reads the same however she is being thought: that is the point
+    // of her having an identity of her own, and it is why this no longer
+    // rewrites the sentence when the provider is a local model.
+    const t=CHAT_INTRO;
     if(i.dataset.setup||i.textContent!==t){ i.dataset.setup=''; i.textContent=t; }
     return;
   }
   if(i.dataset.setup)return;
   i.dataset.setup='1';
-  i.innerHTML=`<div class="setup"><b>Discuss pairs Saga Studio with Claude</b>,
-    Anthropic’s AI — talk through a scene, or hand it real work that it builds
-    in a draft you review. It’s optional: everything else here works without it.
-    <br><br>To turn it on:<br>
+  i.innerHTML=`<div class="setup"><b>Brenda is the drama manager here</b>, and
+    she needs a model to think with. Talk through a scene, or hand her real
+    work that she builds in a draft you review. She’s optional: everything
+    else here works without her.
+    <br><br>To wake her:<br>
     1 · Install <a href="https://claude.com/claude-code" target="_blank" rel="noopener">Claude
     Code</a>: <code>npm install -g @anthropic-ai/claude-code</code><span
     class="cpy" onclick="copyCmd(this)">copy</span><br>
-    2 · Sign in once — open Terminal, run <code>claude</code>, and follow the
+    2 · Sign in once: open Terminal, run <code>claude</code>, and follow the
     sign-in. A Claude plan (Pro or Max) or an API key both work.<br><br>
     <span class="mut">Asks use your plan’s included usage, or your key’s
-    pay-per-use.</span><br><a onclick="refresh()">⟳ check again</a></div>`;
+    pay-per-use. A local model works just as well: point her at one in the
+    Settings tab, and she is the same Brenda either way.</span>
+    <br><a onclick="refresh()">⟳ check again</a></div>`;
 }
 function copyCmd(el){
   navigator.clipboard.writeText('npm install -g @anthropic-ai/claude-code')
     .then(()=>{ el.textContent='copied'; setTimeout(()=>el.textContent='copy',1200); });
 }
 
-// ── drafts ── the sandbox where the discuss agent works. The bar over the
-// deck is the author's side of the bargain: Claude proposes in a copy, and
-// only these two buttons — never the agent — decide what becomes real.
+// ── drafts ── the sandbox where Brenda works. The bar over the deck is the
+// author's side of the bargain: Brenda proposes in a copy, and only these two
+// buttons, never the agent herself, decide what becomes real.
 function drawDraftBar(){
   const b=$('draftbar');
   if(!DOC||!DOC.draft){ b.hidden=true; b.innerHTML=''; return; }
   const of=DOC.draft_of;
-  b.innerHTML=`<span>✎ ${of?`Claude’s draft of “${esc(of)}” — the story itself is untouched`
-      :'A draft story from Claude — not yet part of the library'}</span>
+  b.innerHTML=`<span>✎ ${of?`Brenda’s draft of “${esc(of)}”. The story itself is untouched`
+      :'A draft story from Brenda, not yet part of the library'}</span>
     <span style="flex:1"></span>
     <button class="tiny" onclick="draftApply()">${of?'Apply to the Story':'Keep It'}</button>
     <button class="tiny" onclick="draftDiscard()">Discard</button>`;

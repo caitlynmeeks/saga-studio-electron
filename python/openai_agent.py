@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The discuss agent, for studios whose story brain is not Claude.
+"""Brenda, for studios whose story brain is not Claude.
 
 Speaks any OpenAI-compatible chat API — LM Studio, llama.cpp's server,
 OpenAI itself — and gives that model the same hands headless Claude gets:

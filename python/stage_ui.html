@@ -82,6 +82,20 @@ background:linear-gradient(180deg,transparent,rgba(0,0,0,.72) 45%,rgba(0,0,0,.9)
 #chooser button{background:#131a17;border:1px solid var(--line);color:var(--fg);
 border-radius:7px;padding:10px 18px;font:14px var(--mono);cursor:pointer;max-width:44ch}
 #chooser button:hover{border-color:var(--green);color:var(--green)}
+/* An option that sends you out of the story says so on its face: the arrow
+   and the host it goes to, quiet enough to ignore and specific enough to be
+   a warning. Nobody should leave a dark room for a browser by surprise. */
+#chooser .ext{font-size:11px;color:var(--dim);margin-left:7px;white-space:nowrap}
+#chooser button:hover .ext{color:var(--green)}
+/* the option the clock will take, when a choice has one */
+#chooser button.dflt{border-color:#4a3d22}
+/* And the clock itself: a line that drains, not a number. A number in a dark
+   room is something to read; this is something to notice out of the corner
+   of an eye while you are still deciding. */
+.cdown{flex-basis:100%;height:2px;background:var(--line);border-radius:2px;overflow:hidden}
+.cdown i{display:block;height:100%;background:var(--amber);opacity:.6}
+@keyframes cdrain{from{width:100%}to{width:0}}
+@media(prefers-reduced-motion:reduce){.cdown i{animation:none!important;width:100%}}
 /* The bar floats over the room and sleeps while the story plays — exactly
    the manners the exported web player learned first. Opacity, not display,
    so the room never resizes and the fade is calm. Any pointer, tap or key
@@ -209,7 +223,7 @@ const BC='BroadcastChannel' in window?new BroadcastChannel('saga-stage'):null;
 const say=m=>{ if(BC)BC.postMessage({...m,name:NAME}); };
 // what is on the wall right now — kept whole so a mirror that arrives late
 // (or pops out mid-scene) gets the full picture, not just the next change
-let LASTF={media:null,kind:'',cap:'',fx:'',opts:null,tt:'',tsecs:0,live:0};
+let LASTF={media:null,kind:'',cap:'',fx:'',opts:null,wait:0,dflt:-1,tt:'',tsecs:0,live:0};
 const sayFrame=patch=>{ if(!EMBED)return;
   Object.assign(LASTF,patch||{}); say({type:'frame',...LASTF}); };
 if(BC)BC.onmessage=e=>{
@@ -280,14 +294,18 @@ function mirror(m){
   if('cap'in m){ const k=(m.cap||'')+'|'+(m.from||0);
     if(k!==MCAP){ MCAP=k; caption(m.cap,m.secs,m.from,m.tw,false); } }
   if('fx'in m&&(m.fx||'')!==MFX){ MFX=m.fx||''; fxcap(m.fx); }
-  if('opts'in m){ const k=JSON.stringify(m.opts||null);
+  if('opts'in m){ const k=JSON.stringify([m.opts||null,m.wait||0,m.dflt]);
     if(k!==MOPTS){ MOPTS=k;
       const ch=$('chooser');
       if(!m.opts){ ch.classList.remove('on'); ch.onclick=null; $('room').classList.remove('choosing'); }
       else{
-        ch.innerHTML=m.opts.map((o,i)=>`<button data-i="${i}">${esc(o)||'…'}</button>`).join('');
+        ch.innerHTML=optButtons(m.opts,m.dflt==null?-1:m.dflt)+cdown(m.wait||0);
         ch.classList.add('on'); $('room').classList.add('choosing');
-        ch.onclick=ev=>{ const b=ev.target.closest('button'); if(b)say({type:'choose',i:+b.dataset.i}); };
+        // the mirror never opens the link itself: it says which button was
+        // pressed and the window that owns the ride does the rest, so one
+        // press is one tab however many stages are watching
+        ch.onclick=ev=>{ const b=ev.target.closest('button[data-i]');
+          if(b)say({type:'choose',i:+b.dataset.i}); };
       }
     }
   }
@@ -484,7 +502,7 @@ async function story(fromId){
   setLive(true);
   await SagaPlay.walk(DOC.chunks,{
     playRun:(from,upto)=>playRun(tok,from,upto),
-    ask:(opts,c)=>ask(tok,opts,c),
+    ask:(opts,c,to)=>ask(tok,opts,c,to),
     onEnd:reason=>{ if(tok===TOKEN)ended(reason); },
   },VARS,start);
 }
@@ -516,7 +534,33 @@ function playRun(tok,from,upto){
   });
 }
 
-function ask(tok,opts,c){
+// The host a link goes to, which is the whole of the warning: "amalgamated.example"
+// tells a listener what they are about to open in a way the full URL does not.
+const linkHost=u=>{ try{ return new URL(u).host.replace(/^www\./,''); }
+  catch(e){ return 'a web page'; } };
+// One set of buttons, drawn the same way whether this window is the one
+// playing or a mirror of it — a mirror that drew a link differently would be
+// a different story on the second monitor.
+const optButtons=(opts,di)=>opts.map((o,i)=>{
+  const u=o.url||'';
+  return `<button data-i="${i}"${i===di?' class="dflt"':''}`+
+    (u?` title="opens ${esc(linkHost(u))} in your own browser, in a tab of its own"`:'')+
+    `>${esc(o.label)||'…'}${u?` <span class="ext">↗ ${esc(linkHost(u))}</span>`:''}</button>`;
+}).join('');
+const cdown=secs=>secs>0
+  ?`<div class="cdown"><i style="animation:cdrain ${secs}s linear forwards"></i></div>`:'';
+// A link leaves through the server rather than through window.open, because
+// the popped-out stage is a CHILD window of the Electron shell and a child
+// does not inherit the handler that turns window.open into "the real
+// browser" — clicked in the theatre, the page would have opened in a bare
+// Electron window with no address bar and no way back. The server has the
+// one call that always means the machine's own browser. The exported player
+// is a web page with no server behind it and opens its own links; both ask
+// the same grammar first, so http and https are all either can reach.
+function openLink(u){ if(u)api('/api/open_link',{url:u}); }
+let CLOCK=null;
+
+function ask(tok,opts,c,to){
   return new Promise(res=>{
     if(tok!==TOKEN)return res(null);
     CAPST={txt:'',chain:false};           // a choice breaks the chain
@@ -525,22 +569,30 @@ function ask(tok,opts,c){
     // a choice card's subtitle is the question over the buttons
     if(c&&c.sub)caption(c.sub,0,0,false,false);
     const ch=$('chooser');
-    const labels=opts.map(o=>o.label||'…');
-    ch.innerHTML=opts.map((o,i)=>`<button data-i="${i}">${esc(o.label)||'…'}</button>`).join('');
+    const di=to?opts.indexOf(to.option):-1;
+    const wire=opts.map(o=>({label:o.label||'',url:o.url||''}));
+    ch.innerHTML=optButtons(opts,di)+(to?cdown(to.secs):'');
     ch.classList.add('on'); $('room').classList.add('choosing');
-    say({type:'choices',opts:labels});
-    sayFrame({opts:labels});
-    const pick=i=>{ hideChooser(); res(tok===TOKEN?opts[i]:null); };
-    ch.onclick=e=>{ const b=e.target.closest('button'); if(b)pick(+b.dataset.i); };
+    say({type:'choices',opts:wire,wait:to?to.secs:0,dflt:di});
+    sayFrame({opts:wire,wait:to?to.secs:0,dflt:di});
+    let done=false;
+    const fin=o=>{ if(done)return; done=true; hideChooser(); res(tok===TOKEN?o:null); };
+    // A pressed option opens its page; a clock that ran out does NOT. Sending
+    // somebody's browser somewhere because they said nothing is not a thing
+    // a story gets to do — the silence takes the option, and only the option.
+    const pick=i=>{ const o=opts[i]; if(!o)return; if(o.url)openLink(o.url); fin(o); };
+    ch.onclick=e=>{ const b=e.target.closest('button[data-i]'); if(b)pick(+b.dataset.i); };
     CHOOSE=pick;                          // the editor and the mirrors choose too
-    ASKOFF=()=>res(null);
+    if(to)CLOCK=setTimeout(()=>fin(to.option),to.secs*1000);
+    ASKOFF=()=>{ done=true; res(null); };
   });
 }
 function hideChooser(){ const ch=$('chooser');
+  clearTimeout(CLOCK); CLOCK=null;      // no clock outlives the question it ran on
   ch.classList.remove('on'); ch.onclick=null; $('room').classList.remove('choosing');
   ASKOFF=null; CHOOSE=null; paintVars();
-  say({type:'choices',opts:null});
-  sayFrame({opts:null}); }
+  say({type:'choices',opts:null,wait:0,dflt:-1});
+  sayFrame({opts:null,wait:0,dflt:-1}); }
 // The story's flags right now — the walk mutates VARS as choices apply their
 // sets, and seeing them is half of testing a branch.
 function paintVars(){
