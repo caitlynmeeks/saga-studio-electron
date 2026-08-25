@@ -1271,6 +1271,21 @@ def cast_paint(slug, prompt, plate="", stem="", file=""):
             os.replace(tmp, dest)
             os.chmod(dest, 0o644)
             m.setdefault("candidates", []).append(fname)
+            # the board's paints remember their words too (the member-side
+            # twin of file_paint_history): each candidate keeps the prompt
+            # and the target it was painted against, keyed by its file name
+            # — which survives acceptance into a slot, so a PLATE also
+            # knows the prompt that painted it. A spelling hunt (a logo,
+            # a sign) stops losing its words between rolls.
+            entry = {"f": fname, "at": int(time.time()),
+                     "prompt": prompt[:2000]}
+            if file:
+                entry["vary"] = file
+            elif plate:
+                entry["plate"] = plate
+            hist = [e for e in (m.get("hist") or []) if isinstance(e, dict)]
+            hist.append(entry)
+            m["hist"] = hist[-24:]
             save_cast(reg)
     finally:
         Path(tmp).unlink(missing_ok=True)

@@ -3224,7 +3224,8 @@ function renderBoard(force){
           <button class="tiny lookdup" data-look="${aq(lk)}"
             title="duplicate this look — every plate copied into a new look, each pointing at the picture it came from, ready to repaint. One gesture for “she becomes a cosmonaut”.">⧉ dup</button></div>`;
       else html+='<div style="margin-top:14px"></div>';
-      html+='<div class="plategrid">'+ps.map(([slot,p])=>plateTile(slot,p,m.key===slot)).join('')+'</div>';
+      html+='<div class="plategrid">'+ps.map(([slot,p])=>plateTile(slot,p,m.key===slot,
+        (m.hist||[]).find(x=>x&&x.f===p.file))).join('')+'</div>';
     }
   }
   // ── candidates ── painted or unlinked, not canon until accepted (§7c)
@@ -3232,11 +3233,14 @@ function renderBoard(force){
   if(cand.length){
     html+=`<div class="lookbar"><b style="color:var(--amber)">candidates</b>
       <span class="mut" style="font-size:11px">${cand.length} waiting — click one to accept it into a slot, or drop it from the row</span></div>
-      <div class="plategrid">`+cand.map(f=>`<div class="plate cand${f===PAINTCAND?' varysrc':''}" data-file="${aq(f)}"
-        title="a candidate — click to choose what becomes of it">
+      <div class="plategrid">`+cand.map(f=>{
+        const en=(m.hist||[]).find(x=>x&&x.f===f);
+        return `<div class="plate cand${f===PAINTCAND?' varysrc':''}" data-file="${aq(f)}"
+        title="${aq('a candidate — click to choose what becomes of it'
+          +(en&&en.prompt?'\n\npainted with: '+en.prompt:''))}">
         <img src="/api/plate?slug=${CASTSEL}&f=${encodeURIComponent(f)}" loading="lazy" draggable="false">
         <div class="pcap"><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.replace(/\.[a-z0-9]+$/,''))}</span></div>
-      </div>`).join('')+'</div>';
+      </div>`;}).join('')+'</div>';
   }
   // ── painting ── candidates only, assembled exactly as a card's paint is
   const nb=!!STATE.nanobanana, some=!!Object.keys(m.plates||{}).length;
@@ -3270,9 +3274,10 @@ function renderBoard(force){
   wireBoard();
   const cp=$('cpaint'); if(cp&&oldPrompt&&!cp.value)cp.value=oldPrompt;
 }
-function plateTile(slot,p,key){
+function plateTile(slot,p,key,en){
   return `<div class="plate ${key?'key':''}${slot===PAINTTGT?' varysrc':''}" draggable="true" data-slot="${aq(slot)}"
-    title="${aq(slot)} — drag to reorder · right-click for rename, key, look, view">
+    title="${aq(slot+' — drag to reorder · right-click for rename, key, look, view'
+      +(en&&en.prompt?'\n\npainted with: '+en.prompt:''))}">
     ${p.file?`<img src="/api/plate?slug=${CASTSEL}&f=${encodeURIComponent(p.file)}" loading="lazy" draggable="false">`
       :'<div style="height:104px;display:grid;place-items:center" class="mut">no file</div>'}
     <div class="pcap">${key?'<span class="star" title="the key — the default plate for the whole member">★</span>':''}
@@ -3369,6 +3374,25 @@ function plateMenu(e,slot){
       const cp=$('cpaint'); if(cp)cp.focus();
       $('status').textContent=`painting against @${CASTSEL}/${slot} — write the prompt and press Paint`;
     }},
+    // a plate accepted from a candidate keeps its file name, so it still
+    // knows the prompt that painted it — same verbs as the candidates row
+    ...((m.hist||[]).some(x=>x&&x.f===p.file)?(()=>{
+      const en=(m.hist||[]).find(x=>x&&x.f===p.file);
+      return [
+        {label:'⟳ Paint its Prompt Again', run:()=>{
+          PAINTTGT=slot; PAINTCAND='';
+          renderBoard(true);
+          const cp=$('cpaint'); if(cp)cp.value=en.prompt;
+          boardPaint(en.prompt,'candidate');
+        }},
+        {label:'↩ Its Prompt into the Box', run:()=>{
+          PAINTTGT=slot; PAINTCAND='';
+          renderBoard(true);
+          const cp=$('cpaint'); if(cp){ cp.value=en.prompt; cp.focus(); }
+          $('status').textContent=`the words that painted “${slot}” are back in the box — fix the spelling and press Paint`;
+        }},
+      ];
+    })():[]),
     {label:'Open in your Viewer', run:()=>castApi('/api/cast/open',{slug:CASTSEL,plate:slot},true)},
     '-',
     {label:'Remove from its Slot', danger:true,
@@ -3402,6 +3426,9 @@ async function uploadPlates(list){
 function candMenu(e,f){
   const m=(STATE.cast||{})[CASTSEL]; if(!m||!(m.candidates||[]).includes(f))return;
   const sug=f.replace(/\.[a-z0-9]+$/,'').replace(/-new(-\d+)?$/,'');
+  // the words that painted this candidate, if the board remembered them
+  // (m.hist, filed by cast_paint) — the takes gesture the cards taught
+  const en=(m.hist||[]).find(x=>x&&x.f===f);
   openCtx(e,[
     {label:'Accept into a Slot…', run:()=>{ openCtx(e,[]);
       ctxAsk(sug,'slot name — sheet, 3q, angry…','accept',
@@ -3409,6 +3436,22 @@ function candMenu(e,f){
     {label:'Accept as the Key Plate…', run:()=>{ openCtx(e,[]);
       ctxAsk(sug,'slot name','accept ★', t=>acceptCand(f,t,true)); }},
     '-',
+    ...(en?[
+      // another roll of the same words, against the same target — the
+      // one-click iterate a spelling hunt lives on
+      {label:'⟳ Paint its Prompt Again', run:()=>{
+        PAINTCAND=en.vary||''; PAINTTGT=en.plate||'';
+        renderBoard(true);
+        const cp=$('cpaint'); if(cp)cp.value=en.prompt;
+        boardPaint(en.prompt,'candidate');
+      }},
+      {label:'↩ Its Prompt into the Box', run:()=>{
+        PAINTCAND=en.vary||''; PAINTTGT=en.plate||'';
+        renderBoard(true);
+        const cp=$('cpaint'); if(cp){ cp.value=en.prompt; cp.focus(); }
+        $('status').textContent=`the words that painted “${f}” are back in the box — fix the spelling and press Paint`;
+      }},
+    ]:[]),
     {label:'Paint a Variant of This One…', run:()=>{
       PAINTCAND=f; PAINTTGT=''; renderBoard(true);
       const cp=$('cpaint'); if(cp)cp.focus();
@@ -3463,10 +3506,11 @@ async function boardPaint(prompt,stem){
     if(CASTSEL===slug)renderBoard(true);
     return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
   }
-  const cp=$('cpaint'); if(cp)cp.value='';
+  // the words STAY in the box: a spelling hunt (a logo, a sign) rolls the
+  // same prompt again and again, and wiping it made every roll a retype
   await refresh();
   if(CASTSEL===slug)renderBoard(true);
-  $('status').innerHTML=`<span class="ok">“${esc(r.file)}” painted</span> — it waits in the candidates row; accept it into a slot or drop it`;
+  $('status').innerHTML=`<span class="ok">“${esc(r.file)}” painted</span> — it waits in the candidates row; Paint again rolls another of the same words`;
 }
 async function dupLook(e,look){
   if(!CASTSEL)return;
