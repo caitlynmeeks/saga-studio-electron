@@ -247,6 +247,10 @@ button.busy{border-color:var(--green);color:var(--green);animation:pulse 1s ease
 @media(prefers-reduced-motion:reduce){button.busy{animation:none;opacity:.7}}
 .dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--faint)}
 .dot.ready{background:var(--green)}.dot.stale{background:var(--amber)}
+/* a stack whose cards are rendering right now — stated AFTER ready and
+   stale so the flash wins whichever the counts say */
+.dot.baking{background:var(--amber);animation:dotpulse 1s ease-in-out infinite}
+@keyframes dotpulse{50%{opacity:.2}}
 input,select,textarea{background:#0b0f0e;border:1px solid var(--line);color:var(--fg);
 border-radius:5px;padding:4px 6px;font:12px var(--mono)}
 input[type=number]{width:62px}
@@ -922,6 +926,9 @@ let DOC=null, SEL=new Set(), STATE={}, JOBS={}, POLL=null, HEIGHT={};
 // there would be a temporal dead zone and one thrown ReferenceError
 // silences every const below it (hard-won knowledge)
 let QDATA=null, QPOLL=null, QSEQ=0;
+// stacks with card renders in flight RIGHT NOW — pollQueue keeps it, the
+// sidebar's stack dots flash on it (declared here for the same TDZ reason)
+let RENDERING=new Set();
 let BAKETIMER=null, WASBAKING=false;
 // CUR is the card you are working in — the one edit-then-listen starts from.
 // SEL is a different idea entirely (which cards go to Brenda as
@@ -2378,6 +2385,10 @@ function projRow(p,slug,i,why){
       <div style="display:flex;gap:6px;align-items:center">
         <span style="flex:1">${esc(p.draft?p.title.replace(/\s*\(draft\)$/,''):p.title)}${
           p.draft?'<span class="draftb">✎ draft</span>':''}</span>
+        ${p.chunks?`<span class="dot ${RENDERING.has(p.name)?'stale baking':
+            p.ready>=p.chunks?'ready':'stale'}" data-proj="${aq(p.name)}"
+          title="${p.ready>=p.chunks?'every card is rendered'
+            :(p.chunks-p.ready)+' of '+p.chunks+' not rendered — Render Stale Cards bakes them'}"></span>`:''}
         <button class="tiny" title="show this episode's folder"
           onclick="event.stopPropagation();reveal('${p.name}')">↗</button>
         <button class="tiny" title="export this episode"
@@ -7077,10 +7088,29 @@ async function pollQueue(){
   QDATA=st;
   const busy=st.busy+(st.bake&&st.bake.running?1:0);
   $('tabQueue').textContent=busy?`Queue · ${busy}`:'Queue';
+  // the sidebar's stack dots: which stacks have card renders in flight —
+  // previews stay out, they never change what is rendered. A stack that
+  // just LEFT the set has new wavs on disk, so the counts are re-read
+  // and its dot settles on what they say (green, if the bake finished it)
+  const now=new Set();
+  for(const j of st.jobs||[])
+    if(j.kind==='render'&&j.project&&(j.status==='running'||j.status==='queued'))
+      now.add(j.project);
+  if(st.bake&&st.bake.running&&st.bake.project)now.add(st.bake.project);
+  const left=[...RENDERING].some(n=>!now.has(n));
+  RENDERING=now;
+  paintStackDots();
+  if(left)refresh();
   if(queueOpen())renderQueue();
   // keep watching while anything is moving, or while the window is open —
   // shut and idle, the poll rests until a kick
   if(busy||queueOpen())QPOLL=setTimeout(pollQueue,1500);
+}
+// flash without rebuilding: the list repaints on its own schedule, and a
+// class toggle between repaints keeps the pulse honest either way
+function paintStackDots(){
+  document.querySelectorAll('.proj .dot').forEach(d=>
+    d.classList.toggle('baking',RENDERING.has(d.dataset.proj||'')));
 }
 function renderQueue(){
   const st=QDATA; if(!st)return;
