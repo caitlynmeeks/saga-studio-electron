@@ -734,6 +734,36 @@ def file_history(project, cid, c, doc, h):
         save(live)
 
 
+def file_paint_history(project, cid, mname, prompt, ref, vary, style):
+    """The visual twin of file_history: every variant a card paints keeps
+    the prompt, references, vary-source and style words that painted it,
+    keyed by the pool name — unique for ever, pool law. A visual card's
+    `hist` holds these; a speech card's holds renders — one field, and the
+    card's type says which shape lives in it. The variants menu shows the
+    words beside each picture and can put them back on the card, so a
+    prompt that found the right picture is never lost to the next edit of
+    the note."""
+    entry = {"m": mname, "at": int(time.time()),
+             "prompt": str(prompt or "")[:2000],
+             "ref": ref_list(ref)}
+    vary = re.sub(r"[^a-z0-9_-]", "", str(vary or ""))
+    if vary:
+        entry["vary"] = vary
+    if style and style[0]:
+        entry["style"] = [str(t)[:200] for t in style[0][:4]]
+    with _docmut:
+        live = load(project)
+        c = (next((x for x in live["chunks"] if x["id"] == cid), None)
+             if live else None)
+        if c is None or c.get("type") != "visual":
+            return
+        hist = [e for e in (c.get("hist") or [])
+                if isinstance(e, dict) and e.get("m") != mname]
+        hist.append(entry)
+        c["hist"] = hist[-24:]
+        save(live)
+
+
 def is_speech(c):
     """Does this card have prose in it? Guards every c["text"] access."""
     return c.get("type", "speech") == "speech"
@@ -5556,6 +5586,13 @@ class H(BaseHTTPRequestHandler):
                 job_end(jid, error=str(ex))
                 return self._send(400, {"error": str(ex)})
             job_end(jid)
+            if nm and d.get("id") is not None:
+                # the words that painted this variant stay with it (the
+                # visual twin of a speech card's render history)
+                file_paint_history(nm, d.get("id"), mname,
+                                   str(d.get("prompt") or ""),
+                                   d.get("ref") or "",
+                                   str(d.get("vary") or ""), style)
             return self._send(200, {"ok": True, "media": mname,
                                     "kind": "image"})
         # A darkride source link, imported without the browser detour: the

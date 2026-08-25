@@ -81,6 +81,11 @@ body[data-tab=queue] #queue{display:block}
    rows carry their own small ones, so give those back their button shape */
 .histpick .hrow button{display:inline-block;width:auto;flex:none;
   border:1px solid var(--line);border-radius:4px;padding:1px 7px;font-size:11px}
+.histpick .hrow img{width:44px;height:26px;object-fit:cover;border-radius:3px;
+  flex:none}
+/* the picture the next Paint varies — outlined so an armed (or unarmed)
+   vary is readable at a glance, on the card and on the board alike */
+.varysrc{outline:2px dashed var(--amber);outline-offset:-2px}
 /* The centre column is one grid cell holding two stacked children: the
    find/replace bar and the scrolling card list. Left as siblings of <main>
    they became grid items of their own and shunted every later panel a
@@ -3227,7 +3232,7 @@ function renderBoard(force){
   if(cand.length){
     html+=`<div class="lookbar"><b style="color:var(--amber)">candidates</b>
       <span class="mut" style="font-size:11px">${cand.length} waiting — click one to accept it into a slot, or drop it from the row</span></div>
-      <div class="plategrid">`+cand.map(f=>`<div class="plate cand" data-file="${aq(f)}"
+      <div class="plategrid">`+cand.map(f=>`<div class="plate cand${f===PAINTCAND?' varysrc':''}" data-file="${aq(f)}"
         title="a candidate — click to choose what becomes of it">
         <img src="/api/plate?slug=${CASTSEL}&f=${encodeURIComponent(f)}" loading="lazy" draggable="false">
         <div class="pcap"><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.replace(/\.[a-z0-9]+$/,''))}</span></div>
@@ -3266,7 +3271,7 @@ function renderBoard(force){
   const cp=$('cpaint'); if(cp&&oldPrompt&&!cp.value)cp.value=oldPrompt;
 }
 function plateTile(slot,p,key){
-  return `<div class="plate ${key?'key':''}" draggable="true" data-slot="${aq(slot)}"
+  return `<div class="plate ${key?'key':''}${slot===PAINTTGT?' varysrc':''}" draggable="true" data-slot="${aq(slot)}"
     title="${aq(slot)} — drag to reorder · right-click for rename, key, look, view">
     ${p.file?`<img src="/api/plate?slug=${CASTSEL}&f=${encodeURIComponent(p.file)}" loading="lazy" draggable="false">`
       :'<div style="height:104px;display:grid;place-items:center" class="mut">no file</div>'}
@@ -4573,7 +4578,8 @@ function visualCard(c){
     :kind==='video'
       ?`<video src="${src}" muted playsinline
          controls preload="metadata" style="max-height:150px;max-width:100%;border-radius:6px"></video>`
-      :`<img src="${src}" loading="lazy"
+      :`<img src="${src}" loading="lazy"${VARY.has(c.id)&&c.media
+         ?' class="varysrc" title="the next Paint varies THIS picture — it rides first among the references"':''}
          style="max-height:150px;max-width:100%;border-radius:6px;object-fit:contain">`;
   const eapp=c.media&&appFor(kind==='video'?'video':'image');
   return `
@@ -4777,7 +4783,8 @@ function togglePaint(id){
     // closing must not eat a half-typed prompt: removal skips the blur
     const inp=$('vp'+id);
     if(inp&&!c.locked&&inp.value!==(c.note||''))setCard(id,{note:inp.value});
-    row.remove(); PAINTS.delete(id); VARY.delete(id); return;
+    row.remove(); PAINTS.delete(id); VARY.delete(id);
+    paintVaryMark(id); return;
   }
   PAINTS.add(id);
   const act=document.querySelector('#c'+id+' .act');
@@ -4831,27 +4838,75 @@ async function genImage(id){
   if(id===CUR)stagePeek();         // a repaint of the selected card hangs NOW
   $('status').textContent=`“${r.media}” painted${vary?` against “${vary}”`:''} — the variants menu holds the others`;
 }
+// The variants menu, grown the render-history way: each painted variant
+// keeps the prompt, references and vary-source that made it (c.hist,
+// filed by the server at paint time), so the words that found the right
+// picture are never lost to the next edit of the note. A row's click
+// shows that variant, as ever; ↩ puts its prompt and refs back on the
+// paint row, ready to iterate from.
 async function genMenu(e,id){
   const c=DOC.chunks.find(x=>x.id===id); if(!c)return;
   const gen=c.gen||[];
-  const items=gen.map(n=>({label:(n===c.media?'● ':'  ')+n,
-    run:()=>setCard(id,{media:n},true)}));
-  items.push('-');
-  items.push({label:'paint another variant',run:()=>genImage(id)});
-  if(c.media)
-    items.push({label:`paint a variant of “${c.media}”…`,run:()=>paintVariant(id)});
-  if(c.media)
-    items.push({label:`→ make “${c.media}” a reference…`,
-      run:()=>promotePicker(e,c.media)});
-  if(c.media&&gen.includes(c.media)&&gen.length>1)
-    items.push({label:`✕ drop “${c.media}” — it's off`,danger:true,
-      run:()=>dropVariant(id)});
-  openCtx(e,items);
+  openCtx(e,[]); if(!CTX)return;
+  CTX.classList.add('histpick');
+  const byname={}; for(const en of c.hist||[])if(en&&en.m)byname[en.m]=en;
+  const rows=gen.slice().reverse().map(n=>{
+    const en=byname[n], cur=n===c.media;
+    const mm=(STATE.media||[]).find(x=>x.name===n);
+    const words=((en&&en.prompt)||'').replace(/\s+/g,' ').trim();
+    return `<div class="hrow" data-m="${esc(n)}"
+      title="${aq(words?words+'\n\nclick to show this variant':'painted before prompts were kept — click to show it')}">
+      ${mm?`<img src="/api/media?f=${encodeURIComponent(n)}&v=${mm.added}" loading="lazy">`:''}
+      <span class="hwhat">${cur?'● ':''}${esc(n)}${
+        en&&en.vary?` <span class="mut">(vary of ${esc(en.vary)})</span>`:''}${
+        words?` <span class="mut">— ${esc(words.slice(0,44))}${words.length>44?'…':''}</span>`:''}</span>
+      ${en?`<button class="tiny" data-recall="${esc(n)}"
+        title="bring back the prompt and references that painted this one — onto the paint row, ready to iterate">↩ prompt</button>`:''}
+      <button class="tiny" data-dropv="${esc(n)}"
+        title="drop it from the shortlist — the file stays in the media pool">✕</button>
+    </div>`;
+  });
+  CTX.innerHTML=rows.join('')
+    +(rows.length?'<hr>':'')
+    +`<button data-act="paint">paint another variant</button>`
+    +(c.media?`<button data-act="vary">paint a variant of “${esc(c.media)}”…</button>`:'')
+    +(c.media?`<button data-act="ref">→ make “${esc(c.media)}” a reference…</button>`:'');
+  CTX.style.left=Math.max(6,Math.min(e.clientX,innerWidth-CTX.offsetWidth-8))+'px';
+  CTX.style.top=Math.max(6,Math.min(e.clientY,innerHeight-CTX.offsetHeight-8))+'px';
+  CTX.addEventListener('click',ev=>{
+    const rb=ev.target.closest('[data-recall]');
+    if(rb){ closeCtx(); genRecall(id,byname[rb.dataset.recall]); return; }
+    const xb=ev.target.closest('[data-dropv]');
+    if(xb){ closeCtx(); dropVariant(id,xb.dataset.dropv); return; }
+    const ab=ev.target.closest('[data-act]');
+    if(ab){ closeCtx();
+      if(ab.dataset.act==='paint')genImage(id);
+      else if(ab.dataset.act==='vary')paintVariant(id);
+      else if(ab.dataset.act==='ref')promotePicker(e,c.media);
+      return; }
+    const row=ev.target.closest('.hrow');
+    if(row){ closeCtx(); setCard(id,{media:row.dataset.m},true); }
+  });
 }
-async function dropVariant(id){
+async function genRecall(id,en){
+  if(!en)return;
+  // the variant and the words that painted it come back together: the
+  // prompt into the note, the refs onto their chips, the picture on show
+  PAINTS.add(id);
+  const r=await api('/api/chunk',{name:DOC.name,id,note:en.prompt||'',
+    ref:en.ref||[],media:en.m});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await open_(DOC.name,true,id);
+  const inp=$('vp'+id); if(inp){ fitTa(inp); inp.focus(); }
+  $('status').textContent=`“${en.m}” and its prompt are back — Paint iterates from here (⌘Z undoes)`;
+}
+async function dropVariant(id,n){
   const c=DOC.chunks.find(x=>x.id===id); if(!c)return;
-  const gen=(c.gen||[]).filter(n=>n!==c.media);
-  await setCard(id,{gen,media:gen[gen.length-1]||''},true);
+  n=n||c.media;
+  const gen=(c.gen||[]).filter(x=>x!==n);
+  const patch={gen};
+  if(c.media===n)patch.media=gen[gen.length-1]||'';
+  await setCard(id,patch,true);
   $('status').textContent='dropped from the shortlist — the file itself stays in the media pool';
 }
 
@@ -4865,13 +4920,25 @@ function paintVariant(id){
   const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c||!c.media)return;
   VARY.add(id);
   if(!redrawPaintRow(id))togglePaint(id);
+  paintVaryMark(id);
   const inp=$('vp'+id); if(inp)inp.focus();
   $('status').textContent=`painting against “${c.media}” — write the prompt and press Paint`;
 }
 function dropVary(id){
   VARY.delete(id);
   redrawPaintRow(id);
+  paintVaryMark(id);
   $('status').textContent='free painting again — the prompt and the references alone';
+}
+// the outline on the card's picture follows the armed state, so whether
+// the next Paint is anchored or free is readable without opening anything
+function paintVaryMark(id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id);
+  const img=document.querySelector('#c'+id+' .arow img');
+  if(!img)return;
+  const on=!!(c&&VARY.has(id)&&c.media);
+  img.classList.toggle('varysrc',on);
+  img.title=on?'the next Paint varies THIS picture — it rides first among the references':'';
 }
 // an open paint row, redrawn in place — without eating a half-typed prompt,
 // the same care togglePaint takes when closing one
