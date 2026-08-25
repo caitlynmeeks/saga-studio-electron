@@ -679,6 +679,61 @@ def chunk_hash(c, doc, profs=None):
     return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()[:20]
 
 
+def delivery_of(c, doc, profs=None):
+    """The composed delivery a render actually spoke with — the keys
+    chunk_hash reads for this card's engine, branch for branch, plus the
+    voice it wore. Filed into the card's history so a reading can be
+    brought back whole. The card-overridable keys restore straight into
+    c["params"]; voice, kvoice and lang live only in the profile, so a
+    restored reading is exact while its profile still says what it said,
+    and honestly re-renders when the profile has moved on."""
+    p = params_for(c, doc, profs)
+    if c.get("type") == "voiced":
+        return {"engine": "chatterbox", "voice": p["voice"]}
+    e = p["engine"]
+    if e == "chatterbox":
+        return {"engine": e, "voice": p["voice"], "exag": p["exag"],
+                "cfg": p["cfg"], "temp": p["temp"], "rep": p["rep"]}
+    if e == "kokoro":
+        return {"engine": e, "kvoice": p["kvoice"],
+                "speed": float(p["speed"] or 0)}
+    out = {"engine": e, "voice": p["voice"], "lang": p["lang"],
+           "speed": float(p["speed"] or 0)}
+    if p.get("duration"):
+        out["duration"] = float(p["duration"])
+    return out
+
+
+def file_history(project, cid, c, doc, h):
+    """Every render a card has ever made, remembered ON the card: the words
+    as they were spelled for the model, the take, the profile and the
+    composed delivery that produced hash h — enough to bring that exact
+    sound back with one gesture, cached wav and all. This is the other axis
+    from takes: a take re-rolls the same reading, history spans every
+    respelling, engine switch and dial change the card has been through.
+    Keyed by hash, so re-rendering the same state refreshes its entry
+    rather than growing a twin. `c` and `doc` are the copies the render
+    actually spoke from — the live doc may already say something newer,
+    which is exactly why the snapshot is taken from these."""
+    entry = {"h": h, "at": int(time.time()),
+             "take": int(c.get("seed") or 0),
+             "profile": c.get("profile", "Default"),
+             "d": delivery_of(c, doc)}
+    if is_speech(c):
+        entry["text"] = c["text"]
+    with _docmut:
+        live = load(project)
+        c2 = (next((x for x in live["chunks"] if x["id"] == cid), None)
+              if live else None)
+        if c2 is None or not is_renderable(c2):
+            return                       # the card left while it rendered
+        hist = [e for e in (c2.get("hist") or [])
+                if isinstance(e, dict) and e.get("h") != h]
+        hist.append(entry)
+        c2["hist"] = hist[-24:]          # a shortlist, not an archive
+        save(live)
+
+
 def is_speech(c):
     """Does this card have prose in it? Guards every c["text"] access."""
     return c.get("type", "speech") == "speech"
@@ -1192,7 +1247,7 @@ def cast_paint(slug, prompt, plate="", stem="", file=""):
     return fname
 
 
-def generate_media(prompt, stem="", aspect="", ref="", style=None):
+def generate_media(prompt, stem="", aspect="", ref="", style=None, vary=""):
     """Ask the chosen illustrator for a picture and file it in the media pool.
 
     Every generation is new bytes, so the upload route's dedupe has nothing
@@ -1206,6 +1261,10 @@ def generate_media(prompt, stem="", aspect="", ref="", style=None):
     brief along as words — a picture and a sentence agreeing beat either
     alone. `style` is style_of's (texts, refs) — the tiers above the card,
     composed by the caller because only the caller knows the card said no.
+    `vary` names a pool picture to paint a VARIANT of: it rides FIRST —
+    the one canvas Draw Things paints over, the head of nanobanana's
+    gallery — behind a label saying it is the one being varied, so a
+    repaint keeps the picture it starts from instead of wandering.
     Returns the name the pool filed it under."""
     if not prompt.strip():
         raise ValueError("an empty prompt paints nothing")
@@ -1221,7 +1280,14 @@ def generate_media(prompt, stem="", aspect="", ref="", style=None):
         for r in ref_list(style[1]):
             if r not in items:
                 items.append(r)
+    vary = re.sub(r"[^a-z0-9_-]", "", str(vary or ""))
+    if vary:
+        items = [r for r in items if r != vary]
     refs = [resolve_ref(r) for r in items]
+    if vary:
+        refs.insert(0, (_ref_image(vary),
+                        "The picture being varied: keep everything "
+                        "the prompt does not change"))
     reg, members, seen = cast(), [], set()
     # the tiers' words arrive as style members, broadest first, so the
     # Style lines stand where §4 fixes them — before cast, setting, shot
@@ -3487,23 +3553,60 @@ _jobs = {}
 _queue = __import__("collections").deque()
 _qlock = threading.Condition()
 _seq = [0]
+# the print queue's hold button: the worker stops POPPING, never mid-card —
+# a generate() on MPS cannot be interrupted without losing the model, so
+# pause is honoured between jobs, the same law bake's Stop already follows
+_qstate = {"paused": False}
 
 
-def enqueue(kind, project, cid, text=None):
+def enqueue(kind, project, cid, text=None, label=""):
     with _qlock:
         _seq[0] += 1
         jid = f"j{_seq[0]}"
         _jobs[jid] = {"id": jid, "kind": kind, "project": project, "chunk": cid,
-                      "status": "queued", "text": text, "queued_at": time.time()}
+                      "status": "queued", "text": text,
+                      "label": str(label or "")[:80], "queued_at": time.time()}
         _queue.append(jid)
         _qlock.notify()
     return jid
 
 
+def job_start(kind, project, cid, label=""):
+    """File already-RUNNING work in the jobs table so the queue window sees
+    it. Paints run in their request's own thread — parallel, unpausable,
+    answered on the connection that asked — so they never pass through
+    _queue; this is bookkeeping, not scheduling."""
+    with _qlock:
+        _seq[0] += 1
+        jid = f"j{_seq[0]}"
+        _jobs[jid] = {"id": jid, "kind": kind, "project": project, "chunk": cid,
+                      "status": "running", "label": str(label or "")[:80],
+                      "queued_at": time.time()}
+    return jid
+
+
+def job_end(jid, error=""):
+    j = _jobs.get(jid)
+    if j:
+        j.update(status="error" if error else "done",
+                 seconds=round(time.time() - j["queued_at"], 1))
+        if error:
+            j["error"] = error
+    _prune_jobs()
+
+
+def _prune_jobs():
+    # keep the table small; finished jobs are only needed until the UI polls
+    if len(_jobs) > 400:
+        for k in sorted(_jobs, key=lambda k: _jobs[k]["queued_at"])[:200]:
+            if _jobs[k]["status"] in ("done", "error", "canceled"):
+                _jobs.pop(k, None)
+
+
 def worker():
     while True:
         with _qlock:
-            while not _queue:
+            while not _queue or _qstate["paused"]:
                 _qlock.wait()
             jid = _queue.popleft()
         j = _jobs[jid]
@@ -3518,14 +3621,13 @@ def worker():
             else:
                 h, cached = render_any(c, doc, force=True)
                 j.update(hash=h)
+                # previews speak a selection, never the whole card, so only
+                # real renders join the card's history
+                file_history(j["project"], j["chunk"], c, doc, h)
             j.update(status="done", seconds=round(time.time() - t0, 1))
         except Exception as ex:
             j.update(status="error", error=f"{type(ex).__name__}: {ex}")
-        # keep the table small; finished jobs are only needed until the UI polls
-        if len(_jobs) > 400:
-            for k in sorted(_jobs, key=lambda k: _jobs[k]["queued_at"])[:200]:
-                if _jobs[k]["status"] in ("done", "error"):
-                    _jobs.pop(k, None)
+        _prune_jobs()
 
 
 threading.Thread(target=worker, daemon=True).start()
@@ -3545,13 +3647,18 @@ def bake(name):
     fails = []
     try:
         for c in todo:
+            # the queue's Pause holds these presses too — between cards,
+            # never mid-card, the same law as Stop
+            while _qstate["paused"] and not _bake["cancel"]:
+                time.sleep(0.3)
             if _bake["cancel"]:
                 _bake["stopped"] = True
                 break
             _bake["label"] = (c["text"][:60] if is_speech(c)
                               else "◎ " + (c.get("perfname") or "performance"))
             try:
-                render_any(c, doc)
+                h, _ = render_any(c, doc)
+                file_history(name, c["id"], c, doc, h)
             except Exception as ex:
                 # A bake must never die silently — but one strange card must
                 # not stop the other 139 either. A card's failure is noted
@@ -4919,6 +5026,41 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"jobs": js[-60:],
                                     "busy": sum(1 for j in js
                                                 if j["status"] in ("queued", "running"))})
+        if u.path == "/api/queue":
+            # the printer-queue window: every job in the table, every
+            # project — /api/jobs narrows to one document for the card
+            # buttons, this answers for the whole studio
+            with _qlock:
+                js = [dict(j) for j in _jobs.values()]
+                paused = _qstate["paused"]
+            js.sort(key=lambda j: j["queued_at"])
+            return self._send(200, {
+                "jobs": js[-80:], "paused": paused, "bake": _bake,
+                "busy": sum(1 for j in js
+                            if j["status"] in ("queued", "running"))})
+        if u.path == "/api/history":
+            # the render-history menu: every way this card has been
+            # rendered, each entry told whether its wav is still on this
+            # machine (a transferred project keeps the entries, not the
+            # audio — restoring one of those re-renders, and says so)
+            doc = load(q.get("name", [""])[0])
+            if not doc:
+                return self._send(404, {"error": "no such project"})
+            cid = int(q.get("id", ["-1"])[0])
+            c = next((x for x in doc["chunks"] if x["id"] == cid), None)
+            if c is None or not is_renderable(c):
+                return self._send(400, {"error": "that card does not render"})
+            out = []
+            for e in (c.get("hist") or []):
+                if not isinstance(e, dict) or not e.get("h"):
+                    continue
+                f = AUDIO / f"{e['h']}.wav"
+                have = f.exists()
+                out.append({**e, "ready": have,
+                            **({"secs": round(clip_secs(f), 2)}
+                               if have else {})})
+            return self._send(200, {"hist": out,
+                                    "current": chunk_hash(c, doc)})
 
         if u.path == "/api/audio":
             f = AUDIO / f"{q.get('h',[''])[0]}.wav"
@@ -5401,14 +5543,19 @@ class H(BaseHTTPRequestHandler):
                           None) if doc else None)
                 if doc and not (c or {}).get("nostyle"):
                     style = style_of(doc)
+            jid = job_start("paint", nm, d.get("id"),
+                            str(d.get("prompt") or ""))
             try:
                 mname = generate_media(str(d.get("prompt") or ""),
                                        str(d.get("media") or ""),
                                        str(d.get("aspect") or ""),
                                        d.get("ref") or "",   # name or list
-                                       style)
+                                       style,
+                                       str(d.get("vary") or ""))
             except (ValueError, RuntimeError) as ex:
+                job_end(jid, error=str(ex))
                 return self._send(400, {"error": str(ex)})
+            job_end(jid)
             return self._send(200, {"ok": True, "media": mname,
                                     "kind": "image"})
         # A darkride source link, imported without the browser detour: the
@@ -6545,13 +6692,68 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if u.path == "/api/render":
                 return self._send(200, {"ok": True,
-                                        "job": enqueue("render", d["name"], d["id"])})
+                                        "job": enqueue("render", d["name"], d["id"],
+                                                       label=d.get("label"))})
             if u.path == "/api/preview":
                 sel = (d.get("text") or "").strip()
                 if not sel:
                     return self._send(400, {"error": "select some text in the card first"})
                 return self._send(200, {"ok": True,
-                                        "job": enqueue("preview", d["name"], d["id"], sel)})
+                                        "job": enqueue("preview", d["name"], d["id"], sel,
+                                                       label=sel)})
+            # ── the queue's own verbs ── pause holds the presses between
+            # jobs (never mid-card, see _qstate); cancel takes a WAITING job
+            # out of the line; retry sends a finished render to the back of
+            # it. Refusals are 200 {ok:False} like /api/bake's, not errors:
+            # racing the worker is normal, not exceptional.
+            if u.path == "/api/queue/pause":
+                with _qlock:
+                    _qstate["paused"] = bool(d.get("on"))
+                    _qlock.notify_all()
+                return self._send(200, {"ok": True, "paused": _qstate["paused"]})
+            if u.path == "/api/queue/cancel":
+                with _qlock:
+                    j = _jobs.get(str(d.get("job") or ""))
+                    if not j or j["status"] != "queued":
+                        return self._send(200, {"ok": False, "error":
+                            "only a job still waiting can be taken out — "
+                            "one mid-render finishes on its own"})
+                    _queue.remove(j["id"])
+                    j["status"] = "canceled"
+                return self._send(200, {"ok": True})
+            if u.path == "/api/queue/retry":
+                j = _jobs.get(str(d.get("job") or ""))
+                if not j or j["kind"] != "render" \
+                        or j["status"] not in ("done", "error", "canceled"):
+                    return self._send(200, {"ok": False, "error":
+                        "only a finished render can go again"})
+                return self._send(200, {"ok": True,
+                    "job": enqueue("render", j["project"], j["chunk"],
+                                   label=j.get("label"))})
+            if u.path == "/api/queue/clear":
+                with _qlock:
+                    for k in [k for k, j in _jobs.items()
+                              if j["status"] in ("done", "error", "canceled")]:
+                        _jobs.pop(k)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/history/drop":
+                # forget one entry from a card's render history. The wav
+                # stays in audio/ — the same law as dropping an image
+                # variant: only the shortlist forgets
+                doc = load(d["name"])
+                c = next((x for x in doc["chunks"]
+                          if x["id"] == d.get("id")), None)
+                if c is None:
+                    return self._send(404, {"error": "no such card"})
+                h = str(d.get("h") or "")
+                hist = [e for e in (c.get("hist") or [])
+                        if isinstance(e, dict) and e.get("h") != h]
+                if hist:
+                    c["hist"] = hist
+                else:
+                    c.pop("hist", None)
+                save(doc)
+                return self._send(200, {"ok": True, "left": len(hist)})
 
 
             if u.path == "/api/bake":
@@ -7018,6 +7220,9 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/cast/paint":
                 # slow and lockless, like /api/media/generate — cast_paint
                 # takes the lock itself for the one registry append at the end
+                jid = job_start("paint", "", None,
+                                f"@{d.get('slug') or ''} · "
+                                f"{str(d.get('prompt') or '')}")
                 try:
                     fname = cast_paint(str(d.get("slug") or ""),
                                        str(d.get("prompt") or ""),
@@ -7025,7 +7230,9 @@ class H(BaseHTTPRequestHandler):
                                        str(d.get("stem") or ""),
                                        str(d.get("file") or ""))
                 except (ValueError, RuntimeError) as ex:
+                    job_end(jid, error=str(ex))
                     return self._send(400, {"error": str(ex)})
+                job_end(jid)
                 return self._send(200, {"ok": True, "file": fname})
             if u.path == "/api/media/open":
                 # any pool picture or film, in whatever this machine opens

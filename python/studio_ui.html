@@ -65,6 +65,22 @@ background:none;color:var(--dim);padding:3px 9px 5px;font-size:11.5px}
 .rpane{overflow-y:auto;padding:12px;min-height:0;display:none}
 body[data-tab=inspect] #inspect{display:block}
 body[data-tab=chat] #chat{display:flex;flex-direction:column}
+body[data-tab=queue] #queue{display:block}
+.qrow{display:flex;gap:7px;align-items:center;padding:6px 4px;
+  border-bottom:1px solid var(--line);font-size:12px}
+.qrow .qstat{flex:none;width:76px;color:var(--dim);font-size:11px}
+.qrow .qwhat{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.ctx.histpick{max-width:620px;max-height:420px;overflow-y:auto;padding:6px}
+.hrow{display:flex;gap:7px;align-items:center;padding:4px 6px;
+  border-radius:5px;font-size:12px;cursor:pointer}
+.hrow:hover{background:var(--panel);color:var(--bright)}
+.hrow .hwhat{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+/* inside the ctx shell, buttons are menu rows by default — the history
+   rows carry their own small ones, so give those back their button shape */
+.histpick .hrow button{display:inline-block;width:auto;flex:none;
+  border:1px solid var(--line);border-radius:4px;padding:1px 7px;font-size:11px}
 /* The centre column is one grid cell holding two stacked children: the
    find/replace bar and the scrolling card list. Left as siblings of <main>
    they became grid items of their own and shunted every later panel a
@@ -829,6 +845,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
  <div id="rtabs">
    <button id="tabInspect" onclick="setTab('inspect')">Inspector</button>
    <button id="tabChat" onclick="setTab('chat')">Drama Manager</button>
+   <button id="tabQueue" onclick="setTab('queue')">Queue</button>
    <span style="flex:1"></span>
    <button class="tiny" onclick="setPanel(false)" title="hide this panel">×</button>
  </div>
@@ -849,6 +866,17 @@ Selected cards go along as context.</div></div>
     <button onclick="chatNew()" title="start a fresh conversation — the old one is forgotten">↺ New</button>
     <span class="mut" id="chatnote" style="font-size:11px;align-self:center"></span>
   </div>
+ </div>
+ <div id="queue" class="rpane">
+  <h2>The Render Queue</h2>
+  <div style="display:flex;gap:6px;margin:6px 0 10px;align-items:center">
+    <button id="qpause" class="tiny" onclick="queuePause()"
+      title="hold the queue — the card in flight finishes, the rest wait">⏸ Pause</button>
+    <button id="qclear" class="tiny" onclick="queueClear()" hidden
+      title="forget the finished rows — rendered files stay on disk">clear finished</button>
+  </div>
+  <div id="qlist" class="mut" style="font-size:12px">nothing in line —
+    renders, previews and paints queue up here</div>
  </div>
 </div>
 
@@ -884,6 +912,11 @@ Selected cards go along as context.</div></div>
 <script>
 const $=i=>document.getElementById(i);
 let DOC=null, SEL=new Set(), STATE={}, JOBS={}, POLL=null, HEIGHT={};
+// the Queue tab's state lives HERE, at the top: setTab may kick the queue
+// poll during boot, long before the tab's own code — a declaration down
+// there would be a temporal dead zone and one thrown ReferenceError
+// silences every const below it (hard-won knowledge)
+let QDATA=null, QPOLL=null, QSEQ=0;
 let BAKETIMER=null, WASBAKING=false;
 // CUR is the card you are working in — the one edit-then-listen starts from.
 // SEL is a different idea entirely (which cards go to Brenda as
@@ -900,6 +933,7 @@ function paintPanel(){
   const open=document.body.dataset.panel==='on', tab=document.body.dataset.tab;
   $('tabInspect').classList.toggle('on',tab==='inspect');
   $('tabChat').classList.toggle('on',tab==='chat');
+  $('tabQueue').classList.toggle('on',tab==='queue');
   $('chatb').classList.toggle('on',open);
 }
 function setPanel(on){
@@ -910,6 +944,7 @@ function setPanel(on){
 function setTab(t){
   document.body.dataset.tab=t;
   paintPanel();
+  if(t==='queue')kickQueue();     // open on a live picture, never a stale one
   try{ localStorage.setItem('saga.tab',t); }catch(e){}
 }
 function showPanel(t){ setPanel(true); setTab(t); }
@@ -1502,7 +1537,7 @@ function profEditor(n){
     </div>
     ${sl('speed','speed',0,2,'0 leaves it to the model; 1 is its normal pace')}
     `:`
-    <div class="psec">delivery${qm('how the reading sounds — text cards only; ◎ voiced cards ignore these')}</div>
+    <div class="psec">delivery${qm('how the reading sounds — Text-to-Speech cards only; ◎ voiced cards ignore these')}</div>
     ${sl('cfg','pace',0,1,'lower is slower and more deliberate')}
     ${sl('exag','feeling',0,1.5,'how much colour goes into the reading')}
     ${sl('temp','steadiness',0.05,1.5,'higher wanders more; lower stays flat')}
@@ -3412,9 +3447,12 @@ async function boardPaint(prompt,stem){
   BOARDPAINTING=true;
   const b=$('cpb'); if(b){ b.disabled=true; b.textContent='painting…'; }
   $('status').textContent='painting a candidate — about 15 seconds';
-  let r; try{ r=await api('/api/cast/paint',{slug,prompt,plate:PAINTTGT,
-    file:PAINTCAND,stem:stem||'candidate'}); }
-  catch(ex){ r={error:String(ex)}; }
+  let r; try{
+    const rq=api('/api/cast/paint',{slug,prompt,plate:PAINTTGT,
+      file:PAINTCAND,stem:stem||'candidate'});
+    kickQueue();                   // it shows in the queue window at once
+    r=await rq;
+  }catch(ex){ r={error:String(ex)}; }
   BOARDPAINTING=false;
   if(r.error){
     if(CASTSEL===slug)renderBoard(true);
@@ -3722,6 +3760,8 @@ document.addEventListener('contextmenu',e=>{
     {label:'Open in your Viewer', run:()=>api('/api/media/open',{media:c.media})},
     ...(eapp?[{label:'Edit in '+appLabel(eapp),
       run:()=>editExternal('image',c.media)}]:[]),
+    '-',
+    {label:'Paint a Variant of This One…', run:()=>paintVariant(c.id)},
     {label:`→ make “${c.media}” a reference…`, run:()=>promotePicker(e,c.media)},
   ]);
 });
@@ -4227,7 +4267,7 @@ function paintVFilter(){
 
 const insBar=at=>`<div class="ins">
     <button class="pb" onclick="pasteCard(${at},event)">+ Paste</button>
-    <button onclick="insertCard(${at},'speech',event)" title="insert an empty text card here">+ Text</button>
+    <button onclick="insertCard(${at},'speech',event)" title="insert an empty Text-to-Speech card here — written words, spoken by an engine">+ Text-to-Speech</button>
     <button onclick="insertCard(${at},'voiced',event)" title="insert a card spoken by you, in a character's voice">+ ◎ Voiced</button>
     <button onclick="insertCard(${at},'audio',event)" title="insert a music / sound-effect card here">+ ♪ Audio</button>
     <button onclick="insertCard(${at},'visual',event)" title="insert a picture or film — the stage shows it from here until the next visual">+ ⛶ Visual</button>
@@ -4357,6 +4397,7 @@ function speechCard(c){return `
       <button id="pv${c.id}" onclick="prev(${c.id})" disabled>Preview Selected</button>
       <button id="rb${c.id}" class="pri" onclick="one(${c.id})" ${c.mute?'disabled':''}>Render</button>
       ${takeUi(c)}
+      ${histBtn(c)}
       <button id="dv${c.id}" class="${Object.keys(c.params||{}).length?'dirty':''}"
         onclick="toggleDeliv(${c.id})"
         title="change the engine or the delivery for this one card only">Delivery</button>
@@ -4484,6 +4525,7 @@ function voicedCard(c){
       <button id="rb${c.id}" class="pri" onclick="one(${c.id})"
         ${c.mute||!c.haveperf?'disabled':''}>Render</button>
       ${takeUi(c)}
+      ${histBtn(c)}
       <button id="sub${c.id}" class="${((c.sub||'').trim()||c.chain)?'dirty':''}" onclick="toggleSub(${c.id})"
         title="a voiced card has no prose — this is what the stage shows while your performance plays">Subtitle</button>
       <button onclick="voiceFromCard(event,${c.id})" ${c.ready?'':'disabled'}
@@ -4579,6 +4621,9 @@ function visualCard(c){
 // story's pictures one cast, and the variants menu holds every painting
 // this card has tried on.
 let PAINTS=new Set();
+// cards painting AGAINST their current picture (CAST.md §7h) — armed until
+// the chip is dismissed or the row put away, so the mode is never invisible
+let VARY=new Set();
 // the tiers above a card (CAST.md §5), composed exactly as the server
 // composes them — the dim line and the paint must agree, or the line lies
 function effStyle(){
@@ -4611,6 +4656,8 @@ function paintRow(c){
         onblur="setCard(${c.id},{note:this.value})"${c.locked?' readonly':''}>${esc(c.note||'')}</textarea>
     </div>
     <div class="arow" style="flex-wrap:wrap">
+      ${VARY.has(c.id)&&c.media?`<button class="tiny refchip" onclick="dropVary(${c.id})"
+        title="painting against “${esc(c.media)}” — the current picture rides FIRST among the references, so each paint keeps it and changes only what the prompt asks. Click to go back to free painting.">against: ${esc(c.media)} ✕</button>`:''}
       ${refsOf(c).map(n=>`<button class="tiny refchip ${refOk(n)?'':'broken'}"
         onclick="dropRef(${c.id},'${esc(n)}')"
         title="${refOk(n)
@@ -4626,7 +4673,7 @@ function paintRow(c){
       <button id="gb${c.id}" class="pri" onclick="genImage(${c.id})" ${nb?'':'disabled'}
         title="${nb
           ?'paint this card with nanobanana — every press is a NEW variant, a few cents and ~15s each'
-          :'no Gemini API key — paste one from aistudio.google.com into gemini_key.txt in your library folder, no restart needed'}">${c.media?'Repaint':'Paint'}</button>
+          :'no Gemini API key — paste one from aistudio.google.com into gemini_key.txt in your library folder, no restart needed'}">${VARY.has(c.id)&&c.media?'Paint a Variant':c.media?'Repaint':'Paint'}</button>
     </div>
   </div>`;
 }
@@ -4730,7 +4777,7 @@ function togglePaint(id){
     // closing must not eat a half-typed prompt: removal skips the blur
     const inp=$('vp'+id);
     if(inp&&!c.locked&&inp.value!==(c.note||''))setCard(id,{note:inp.value});
-    row.remove(); PAINTS.delete(id); return;
+    row.remove(); PAINTS.delete(id); VARY.delete(id); return;
   }
   PAINTS.add(id);
   const act=document.querySelector('#c'+id+' .act');
@@ -4757,15 +4804,21 @@ async function genImage(id){
     return;
   }
   if(prompt!==(c.note||''))await api('/api/chunk',{name:DOC.name,id,note:prompt});
+  const vary=VARY.has(id)&&c.media?c.media:'';
   const b=$('gb'+id); if(b){ b.disabled=true; b.textContent='painting…'; }
-  $('s'+id).textContent='nanobanana is painting — about 15 seconds';
+  $('s'+id).textContent=vary?`nanobanana is painting a variant of “${vary}” — about 15 seconds`
+                            :'nanobanana is painting — about 15 seconds';
   const stem=(c.media||'').replace(/-new(-\d+)?$/,'')||(DOC.name+'-'+id);
   // name and id ride along so the style tiers above this card can dress the
   // paint — and so the card's own `nostyle` is honoured where it is known
-  const r=await api('/api/media/generate',{prompt,media:stem,ref:c.ref||'',
-    name:DOC.name,id});
+  // the paint files itself in the queue window the moment the request
+  // lands, so kick the poll now rather than when the answer comes back
+  const rq=api('/api/media/generate',{prompt,media:stem,ref:c.ref||'',
+    name:DOC.name,id,vary});
+  kickQueue();
+  const r=await rq;
   if(r.error){
-    if(b){ b.disabled=false; b.textContent=c.media?'Repaint':'Paint'; }
+    if(b){ b.disabled=false; b.textContent=vary?'Paint a Variant':c.media?'Repaint':'Paint'; }
     $('s'+id).innerHTML=`<span style="color:var(--red)">${esc(r.error)}</span>`;
     return;
   }
@@ -4776,7 +4829,7 @@ async function genImage(id){
   refresh();                       // the pool has a picture more than it did
   open_(DOC.name,true,id);
   if(id===CUR)stagePeek();         // a repaint of the selected card hangs NOW
-  $('status').textContent=`“${r.media}” painted — the variants menu holds the others`;
+  $('status').textContent=`“${r.media}” painted${vary?` against “${vary}”`:''} — the variants menu holds the others`;
 }
 async function genMenu(e,id){
   const c=DOC.chunks.find(x=>x.id===id); if(!c)return;
@@ -4785,6 +4838,8 @@ async function genMenu(e,id){
     run:()=>setCard(id,{media:n},true)}));
   items.push('-');
   items.push({label:'paint another variant',run:()=>genImage(id)});
+  if(c.media)
+    items.push({label:`paint a variant of “${c.media}”…`,run:()=>paintVariant(id)});
   if(c.media)
     items.push({label:`→ make “${c.media}” a reference…`,
       run:()=>promotePicker(e,c.media)});
@@ -4798,6 +4853,36 @@ async function dropVariant(id){
   const gen=(c.gen||[]).filter(n=>n!==c.media);
   await setCard(id,{gen,media:gen[gen.length-1]||''},true);
   $('status').textContent='dropped from the shortlist — the file itself stays in the media pool';
+}
+
+// ── paint a variant ── the board's anchored-repaint gesture (§7c), on the
+// card itself: the CURRENT picture rides as the FIRST reference — ahead of
+// the card's own refs and the style tiers — so a repaint keeps the picture
+// it starts from and changes what the prompt asks, instead of wandering.
+// Sticky like the board's target: each later paint varies whatever is
+// current THEN, until the chip is dismissed or the row put away.
+function paintVariant(id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c||!c.media)return;
+  VARY.add(id);
+  if(!redrawPaintRow(id))togglePaint(id);
+  const inp=$('vp'+id); if(inp)inp.focus();
+  $('status').textContent=`painting against “${c.media}” — write the prompt and press Paint`;
+}
+function dropVary(id){
+  VARY.delete(id);
+  redrawPaintRow(id);
+  $('status').textContent='free painting again — the prompt and the references alone';
+}
+// an open paint row, redrawn in place — without eating a half-typed prompt,
+// the same care togglePaint takes when closing one
+function redrawPaintRow(id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id), row=$('pr'+id);
+  if(!c||!row)return false;
+  const inp=$('vp'+id);
+  if(inp&&!c.locked&&inp.value!==(c.note||'')){ c.note=inp.value; setCard(id,{note:c.note}); }
+  row.outerHTML=paintRow(c);
+  const ta=$('vp'+id); if(ta)fitTa(ta);
+  return true;
 }
 
 // A title card: words on the wall with nobody speaking — fade in, hold,
@@ -5262,8 +5347,11 @@ async function syncCards(){
     if(rb&&c.type==='voiced'&&!rb.classList.contains('busy'))
       rb.disabled=!!c.mute||!c.haveperf;
     paintCardHead(c.id);          // engine and “custom” follow a profile change
-    const tk=$('tk'+c.id); if(tk)tk.textContent=takeName(c.seed||0);
-    const tkb=$('tkb'+c.id); if(tkb)tkb.disabled=!(c.seed||0);
+    const tk=$('tk'+c.id); if(tk)tk.textContent='⟳'+(c.seed?' Take '+c.seed:'');
+    // the history button grows with each render without waiting for a rebuild
+    const hb=$('hb'+c.id);
+    if(hb){ const hn=(c.hist||[]).length;
+      hb.hidden=!hn; hb.textContent=`${hn} render${hn===1?'':'s'} ▾`; }
     syncPrevBtn(c.id);
   }
   // #dl was the header's download link, retired when the publish tab took
@@ -5296,20 +5384,17 @@ function paintUnrendered(){
 // instantly rather than being re-rendered.
 const takeName=n=>n?'Take '+n:'Original';
 function takeUi(c){
+  // The stepper and its dropdown retired 2026-08-25, Caity's call: the
+  // render history (N renders ▾) lists every reading with its words, take
+  // and delivery aboard, plays any of them from the cache and brings one
+  // back whole — everything the menu here did, with more aboard. Only the
+  // verb history cannot do survives: the fresh roll. takeMenu and friends
+  // stay below, hidden rather than deleted, until the new menu proves out.
   const n=c.seed||0;
-  // Both engines store each take under its own name, so stepping back always
-  // plays the reading you already heard. Only chatterbox can *reproduce* one:
-  // it pins the sampler to a seed, and OmniVoice has none to pin.
   const ov=((c.effective||{}).engine||'chatterbox')==='omnivoice';
-  return `<span class="take"
-      title="re-roll this card — same words, a different reading, without touching the text${
-        ov?'.\nOmniVoice: each take is kept, but re-rendering one will not reproduce it — there is no seed.':''}">
-    <button id="tkb${c.id}" onclick="takeStep(${c.id},-1)" ${n?'':'disabled'}
-      title="back to the previous kept take — instant if you have heard it before">◂</button>
-    <button class="n" id="tk${c.id}" onclick="takeMenu(event,${c.id})"
-      title="every reading this card has — click one to hear it, hide the ones that are off">${takeName(n)}</button>
-    <button onclick="takeStep(${c.id},1)" title="roll again: the same words, read differently">⟳</button>
-  </span>`;
+  return `<button id="tk${c.id}" onclick="takeStep(${c.id},1)"
+    title="roll again — the same words, a different reading. Every roll you render waits in the renders menu beside this${
+      ov?'.\nOmniVoice: each roll is kept, but re-rendering one will not reproduce it — there is no seed.':''}">⟳${n?' Take '+n:''}</button>`;
 }
 // The take menu: what the blind ◂ ⟳ stepper never showed. Every rendered
 // reading with its length, the current one marked; click one to hear it,
@@ -5372,6 +5457,86 @@ async function takeHide(id,n,hide){
     if(hid.has(m)){ m=n+1; while(hid.has(m))m++; }
     await takeSet(id,m);
   }else await syncCards();
+}
+
+// ── render history ── the other axis from takes. A take re-rolls the same
+// reading; history spans every RESPELLING, engine switch and dial change
+// the card has been through — each render filed by the server with the
+// words as spelled for the model, the take, the profile and the composed
+// delivery that made it. The menu plays any of them straight from the
+// cache, and choosing one brings ALL of that back onto the card: same
+// state, same hash, so the old render plays again instead of being made
+// again. Pronunciation hunts stop being destructive: every "tay-dee"
+// variant she tried is one click away, with the delivery it wore.
+function histBtn(c){
+  const n=(c.hist||[]).length;
+  return `<button id="hb${c.id}" onclick="histMenu(event,${c.id})" ${n?'':'hidden'}
+    title="every render this card has made — words, take, engine and delivery. ▶ hears one; choosing one brings its words and delivery back onto the card.">${
+    n} render${n===1?'':'s'} ▾</button>`;
+}
+async function histMenu(e,id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id); if(!c)return;
+  await flush(id);
+  const r=await api('/api/history?name='+encodeURIComponent(DOC.name)+'&id='+id);
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  openCtx(e,[]); if(!CTX)return;
+  CTX.classList.add('histpick');
+  const byh={}; for(const en of r.hist||[])byh[en.h]=en;
+  const rows=(r.hist||[]).slice().reverse().map(en=>{
+    const cur=en.h===r.current, d=en.d||{};
+    const who=d.engine==='kokoro'?(d.kvoice||'kokoro'):(en.profile||'');
+    const words=(en.text||'').replace(/\s+/g,' ').trim();
+    return `<div class="hrow" data-h="${en.h}"
+      title="${aq(words||'a voiced performance')} — click to bring this render back onto the card">
+      <button class="tiny" ${en.ready?'':'disabled'}
+        onclick="event.stopPropagation();playHash('${en.h}')"
+        title="${en.ready?'hear it — straight from the cache'
+                :'its wav is not on this machine — choosing it will render again'}">▶</button>
+      <span class="hwhat">${cur?'● ':''}<b>${esc(d.engine||'chatterbox')}</b>${
+        who?` · ${esc(who)}`:''}${en.take?` · ${takeName(en.take)}`:''}${
+        en.ready&&en.secs!=null?` · ${en.secs.toFixed(1)}s`:' · not on this machine'}${
+        words?` <span class="mut">— ${esc(words.slice(0,52))}${words.length>52?'…':''}</span>`:''}</span>
+      <button class="tiny" onclick="event.stopPropagation();histDrop(${id},'${en.h}')"
+        title="forget this render — the wav itself stays on disk">✕</button>
+    </div>`;
+  });
+  CTX.innerHTML=`<div class="mut" style="font-size:10.5px;padding:2px 6px 4px">${
+    rows.length?'every render this card has made, newest first — the words, the take and the delivery ride along'
+               :'no renders remembered yet — press Render and they will be'}</div>`
+    +rows.join('');
+  // openCtx measured an empty shell — take the screen-edge clamp again
+  CTX.style.left=Math.max(6,Math.min(e.clientX,innerWidth-CTX.offsetWidth-8))+'px';
+  CTX.style.top=Math.max(6,Math.min(e.clientY,innerHeight-CTX.offsetHeight-8))+'px';
+  CTX.addEventListener('click',ev=>{
+    const row=ev.target.closest('.hrow'); if(!row)return;
+    closeCtx(); histRestore(id,byh[row.dataset.h]);
+  });
+}
+async function histRestore(id,en){
+  if(!en)return;
+  // everything the render wore goes back on the card: the words, the take,
+  // the profile, and the composed delivery pinned as per-card overrides —
+  // the server keeps only the keys a card may override (CARD_PARAMS), and
+  // voice rides on the profile, which is why the profile comes back too
+  const patch={name:DOC.name,id,seed:en.take||0,
+               profile:en.profile||'Default',params:{...(en.d||{})}};
+  if('text' in en)patch.text=en.text;
+  const r=await api('/api/chunk',patch);
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await open_(DOC.name,true,id);
+  const now=DOC.chunks.find(x=>x.id===id);
+  if(now&&now.ready){
+    $('s'+id).textContent='brought back — already rendered, playing it';
+    playFull(id);
+  }else $('s'+id).textContent=
+    'brought back — its wav is not on this machine, Render makes it again'+
+    ' (⌘Z undoes the whole restore)';
+}
+async function histDrop(id,h){
+  const r=await api('/api/history/drop',{name:DOC.name,id,h});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  await syncCards();
+  $('status').textContent='forgotten — the wav itself stays on disk';
 }
 
 // "runs on" — no rest before this card. Splitting a sentence so a phrase can
@@ -5661,11 +5826,13 @@ async function one(id,audition){
   $('s'+id).textContent='';
   // speak what is on screen, not what the server last heard about
   await flush(id);
-  const r=await api('/api/render',{name:DOC.name,id,force:true});
+  const c=DOC&&DOC.chunks.find(x=>x.id===id);
+  const r=await api('/api/render',{name:DOC.name,id,force:true,
+    label:((c&&c.text)||'').slice(0,80)});
   if(r.error){ fail(id,r.error); return; }
   JOBS[r.job]={id,kind:'render',play:!!audition};
   $('s'+id).textContent='queued — carry on, it renders in the background';
-  pollJobs(); }
+  pollJobs(); kickQueue(); }
 
 // Render failures used to be written into the card and then wiped a moment
 // later by the refresh that followed, which is no way to learn that torchaudio
@@ -5716,7 +5883,7 @@ async function prev(id){
                  syncPrevBtn(id); $('s'+id).textContent=r.error; return; }
     JOBS[r.job]={id,kind:'preview',play:true};
     $('s'+id).textContent='queued…';
-    pollJobs();
+    pollJobs(); kickQueue();
   }finally{ keep(); } }
 // One audio channel for the whole app: pressing play twice restarts the clip
 // instead of layering a second voice over the first.
@@ -6124,7 +6291,7 @@ async function bake(){
   // optimistically: a short bake — an error on card one, or nothing stale —
   // can finish before the first poll, and the ending must still be told
   WASBAKING=true;
-  refresh();
+  refresh(); kickQueue();
 }
 async function stopBake(){
   const b=$('stopb'); b.disabled=true; b.textContent='stopping…';
@@ -6698,6 +6865,9 @@ async function pollJobs(){
   let changed=false;
   const active=new Set();
   for(const j of st.jobs){
+    // paints file themselves in the jobs table for the queue tab, but the
+    // per-card render buttons are not theirs to dress
+    if(j.kind!=='render'&&j.kind!=='preview')continue;
     const mine=JOBS[j.id];
     if(j.status==='queued'||j.status==='running'){
       active.add(j.chunk);
@@ -6738,6 +6908,113 @@ async function pollJobs(){
   if(st.busy) POLL=setTimeout(pollJobs,1500);
 }
 pollJobs();
+
+// ── the print queue ── the Queue tab is a printer-queue window: every
+// render, preview and paint the studio is doing or about to do, in the
+// order it will do them, plus what just finished. Voice work runs through
+// the one worker (MPS law) so it pauses, cancels and re-renders; paints
+// run beside the queue in their own request threads, so they are listed
+// but not held — the window says so rather than pretending.
+function queueOpen(){ return document.body.dataset.panel==='on'
+                          && document.body.dataset.tab==='queue'; }
+function kickQueue(){ pollQueue(); }
+async function pollQueue(){
+  const me=++QSEQ;                // a newer poll supersedes this one
+  if(QPOLL){ clearTimeout(QPOLL); QPOLL=null; }
+  let st; try{ st=await api('/api/queue'); }catch(e){ st=null; }
+  if(me!==QSEQ)return;            // superseded mid-flight: it schedules, not us
+  if(!st||st.error)return;
+  QDATA=st;
+  const busy=st.busy+(st.bake&&st.bake.running?1:0);
+  $('tabQueue').textContent=busy?`Queue · ${busy}`:'Queue';
+  if(queueOpen())renderQueue();
+  // keep watching while anything is moving, or while the window is open —
+  // shut and idle, the poll rests until a kick
+  if(busy||queueOpen())QPOLL=setTimeout(pollQueue,1500);
+}
+function renderQueue(){
+  const st=QDATA; if(!st)return;
+  $('qpause').textContent=st.paused?'▶ Resume':'⏸ Pause';
+  $('qpause').classList.toggle('pri',st.paused);
+  $('qpause').title=st.paused
+    ?'let the queue run again'
+    :'hold the queue — the card in flight finishes, the rest wait. Paints are not held: they run beside the queue, not in it.';
+  const title=n=>{ const p=(STATE.projects||[]).find(x=>x.name===n);
+                   return p?p.title:n; };
+  const what=j=>{
+    const where=j.project
+      ?`${title(j.project)}${j.chunk!=null?` · card #${j.chunk}`:''}`
+      :'the cast board';
+    const lab=(j.label||j.text||'').replace(/\s+/g,' ').trim();
+    return `<b>${esc(j.kind)}</b> — ${esc(where)}${
+      lab?` — <span class="mut">${esc(lab.slice(0,60))}</span>`:''}`;
+  };
+  const row=(j,stat,btns)=>{
+    const jump=j.project&&DOC&&j.project===DOC.name&&j.chunk!=null;
+    // the panel is narrow and the row ellipsizes — the full words ride on
+    // hover, with the jump hint when the card is one click away
+    const lab=(j.label||j.text||'').replace(/\s+/g,' ').trim();
+    const tt=esc(lab)+(jump?(lab?' — ':'')+'click to visit the card':'');
+    return `<div class="qrow"${jump?` style="cursor:pointer" onclick="queueJump(${
+      j.chunk})"`:''}${tt?` title="${tt}"`:''}>
+      <span class="qstat">${stat}</span><span class="qwhat">${what(j)}</span>${btns||''}</div>`;
+  };
+  const jobs=st.jobs||[];
+  const running=jobs.filter(j=>j.status==='running');
+  const queued=jobs.filter(j=>j.status==='queued');
+  const done=jobs.filter(j=>j.status==='done'||j.status==='error'||j.status==='canceled')
+                 .slice(-15).reverse();
+  let html='';
+  if(st.paused)html+=`<div class="qrow" style="border:1px dashed var(--amber);border-radius:6px;border-bottom:1px dashed var(--amber)">
+    <span class="qstat">⏸ held</span><span class="qwhat">the queue is paused — press Resume to keep rendering</span></div>`;
+  if(st.bake&&st.bake.running)
+    html+=`<div class="qrow"><span class="qstat"><span class="warn">▶</span> baking</span>
+      <span class="qwhat"><b>render stale cards</b> — ${esc(title(st.bake.project))} · ${
+        st.bake.done} of ${st.bake.total}${st.bake.label
+        ?` — <span class="mut">${esc(st.bake.label)}</span>`:''}</span>
+      <button class="tiny" style="color:var(--red)"
+        onclick="event.stopPropagation();stopBake()"
+        title="let the card in flight finish, skip the rest">stop</button></div>`;
+  for(const j of running)html+=row(j,'<span class="warn">▶ now</span>');
+  queued.forEach((j,i)=>html+=row(j,`○ next ${i+1}`,
+    `<button class="tiny" onclick="event.stopPropagation();queueCancel('${j.id}')"
+      title="take it out of the line — nothing already rendered is touched">✕</button>`));
+  if(done.length){
+    html+=`<div class="mut" style="font-size:10.5px;margin:10px 0 2px;letter-spacing:.06em;text-transform:uppercase">finished</div>`;
+    for(const j of done)
+      html+=row(j,
+        j.status==='done'?`<span class="ok">✓</span> ${j.seconds!=null?j.seconds+'s':''}`
+        :j.status==='error'?'<span class="warn">✕ failed</span>':'⊘ taken out',
+        j.kind==='render'?`<button class="tiny" onclick="event.stopPropagation();queueRetry('${j.id}')"
+          title="render it again — it joins the back of the line">⟳</button>`:'')
+        +(j.status==='error'&&j.error?`<div class="mut" style="color:var(--red);font-size:11px;padding:2px 4px 6px 83px">${esc(j.error)}</div>`:'');
+  }
+  $('qclear').hidden=!done.length;
+  $('qlist').innerHTML=html
+    ||'nothing in line — renders, previews and paints queue up here';
+}
+async function queuePause(){
+  const r=await api('/api/queue/pause',{on:!(QDATA&&QDATA.paused)});
+  if(r.error)$('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`;
+  kickQueue();
+}
+async function queueCancel(id){
+  const r=await api('/api/queue/cancel',{job:id});
+  if(r.error)$('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`;
+  kickQueue(); pollJobs();       // the card's own button goes back to rest
+}
+async function queueRetry(id){
+  const r=await api('/api/queue/retry',{job:id});
+  if(r.error)$('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`;
+  else $('status').textContent='queued again — at the back of the line';
+  kickQueue(); pollJobs();
+}
+async function queueClear(){ await api('/api/queue/clear'); kickQueue(); }
+function queueJump(id){
+  const el=$('c'+id); if(!el)return;
+  el.scrollIntoView({behavior:'smooth',block:'center'}); setCur(id);
+}
+pollQueue();
 // the profile panel used to stay empty until a document was opened, which made
 // the voices look like they belonged to the document rather than the library.
 // Settings first, and WAITED for: the Edit buttons on cards exist only if an
