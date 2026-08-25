@@ -7269,6 +7269,45 @@ class H(BaseHTTPRequestHandler):
                 c[new] = nm
                 save_cast(c)
                 return self._send(200, {"ok": True, "slug": new})
+            if u.path == "/api/cast/to_pool":
+                # promotion's mirror: a plate or candidate COPIES into the
+                # media pool, because a reference and a card's picture are
+                # different citizenships — references condition paints from
+                # behind the fence, a visual card shows pool media. One way
+                # and never a move: the cast keeps its file, and the copy
+                # takes a pool name that never changes, pool law.
+                c = cast()
+                slug = str(d.get("slug") or "")
+                m = c.get(slug)
+                if m is None:
+                    return self._send(404, {"error": "no such cast member"})
+                plate = str(d.get("plate") or "")
+                fn = str(d.get("file") or "")
+                if plate:
+                    p = (m.get("plates") or {}).get(plate)
+                    if not p or not p.get("file"):
+                        return self._send(404, {"error": "no such plate"})
+                    fn = p["file"]
+                elif fn not in (m.get("candidates") or []):
+                    return self._send(404, {"error": "no such candidate"})
+                src = CAST / slug / fn
+                if not src.is_file():
+                    return self._send(404, {"error":
+                                            "its file is missing from disk"})
+                stem = re.sub(r"[^a-z0-9_-]+", "-",
+                              f"{slug}-{plate or fn.rsplit('.', 1)[0]}"
+                              .lower()).strip("-")[:40] or "cast"
+                MEDIA.mkdir(parents=True, exist_ok=True)
+                pool = {p.stem for p in MEDIA.iterdir() if p.is_file()}
+                name = _free_name(pool, stem, "new")
+                dest = MEDIA / f"{name}{src.suffix.lower()}"
+                shutil.copy2(src, dest)
+                os.chmod(dest, 0o644)
+                w = webp_still(dest)          # pool stills arrive pressed
+                if w:
+                    os.chmod(w, 0o644)
+                    dest.unlink()
+                return self._send(200, {"ok": True, "media": name})
             if u.path == "/api/cast/paint":
                 # slow and lockless, like /api/media/generate — cast_paint
                 # takes the lock itself for the one registry append at the end

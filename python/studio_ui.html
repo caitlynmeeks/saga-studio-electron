@@ -3265,9 +3265,11 @@ function renderBoard(force){
   </div>`;
   html+=`<div id="castdrop">drop pictures here to add plates — or click to choose</div>
     <div class="mut" style="font-size:11px;margin-bottom:10px">right-click a
-      plate for its slot name, look, view, the key ★ and paint-against —
-      drag to reorder. Removing one unlinks it into the candidates; a pool
-      picture dragged here is copied in as a plate, the pool copy stays.</div>
+      plate for its slot name, look, view, the key ★, paint-against and a
+      copy into the media pool (so a visual card can SHOW it, not just
+      match it) — drag to reorder. Removing one unlinks it into the
+      candidates; a pool picture dragged here is copied in as a plate,
+      the pool copy stays.</div>
     <input type="file" id="platefile" hidden multiple
       accept="image/*,.png,.jpg,.jpeg,.webp,.gif"></div>`;
   bd.innerHTML=html;
@@ -3394,6 +3396,12 @@ function plateMenu(e,slot){
       ];
     })():[]),
     {label:'Open in your Viewer', run:()=>castApi('/api/cast/open',{slug:CASTSEL,plate:slot},true)},
+    // references condition paints; a card's picture is pool media — this
+    // copies across the fence so a visual card can SHOW this picture
+    {label:'→ Copy into the Media Pool', run:async()=>{
+      const r=await castApi('/api/cast/to_pool',{slug:CASTSEL,plate:slot});
+      if(r)$('status').innerHTML=`<span class="ok">filed in the pool as “${esc(r.media)}”</span> — any visual card can show it now; the plate here stays`;
+    }},
     '-',
     {label:'Remove from its Slot', danger:true,
      run:()=>castApi('/api/cast/plate/remove',{slug:CASTSEL,plate:slot})},
@@ -3459,6 +3467,10 @@ function candMenu(e,f){
     }},
     {label:'Open in your Viewer',
      run:()=>castApi('/api/cast/open',{slug:CASTSEL,file:f},true)},
+    {label:'→ Copy into the Media Pool', run:async()=>{
+      const r=await castApi('/api/cast/to_pool',{slug:CASTSEL,file:f});
+      if(r)$('status').innerHTML=`<span class="ok">filed in the pool as “${esc(r.media)}”</span> — any visual card can show it now; the candidate here stays`;
+    }},
     '-',
     // the row forgets it; the file stays in the folder, as everywhere
     {label:'Drop from the Row', danger:true,
