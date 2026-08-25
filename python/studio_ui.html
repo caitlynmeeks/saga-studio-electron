@@ -3431,9 +3431,31 @@ async function uploadPlates(list){
 
 // ── candidates, painting and promotion ── step 3 of CAST.md §10: the
 // gestures that make the registry worth having filled in.
+// a slot suggestion that is FREE: base, then base-2, base-3… so accepting
+// with the suggestion always files a new slot and never asks to replace
+function freeSlot(m,base){
+  base=(base||'').toLowerCase().replace(/[^a-z0-9_-]+/g,'-')
+    .replace(/^-+|-+$/g,'').slice(0,40)||'plate';
+  const taken=new Set(Object.keys(m.plates||{}));
+  if(!taken.has(base))return base;
+  let i=2; while(taken.has(base+'-'+i))i++;
+  return base+'-'+i;
+}
+// a file stem from the prompt's own words — quotes and stopwords dropped,
+// three words at most — so a row of rolls reads like a contact sheet
+function promptStem(p){
+  const stop=new Set(['a','an','the','of','in','on','with','and','for','to','is','it','its','at','by','as']);
+  const w=(p||'').toLowerCase().replace(/["“”'‘’]/g,' ')
+    .replace(/[^a-z0-9\s-]/g,' ').split(/\s+/)
+    .filter(x=>x&&!stop.has(x)).slice(0,3).join('-');
+  return w.slice(0,32).replace(/^-+|-+$/g,'')||'candidate';
+}
 function candMenu(e,f){
   const m=(STATE.cast||{})[CASTSEL]; if(!m||!(m.candidates||[]).includes(f))return;
-  const sug=f.replace(/\.[a-z0-9]+$/,'').replace(/-new(-\d+)?$/,'');
+  // the suggested slot name never collides with a slot that exists: a lazy
+  // accept must FILE, not open a replace-my-art dialog nobody asked for —
+  // replacing stays available by TYPING a taken name, the deliberate gesture
+  const sug=freeSlot(m,f.replace(/\.[a-z0-9]+$/,'').replace(/-new(-\d+)?$/,''));
   // the words that painted this candidate, if the board remembered them
   // (m.hist, filed by cast_paint) — the takes gesture the cards taught
   const en=(m.hist||[]).find(x=>x&&x.f===f);
@@ -3509,7 +3531,12 @@ async function boardPaint(prompt,stem){
   $('status').textContent='painting a candidate — about 15 seconds';
   let r; try{
     const rq=api('/api/cast/paint',{slug,prompt,plate:PAINTTGT,
-      file:PAINTCAND,stem:stem||'candidate'});
+      file:PAINTCAND,
+      // the file is named by the words that painted it, not "candidate":
+      // a row of rolls then reads logo-reading-amalgamated, 1940s-style…
+      // and the accept suggestion inherits the meaning for free. Presets
+      // (turnaround, expressions…) keep their own names.
+      stem:(stem&&stem!=='candidate')?stem:promptStem(prompt)});
     kickQueue();                   // it shows in the queue window at once
     r=await rq;
   }catch(ex){ r={error:String(ex)}; }
