@@ -3767,6 +3767,37 @@ def _resample(w, wsr, sr):
     return soxr.resample(w, wsr, sr).astype(np.float32)
 
 
+def channel_gains(doc):
+    """Channel id -> linear gain, with mute folded to zero. The story's mixer
+    (doc["channels"]) made number: cards name a channel or belong to main, and
+    a name no channel answers to any more follows main too — the UI reassigns
+    on remove, and this is the net under it. An absent mixer is no mixer:
+    empty dict, and every card plays at one."""
+    out = {}
+    for ch in (doc.get("channels") or []):
+        cid = str(ch.get("id") or "")
+        if cid:
+            g = _num(ch.get("gain"), 100.0, 0.0, 200.0)
+            out[cid] = 0.0 if ch.get("mute") else g / 100.0
+    return out
+
+
+def channel_gain_of(c, gains):
+    if not gains:
+        return 1.0
+    return gains.get(c.get("channel") or "main", gains.get("main", 1.0))
+
+
+def master_gain(doc):
+    """The mixer's Master bus as a linear factor: the level of the book
+    itself, applied over the summed mix wherever it is heard — preview,
+    exports, the stage's stretches, a lone card's play button. The monitor
+    slider in the studio's top bar is a different animal: this machine's
+    loudness, never in any render."""
+    m = doc.get("master") or {}
+    return 0.0 if m.get("mute") else _num(m.get("gain"), 100.0, 0.0, 200.0) / 100.0
+
+
 def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
     """Mix every card onto one timeline; (audio, sample_rate, missing, marks) back.
 
@@ -3805,6 +3836,7 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
     this one function, so what you hear is what ships, by construction."""
     import numpy as np
     profs = profiles()          # once for the whole mix, not once per card
+    chg = channel_gains(doc)    # the mixer's faders, resolved once too
     cards = doc["chunks"]
     if frm is not None:
         i = next((k for k, c in enumerate(cards) if c["id"] == frm), None)
@@ -3936,12 +3968,24 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
             g = float(params_for(c, doc, profs).get("gain", 100))
             if g != 100:
                 w = w * (g / 100.0)
+        # the card's channel, last: the mixer sits after every per-card and
+        # per-profile level, the way a desk fader sits after the channel strip.
+        # A muted channel is a fader at zero, not a dropped card — the timeline
+        # keeps its shape and every mark stays where it was.
+        cg = channel_gain_of(c, chg)
+        if cg != 1.0:
+            w = w * cg
         pieces.append((int(start * sr), w))
     # a trailing silence card pads the end, so the total honours the cursor too
     total = max(int(cursor * sr), max(s + w.shape[-1] for s, w in pieces))
     full = np.zeros(total, dtype=np.float32)
     for s, w in pieces:
         full[s:s + w.shape[-1]] += w
+    # the Master bus, over the summed whole and before the clamp — so pulling
+    # it down can rescue a mix that was clipping, exactly as a desk's would
+    mf = master_gain(doc)
+    if mf != 1.0:
+        full *= mf
     np.clip(full, -1.0, 1.0, out=full)
     return full, sr, missing, marks
 
@@ -5159,8 +5203,11 @@ class H(BaseHTTPRequestHandler):
                     print(f"plugin failed on card {cid}: "
                           f"{type(ex).__name__}: {ex}", flush=True)
             # level too — the one card must sound like the book will. A gain
-            # is a multiply, so it happens on the way out with no cache.
-            g = float(pp.get("gain", 100))
+            # is a multiply, so it happens on the way out with no cache. The
+            # card's mixer channel and the Master bus fold in for the same
+            # reason: this button promises the book's own sound.
+            g = (float(pp.get("gain", 100))
+                 * channel_gain_of(c, channel_gains(doc)) * master_gain(doc))
             if g != 100.0:
                 import io
                 import soundfile as sf
@@ -6059,6 +6106,16 @@ class H(BaseHTTPRequestHandler):
                             c["profile"] = d["profile"]
                         if "mute" in d:
                             c["mute"] = bool(d["mute"])
+                        if "channel" in d:
+                            # which mixer fader this card answers to. Main is
+                            # the default and stays unwritten; never in any
+                            # hash, so sending a card elsewhere re-bakes nothing.
+                            ch = re.sub(r"[^a-z0-9_-]", "",
+                                        str(d["channel"] or ""))[:16]
+                            if ch and ch != "main":
+                                c["channel"] = ch
+                            else:
+                                c.pop("channel", None)
                         if "runon" in d:       # no rest before this card
                             c["runon"] = bool(d["runon"])
                         if "height" in d:          # editor height, persisted
@@ -6364,12 +6421,72 @@ class H(BaseHTTPRequestHandler):
                     else:
                         doc.pop("style", None)
                     changed = True
+                if "channels" in d:
+                    # the story's mixer: [{id, name, gain, mute}], main always
+                    # present and always first. Ids are the identity and names
+                    # are paint, so a rename rewrites no card. Gains land at
+                    # mix time only — a fader never turns a rendered card
+                    # amber. The default desk (main alone, at 100, unmuted)
+                    # leaves no mark on the doc at all.
+                    raw = d.get("channels")
+                    if not isinstance(raw, list):
+                        return self._send(400, {"error": "channels is a list "
+                                                "of {id, name, gain, mute}"})
+                    chans, seen = [], set()
+                    for ch in raw[:24]:
+                        if not isinstance(ch, dict):
+                            continue
+                        cid = re.sub(r"[^a-z0-9_-]", "",
+                                     str(ch.get("id") or ""))[:16]
+                        if not cid or cid in seen:
+                            continue
+                        seen.add(cid)
+                        name = re.sub(r"[\"'`\\<>&]", "",
+                                      str(ch.get("name") or "")).strip()[:40]
+                        chans.append({"id": cid, "name": name or cid,
+                                      "gain": _num(ch.get("gain"),
+                                                   100.0, 0.0, 200.0),
+                                      "mute": bool(ch.get("mute"))})
+                    if "main" not in seen:
+                        chans.insert(0, {"id": "main", "name": "Channel 1",
+                                         "gain": 100.0, "mute": False})
+                    else:
+                        chans.sort(key=lambda ch: ch["id"] != "main")
+                    # a card pointing at a channel that left returns to main —
+                    # remove is atomic here, not a chore the UI might forget
+                    live = {ch["id"] for ch in chans}
+                    for c in doc["chunks"]:
+                        if c.get("channel") and c["channel"] not in live:
+                            c.pop("channel", None)
+                    if (len(chans) == 1 and chans[0]["gain"] == 100.0
+                            and not chans[0]["mute"]):
+                        doc.pop("channels", None)
+                    else:
+                        doc["channels"] = chans
+                    changed = True
+                if "master" in d:
+                    # the Master bus: {gain, mute}, over the whole mix at mix
+                    # time. Unity and unmuted is the desk at rest, and leaves
+                    # no mark on the doc.
+                    m = d.get("master") or {}
+                    if not isinstance(m, dict):
+                        return self._send(400, {"error": "master is "
+                                                "{gain, mute}"})
+                    mg = _num(m.get("gain"), 100.0, 0.0, 200.0)
+                    mm = bool(m.get("mute"))
+                    if mg == 100.0 and not mm:
+                        doc.pop("master", None)
+                    else:
+                        doc["master"] = {"gain": mg, "mute": mm}
+                    changed = True
                 if changed:
                     save(doc)
                 return self._send(200, {"ok": True,
                                         "typewriter": bool(doc.get("typewriter")),
                                         "typesfx": bool(doc.get("typesfx")),
-                                        "style": doc.get("style")})
+                                        "style": doc.get("style"),
+                                        "channels": doc.get("channels"),
+                                        "master": doc.get("master")})
 
             if u.path == "/api/group":
                 doc = load(d["name"])

@@ -523,6 +523,11 @@ button.dirty{color:var(--amber);border-color:var(--amber)}
 /* the profile editor */
 .pedit{border:1px solid var(--line);border-radius:7px;padding:10px;margin-top:8px}
 .phead{display:flex;align-items:baseline;gap:7px;font-size:12.5px;margin-bottom:2px}
+.phead b[onclick]{cursor:text}
+.phead b[onclick]:hover{text-decoration:underline dotted var(--dim);text-underline-offset:3px}
+.phead .ptedit{flex:1;min-width:0;font-size:12.5px;font-weight:700;
+  font-family:inherit;background:#0f1412;color:var(--bright);
+  border:1px solid var(--line);border-radius:4px;padding:1px 5px}
 .phead .mut{font-size:11px;margin-left:auto}
 /* Section labels rather than a wall of controls: which voice it speaks with and
    how it reads are two different questions, and the second one does not apply
@@ -531,6 +536,22 @@ button.dirty{color:var(--amber);border-color:var(--amber)}
 margin:14px 0 6px;font-weight:600;border-top:1px solid var(--line);padding-top:10px;
 display:flex;align-items:center}
 .phead+.psec{border-top:0;padding-top:0;margin-top:9px}
+.mixrow{display:flex;align-items:center;gap:7px;margin-bottom:6px;font-size:12px}
+.mixrow input[type=range]{flex:1;min-width:0}
+.mixname{flex:0 0 30%;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;color:var(--bright)}
+.mixname[onclick]{cursor:text}
+.mixname[onclick]:hover{text-decoration:underline dotted var(--dim);text-underline-offset:3px}
+.mixrow .pv{width:38px;text-align:right}
+.mixrow button.on{color:var(--amber);border-color:var(--amber)}
+/* the Master sits above the channels the way it sits above them on a desk */
+.mixmaster{border-bottom:1px solid var(--line);padding-bottom:7px;margin-bottom:7px}
+/* a touched fader waits for the tape: a gentle pulse until the next play
+   bakes it in, then stillness — the row itself says which settings are
+   heard and which are still a promise */
+.mixrow.pend input[type=range],.mixrow.pend .pv{animation:mixpend 1.6s ease-in-out infinite}
+.mixrow.pend .pv{color:var(--amber)}
+@keyframes mixpend{0%,100%{opacity:1}50%{opacity:.4}}
 /* the prose that used to sit under every control lives behind these now */
 .qm{display:inline-block;margin-left:6px;width:12px;height:12px;line-height:12px;
 text-align:center;border:1px solid var(--line);border-radius:50%;font-size:9px;
@@ -601,6 +622,13 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
     title="find this stack in the sidebar">no project</span>
   <button class="tiny" onclick="toggleStoryPanel()" title="stack settings — title, typewriter, typing sound, picture style">⚙</button>
   <span style="flex:1"></span>
+  <button class="tiny" onclick="stopAllAudio()"
+    title="silence, now — stops every player here and pauses the stage">■ Stop All Audio</button>
+  <button class="tiny" id="muteb" onclick="toggleMute()"
+    title="mute everything the studio plays"></button>
+  <input type="range" id="volslider" min="0" max="1" step="0.01"
+    oninput="setVol(this.value)" style="width:90px"
+    title="monitor volume — how loud THIS machine plays, stage included, live. The book's own level is the Mixer's Master, in the Inspector">
   <span class="pill warn" id="busy"></span>
   <span class="pill" id="model">model: cold</span>
   <button class="pri" id="bakeb" onclick="bake()">Render Stale Cards</button>
@@ -903,6 +931,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
    <div id="nosel" class="mut" style="font-size:12px">
      Pick a voice profile, a clip or a picture on the left to see it here.
    </div>
+   <div id="mixer"></div>
  </div>
  <div id="chat" class="rpane">
   <h2>Brenda</h2>
@@ -1322,6 +1351,7 @@ async function refresh(){
   $('model').textContent='model: '+STATE.model;
   paintDiscuss();
   renderProfileList();       // counts move as cards do; the editor is left alone
+  renderMixer();             // its own guard keeps a held fader out of reach
   if(!ENG||document.body.dataset.side==='voices')loadEngines();
   if(document.body.dataset.side==='clips'){ renderClips(); renderMedia(); }
   if(document.body.dataset.side==='publish')renderPublish();
@@ -1532,14 +1562,171 @@ function renderProfiles(){
   renderProfileList();
   $('profedit').innerHTML = EDITING ? profEditor(EDITING) : '';
   // the inspector has two possible occupants — a profile being edited, or a
-  // media asset being looked at — and the placeholder yields to either
+  // media asset being looked at — and the placeholder yields to either.
+  // The mixer keeps the floor below them both, whoever is on the stand.
   const ns=$('nosel'); if(ns)ns.hidden=!!EDITING||!!INSPECT;
+  renderMixer();
   if(EDITING){
     bindVoiceDrop(); paintProfDirty(); paintImpact();
     const fp=((DRAFT||{}).fx||{}).plugin;
     if(fp&&!PLUGPARAMS[fp])loadPlugParams(fp).then(()=>{ if(EDITING)renderProfiles(); });
     const p=$('inspect'); if(p)p.scrollTop=0;   // a new profile starts at its top
   }
+}
+
+// ── the mixer ─────────────────────────────────────────────
+// The story's channels, as faders in the inspector. Gains land at MIX time —
+// the book preview, the exports, the stage's stretches — never at render
+// time, so a fader never turns a card amber. Every audio card belongs to
+// Main until it is sent elsewhere (right-click a card → Channel), and the
+// desk itself lives in the doc, so it travels inside every .sagaproj.
+// Channels answer to ids; the name is just what the fader wears, which is
+// why renaming one rewrites nothing.
+function chList(){
+  const ch=(DOC&&DOC.channels)||[];
+  return ch.length?ch:[{id:'main',name:'Channel 1',gain:100,mute:false}];
+}
+function chName(id){ const c=chList().find(x=>x.id===id); return c?c.name:''; }
+const chPill=c=>c.channel&&c.channel!=='main'&&chName(c.channel)
+  ?`<span class="pill" title="plays on this mixer channel">${esc(chName(c.channel))}</span>`:'';
+// The channel, worn on the card once the desk holds more than one channel —
+// a dropdown, so it is both the switch and the label: a card sitting on the
+// wrong channel is caught by eye, scrolling past
+const chSelect=c=>chList().length>1?`<select style="font-size:11px;padding:1px 4px"
+    onchange="setCard(${c.id},{channel:this.value},true)"
+    title="the mixer channel this card plays on">${chList().map(ch=>
+    `<option value="${ch.id}" ${(c.channel||'main')===ch.id?'selected':''}>${esc(ch.name)}</option>`).join('')}
+  </select>`:'';
+let MIXFOLD=false;
+try{ MIXFOLD=localStorage.getItem('saga.mixfold')==='1'; }catch(e){}
+// A moved fader is a promise, not yet an effect: the mix bakes at serve
+// time, so the new level is heard from the NEXT play. Until one starts —
+// a card's ▶, a book preview, a stage ride — the touched rows pulse
+// gently: the desk's way of saying "noted, waiting for the tape".
+let MIXPEND={name:'',keys:new Set()};
+function mixPend(key){
+  if(!DOC)return;
+  if(MIXPEND.name!==DOC.name)MIXPEND={name:DOC.name,keys:new Set()};
+  MIXPEND.keys.add(key);
+}
+function mixApplied(){
+  if(!MIXPEND.keys.size)return;
+  MIXPEND.keys.clear();
+  renderMixer();
+}
+function foldMixer(){
+  MIXFOLD=!MIXFOLD;
+  try{ localStorage.setItem('saga.mixfold',MIXFOLD?'1':'0'); }catch(e){}
+  renderMixer();
+}
+function renderMixer(force){
+  const host=$('mixer'); if(!host)return;
+  if(!DOC){ host.innerHTML=''; return; }
+  // a fader mid-drag — or a name mid-type — must never be rebuilt under the
+  // hand. `force` is for the moment the hand lets go: a save repaints even
+  // though the slider still holds focus, or the pulse would wait on a click
+  // that never needed to happen.
+  const ae=document.activeElement;
+  if(!force&&host.contains(ae)&&(ae.type==='range'||ae.className==='ptedit'))return;
+  const ch=chList(), used={};
+  DOC.chunks.forEach(c=>{ const k=c.channel||'main'; used[k]=(used[k]||0)+1; });
+  const M={gain:100,mute:false,...(DOC.master||{})};
+  const pend=k=>MIXPEND.name===DOC.name&&MIXPEND.keys.has(k)?' pend':'';
+  host.innerHTML=`<div class="pedit">
+    <div class="phead" style="cursor:pointer" onclick="foldMixer()">
+      <b>${MIXFOLD?'▸':'▾'} Mixer</b>${qm('the sound of the book itself. Every audio '
+        +'card plays on Channel 1 unless its right-click sends it elsewhere — one '
+        +'per character, one for music, one for sfx, as you like. Faders and the '
+        +'Master land in the book, the exports and the stage alike, at mix time: '
+        +'nothing re-renders, and you hear them from the next play. The slider in '
+        +'the top bar is different — monitor volume, this machine only, live. '
+        +'Click a channel name to rename it.')}
+      <span class="mut">${ch.length===1?'':ch.length+' channels'}</span>
+    </div>`+(MIXFOLD?'':`<div class="mixrow mixmaster${pend('master')}">
+      <span class="mixname"><b>Master</b></span>
+      <input type="range" min="0" max="200" step="1" value="${M.gain}"
+        oninput="$('mvM').textContent=Math.round(this.value)+'%'"
+        onchange="masterSet({gain:+this.value})"
+        title="the book's own level, over the whole mix — pull it down and even a clipping mix comes back">
+      <span class="pv" id="mvM">${Math.round(M.gain)}%</span>
+      <button class="tiny ${M.mute?'on':''}" onclick="masterSet({mute:${!M.mute}})"
+        title="mute the whole book — exports too, so mind the desk on your way out">M</button>
+    </div>`+ch.map((c,i)=>`<div class="mixrow${pend(c.id)}">
+      <span class="mixname" ${c.id==='main'?'':`onclick="renameChannel(${i})"
+        title="click to rename"`}>${esc(c.name)}</span>
+      <input type="range" min="0" max="200" step="1" value="${c.gain}"
+        oninput="$('mv${i}').textContent=Math.round(this.value)+'%'"
+        onchange="chSet(${i},{gain:+this.value})"
+        title="this channel's level in the mix — 100% is as rendered">
+      <span class="pv" id="mv${i}">${Math.round(c.gain)}%</span>
+      <button class="tiny ${c.mute?'on':''}" onclick="chSet(${i},{mute:${!c.mute}})"
+        title="mute this channel — in the book and on the stage too">M</button>
+      ${c.id==='main'?'':`<button class="tiny" onclick="removeChannel(${i})"
+        title="remove this channel — its ${used[c.id]||0} card${(used[c.id]||0)===1?'':'s'} return to Channel 1">✕</button>`}
+    </div>`).join('')
+    +`<button class="tiny" onclick="addChannel()" style="margin-top:4px">+ Add Channel</button>`)
+    +`</div>`;
+}
+function masterSet(patch){
+  mixPend('master');
+  const m={gain:100,mute:false,...(DOC.master||{}),...patch};
+  api('/api/story',{name:DOC.name,master:m}).then(r=>{
+    if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+    DOC.master=r.master||null;
+    renderMixer(true);
+    if(STAGE)STAGE.postMessage({type:'remix',to:'embed'});
+  });
+}
+async function saveChannels(ch){
+  const r=await api('/api/story',{name:DOC.name,channels:ch});
+  if(r.error){ $('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`; return null; }
+  DOC.channels=r.channels||[];
+  renderMixer(true);
+  // a ride in progress picks the change up at its next card, not its next stop
+  if(STAGE)STAGE.postMessage({type:'remix',to:'embed'});
+  return r;
+}
+function chSet(i,patch){
+  const ch=chList().map(x=>({...x}));
+  Object.assign(ch[i],patch);
+  mixPend(ch[i].id);
+  saveChannels(ch);
+}
+function addChannel(){
+  const ch=chList().map(x=>({...x}));
+  let n=2; while(ch.some(c=>c.id==='ch'+n))n++;
+  ch.push({id:'ch'+n,name:'Channel '+n,gain:100,mute:false});
+  MIXFOLD=false;
+  try{ localStorage.setItem('saga.mixfold','0'); }catch(e){}
+  saveChannels(ch);
+}
+function renameChannel(i){
+  const span=$('mixer').querySelectorAll('.mixname')[i]; if(!span)return;
+  const ch=chList(), old=ch[i].name;
+  const inp=document.createElement('input');
+  inp.className='ptedit'; inp.value=old; inp.style.flex='0 0 30%'; inp.style.minWidth='0';
+  span.replaceWith(inp); inp.focus(); inp.select();
+  let done=false;
+  const fin=async ok=>{
+    if(done)return; done=true;
+    const to=inp.value.trim();
+    if(ok&&to&&to!==old){
+      const c2=ch.map(x=>({...x})); c2[i].name=to;
+      if(await saveChannels(c2)&&DOC)await open_(DOC.name,true);  // the pills follow
+    } else renderMixer();
+  };
+  inp.onkeydown=e=>{ e.stopPropagation();
+    if(e.key==='Enter')fin(true); else if(e.key==='Escape')fin(false); };
+  inp.onblur=()=>fin(true);
+}
+async function removeChannel(i){
+  const ch=chList(), gone=ch[i];
+  if(!gone||gone.id==='main')return;
+  const n=DOC.chunks.filter(c=>(c.channel||'main')===gone.id).length;
+  if(!await saveChannels(ch.filter((_,k)=>k!==i)))return;
+  await open_(DOC.name,true);          // the server sent its cards back to Main
+  $('status').innerHTML=`<span class="ok">removed “${esc(gone.name)}”</span>${
+    n?` — its ${n} card${n===1?'':'s'} return${n===1?'s':''} to Channel 1`:''}`;
 }
 
 function profEditor(n){
@@ -1561,7 +1748,8 @@ function profEditor(n){
     </div>`;
   return `<div class="pedit">
     <div class="phead">
-      <b>${esc(n)}</b>
+      <b id="ptitle" ${n==='Default'?''
+        :`onclick="editProfName()" title="click to rename this voice"`}>${esc(n)}</b>
       <span class="mut">${cnt?cnt+' card'+(cnt===1?'':'s'):'not used yet'}</span>
     </div>
 
@@ -1668,7 +1856,14 @@ function profEditor(n){
         </select>
         <span class="mut">→ ${esc(n)}</span>
         <button onclick="moveCards()">Move</button>
-      </div>`:''}
+      </div>
+      ${chList().length>1?`<div class="mvrow">
+        <span class="mut">send every “${esc(n)}” card to</span>
+        <select id="chto">${chList().map(ch=>
+          `<option value="${ch.id}">${esc(ch.name)}</option>`).join('')}</select>
+        <button onclick="profToChannel()"
+          title="every card spoken by this profile in the open episode lands on that mixer channel">Send</button>
+      </div>`:''}`:''}
 
     <div id="pimpact" class="pimpact"></div>
 
@@ -1807,7 +2002,7 @@ async function renameVoice(old,to,restore){
 function playVoiceAt(i){
   const v=((DRAFT||{}).voices||[])[i]; if(!v)return;
   if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
-  AUDIO=new Audio('/api/voice?f='+encodeURIComponent(v)); AUDIO.play();
+  AUDIO=applyVol(new Audio('/api/voice?f='+encodeURIComponent(v))); AUDIO.play();
 }
 
 function profDirty(){
@@ -1902,6 +2097,24 @@ async function revertProf(n){
   renderProfiles();
   if(DOC)open_(DOC.name,true);
   $('status').innerHTML=`<span class="ok">restored the settings from ${esc(r.at||'earlier')}</span>`;
+}
+// The long-story gesture: every card spoken by this profile, onto one
+// channel, in one press — the bulk mirror of the card header's dropdown.
+// Locked cards are skipped the way muteGroup skips them: channel is content.
+async function profToChannel(){
+  const to=$('chto').value, chn=chName(to)||to;
+  const mine=DOC.chunks.filter(c=>['speech','voiced'].includes(c.type||'speech')
+    &&(c.profile||'Default')===EDITING&&(c.channel||'main')!==to);
+  const skip=mine.filter(c=>c.locked).length;
+  let n=0;
+  for(const c of mine)if(!c.locked){
+    const r=await api('/api/chunk',{name:DOC.name,id:c.id,channel:to});
+    if(!r.error)n++;
+  }
+  await open_(DOC.name,true);
+  renderProfiles();      // the row itself repaints, ready for the next send
+  $('status').innerHTML=`<span class="ok">sent ${n} “${esc(EDITING)}” card${
+    n===1?'':'s'} to “${esc(chn)}”</span>`+(skip?` — ${skip} locked stayed`:'');
 }
 async function moveCards(){
   if(!DOC||!EDITING)return;
@@ -2364,7 +2577,7 @@ async function fxAudition(){
     }
     const url=URL.createObjectURL(await r.blob());
     if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
-    AUDIO=new Audio(url); AUDIO.play();
+    AUDIO=applyVol(new Audio(url)); AUDIO.play();
     $('status').textContent=`“${v}” as this profile sounds right now — save to keep it`;
   }finally{ if(b){ b.disabled=false; b.textContent='▶ Hear It'; } }
 }
@@ -2753,7 +2966,7 @@ function playClipAt(i){
     return;
   }
   if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
-  const a=AUDIO=new Audio('/api/clip?f='+encodeURIComponent(c.name));
+  const a=AUDIO=applyVol(new Audio('/api/clip?f='+encodeURIComponent(c.name)));
   PLAYCLIP=c.name;
   // Guarded on both: by the time this fires the player may have been handed
   // to something else, and that something else owns the button now.
@@ -3172,7 +3385,7 @@ function renderAsset(){
   const eapp=take?null:appFor(INSPECT.kind==='clip'?'clip':film?'video':'image');
   const src=`/api/media?f=${encodeURIComponent(a.name)}&v=${a.added}`;
   const body=INSPECT.kind==='media'
-    ? (film?`<video controls src="${src}" onplay="if(AUDIO)AUDIO.pause()"></video>`
+    ? (film?`<video controls src="${src}" onplay="if(AUDIO)AUDIO.pause();applyVol(this)"></video>`
       // a gif may animate, and a bake would keep one frame — look, don't touch
       :a.ext==='gif'?`<img src="${src}" onload="const d=$('adim');
              if(d)d.textContent=' · '+this.naturalWidth+' × '+this.naturalHeight+' px'">`
@@ -3276,7 +3489,7 @@ function trimUi(){
 // the project's second Web Audio: the recorder met the microphone, this one
 // only decodes. One context, reused — decoding needs no exclusive device.
 // The decoded buffer stays: playback starts from it, not from a seek.
-let ACTX=null, WAVEBUF=null;
+let ACTX=null, WAVEBUF=null, AGAIN=null;   // AGAIN: the master fader's hand here
 async function drawWave(name){
   const cv=$('awave'); if(!cv)return;
   const dpr=window.devicePixelRatio||1;
@@ -3329,7 +3542,9 @@ function playAssetSel(){
     ACTX.resume().catch(()=>{});
     const src=ACTX.createBufferSource();
     src.buffer=WAVEBUF.buf;
-    src.connect(ACTX.destination);
+    if(!AGAIN){ AGAIN=ACTX.createGain(); AGAIN.connect(ACTX.destination); }
+    AGAIN.gain.value=MUTED?0:VOL;
+    src.connect(AGAIN);
     const me=ASRC=src;
     src.onended=()=>{ if(ASRC===me){ ASRC=null;
       const bt=$('aplay'); if(bt)bt.textContent='▶ Play'; } };
@@ -3338,7 +3553,7 @@ function playAssetSel(){
     return;
   }
   // no decoded buffer (the waveform failed) — the element, best effort
-  const au=AUDIO=new Audio(assetAudioUrl(name));
+  const au=AUDIO=applyVol(new Audio(assetAudioUrl(name)));
   const done=()=>{ const bt=$('aplay'); if(bt)bt.textContent='▶ Play'; };
   au.onpause=done; au.onended=done;
   au.onplay=()=>{ const bt=$('aplay'); if(bt)bt.textContent='■ Stop'; };
@@ -4536,6 +4751,16 @@ function cardMenu(e,id){
     {label:`Group the ${SEL.size} Selected`, run:()=>makeGroup(freeGroupName())},'-');
   if(c.group)items.push({label:'Ungroup', run:()=>popFromGroup(id)});
   items.push('-',{label:'Copy', run:()=>copyCard(id)});
+  // the card's mixer channel — offered once the desk holds more than Main,
+  // and only for cards that make sound
+  const kind=c.type||'speech';
+  if(['speech','audio','voiced'].includes(kind)&&chList().length>1){
+    const cur=c.channel||'main';
+    items.push({label:`Channel: ${chName(cur)||'Channel 1'}…`, run:()=>{
+      openCtx(e,chList().map(ch=>({label:(ch.id===cur?'● ':'  ')+ch.name,
+        run:()=>setCard(id,{channel:ch.id},true)})));
+    }});
+  }
   // Trimming an import: a script arrives with front-matter and notes around
   // the part being worked on, and picking them off one by one is a chore.
   const at=DOC.chunks.findIndex(x=>x.id===id);
@@ -4626,6 +4851,34 @@ function profMenu(e,i){
     {label:isDef?'Default cannot be deleted':'Delete…',
      danger:!isDef, disabled:isDef, run:()=>delProfile(n)},
   ]);
+}
+// The title is the rename: click the name at the top of the inspector, type,
+// Enter. The same door the right-click Rename… opens, moved to where the eye
+// already is. Enter or clicking away commits, Escape puts it back; a name
+// unchanged is a rename not asked for. Default never gets the click — the
+// server would refuse it, so the title must not offer it. Safe from the
+// background repaints on purpose: refresh() repaints only the profile LIST
+// and leaves the editor pane alone (see the note in refresh), so the input
+// cannot be wiped mid-thought by a bake tick.
+function editProfName(){
+  const b=$('ptitle'); if(!b||!EDITING||EDITING==='Default')return;
+  const old=EDITING, inp=document.createElement('input');
+  inp.className='ptedit'; inp.value=old;
+  b.replaceWith(inp); inp.focus(); inp.select();
+  let done=false;
+  const finish=async commit=>{
+    if(done)return; done=true;
+    const to=inp.value.trim();
+    if(commit&&to&&to!==old)await renameProfile(old,to);
+    renderProfiles();     // success repainted already; after an error or an
+                          // escape this is what puts the title back
+  };
+  inp.onkeydown=e=>{
+    e.stopPropagation();  // the editor's own keys (undo, space-to-play) stay out
+    if(e.key==='Enter')finish(true);
+    else if(e.key==='Escape')finish(false);
+  };
+  inp.onblur=()=>finish(true);
 }
 async function renameProfile(old,to){
   const r=await api('/api/profile/rename',{profile:old,to});
@@ -4928,7 +5181,7 @@ function minCard(c){
       <span>#${c.id}</span>
       ${vpill(c)}
       <span class="cardname" title="right-click to name this card">${esc(cardName(c))}</span>
-      ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${c.mute?'<span class="pill warn">muted</span>':''}${chPill(c)}
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
@@ -5139,7 +5392,7 @@ function speechCard(c){return `
           `<option ${ (c.profile||'Default')===p?'selected':''}>${p}</option>`).join('')}
       </select>
       <span class="engpill">${enginePill(c)}</span>
-      ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${c.mute?'<span class="pill warn">muted</span>':''}${chSelect(c)}
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
@@ -5183,7 +5436,7 @@ function audioCard(c){
       <span>#${c.id}</span>
       <span class="pill">♪ audio</span>
       <span class="mut">${c.clip?esc(c.clip)+(len?' · '+fmtSecs(len):''):'no clip chosen'}</span>
-      ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${c.mute?'<span class="pill warn">muted</span>':''}${chSelect(c)}
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
@@ -5263,7 +5516,7 @@ function voicedCard(c){
         ${profNames().map(p=>
           `<option ${(c.profile||'Default')===p?'selected':''}>${p}</option>`).join('')}
       </select>
-      ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${c.mute?'<span class="pill warn">muted</span>':''}${chSelect(c)}
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
@@ -5310,7 +5563,7 @@ function silenceCard(c){return `
       <input type="number" step="0.1" min="0" value="${c.secs==null?1:c.secs}" style="width:62px"
         onchange="setCard(${c.id},{secs:parseFloat(this.value)||0})">
       <span class="mut" style="font-size:11px">seconds of rest</span>
-      ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${c.mute?'<span class="pill warn">muted</span>':''}${chPill(c)}
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
@@ -5349,7 +5602,7 @@ function visualCard(c){
       <span>#${c.id}</span>
       <span class="pill">⛶ ${kind==='video'?'film':'visual'}</span>
       <span class="mut">${c.media?esc(c.media):''}</span>
-      ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${c.mute?'<span class="pill warn">muted</span>':''}${chPill(c)}
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
@@ -5726,7 +5979,7 @@ function titleCard(c){
       <span>#${c.id}</span>
       <span class="pill">𝐓 title</span>
       <span class="mut">${esc((c.text||'').replace(/\s+/g,' ').trim().slice(0,40))||'no words yet'}</span>
-      ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${c.mute?'<span class="pill warn">muted</span>':''}${chPill(c)}
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${runonBtn(c)}
@@ -5782,7 +6035,7 @@ function choiceCard(c){
         wait <input type="number" min="0" max="600" step="1" value="${+c.wait||0}"
           style="width:48px;font-size:11px;padding:1px 4px" ${c.auto?'disabled':''}
           onchange="setWait(${c.id},this.value)"> s</label>
-      ${c.mute?'<span class="pill warn">muted</span>':''}
+      ${c.mute?'<span class="pill warn">muted</span>':''}${chPill(c)}
       ${tagsUi(c)}
       <span style="flex:1"></span>
       ${lockBtn(c)}${copyBtn(c.id)}${dupBtn(c.id)}${muteBtn(c)}${delBtn(c.id)}
@@ -6712,20 +6965,79 @@ async function prev(id){
   }finally{ keep(); } }
 // One audio channel for the whole app: pressing play twice restarts the clip
 // instead of layering a second voice over the first.
-let AUDIO=null;
+let AUDIO=null, PF=null;   // PF: {id,el} — the card whose ▶ Full holds the channel
+// ── the master fader ──────────────────────────────────────
+// One volume over everything the editor plays, and a mute beside it in the
+// header. "Everything" is every player HERE: the stage is its own room with
+// its own doors, and only the panic button knocks, asking it to pause. The
+// inspector's waveform playback is a decoded buffer on an AudioContext, not
+// an element, so it rides a gain node that follows the same knob.
+let VOL=1, MUTED=false;
+try{ const v=parseFloat(localStorage.getItem('saga.vol')); if(v>=0&&v<=1)VOL=v; }catch(e){}
+try{ MUTED=localStorage.getItem('saga.mute')==='1'; }catch(e){}
+function applyVol(a){ if(a){ a.volume=VOL; a.muted=MUTED; } return a; }
+function volAll(){
+  applyVol(AUDIO);
+  if(AGAIN)AGAIN.gain.value=MUTED?0:VOL;
+  document.querySelectorAll('video').forEach(applyVol);
+  // the stage hears the same knob, live: monitor volume is ONE volume,
+  // whichever window the sound is coming from
+  if(STAGE)STAGE.postMessage({type:'vol',to:'embed',v:Math.round(VOL*100),mute:MUTED});
+  paintVol();
+}
+function setVol(v){
+  v=Number(v); VOL=(v>=0&&v<=1)?v:1;
+  try{ localStorage.setItem('saga.vol',String(VOL)); }catch(e){}
+  volAll();
+}
+function toggleMute(){
+  MUTED=!MUTED;
+  try{ localStorage.setItem('saga.mute',MUTED?'1':'0'); }catch(e){}
+  volAll();
+}
+function paintVol(){
+  const m=$('muteb'); if(m)m.textContent=MUTED?'🔇':'🔊';
+  const s=$('volslider'); if(s)s.value=VOL;
+}
+// Silence, now: the one channel, the inspector's buffer source, any video —
+// and a pause asked of the stage, which resumes where it stood. Recording is
+// deliberately spared: a panic about SOUND must never cost a take.
+function stopAllAudio(){
+  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
+  PF=null;
+  stopAssetSrc();
+  document.querySelectorAll('video').forEach(v=>v.pause());
+  if(STAGE)STAGE.postMessage({type:'pause',to:'embed'});
+  $('status').textContent='all quiet';
+}
 function playHash(h){
   if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
-  AUDIO=new Audio('/api/audio?h='+h+'&t='+Date.now());
+  AUDIO=applyVol(new Audio('/api/audio?h='+h+'&t='+Date.now()));
   AUDIO.play();
 }
 function playFull(id){
   const c=DOC.chunks.find(x=>x.id===id); if(!c||!c.ready)return;
+  // pressing it again is pause, and again resumes: the channel keeps its
+  // place, so you never owe a card the rest of its reading
+  if(PF&&PF.id===id&&AUDIO===PF.el){
+    if(AUDIO.paused)AUDIO.play(); else AUDIO.pause();
+    return;
+  }
   // by name+id rather than by hash: the server can then put the card through
   // its profile's plugin, so what you hear here is what the book will say
   if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
-  AUDIO=new Audio('/api/card_audio?name='+encodeURIComponent(DOC.name)+
-                  '&id='+id+'&t='+Date.now());
-  AUDIO.play();
+  const a=AUDIO=applyVol(new Audio('/api/card_audio?name='+encodeURIComponent(DOC.name)+
+                  '&id='+id+'&t='+Date.now()));
+  PF={id,el:a};
+  mixApplied();      // a fresh fetch carries the mixer as it stands now
+  // the button wears the state: ▶ at rest, ⏸ while playing — whatever word
+  // sits after the symbol (Full, In Voice) stays. A repaint of the stack
+  // rebuilds the button at ▶; the toggle still answers, only the symbol lags.
+  const paint=()=>{ const b=$('pf'+id);
+    if(b)b.textContent=(a.paused?'▶':'⏸')+b.textContent.replace(/^[▶⏸]/,''); };
+  a.onplay=paint; a.onpause=paint;
+  a.onended=()=>{ if(PF&&PF.el===a)PF=null; paint(); };
+  a.play();
 }
 async function splitAt(id){
   const t=$('t'+id), at=t.selectionStart;
@@ -6869,7 +7181,7 @@ $('perffile').onchange=async e=>{
 function playPerf(id){
   const c=DOC.chunks.find(x=>x.id===id); if(!c||!c.perf)return;
   if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
-  AUDIO=new Audio('/api/take?f='+encodeURIComponent(c.perf));
+  AUDIO=applyVol(new Audio('/api/take?f='+encodeURIComponent(c.perf)));
   AUDIO.play();
 }
 
@@ -6966,7 +7278,7 @@ function recDone(){
 function recPlay(){
   if(!REC||!REC.url)return;
   if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
-  AUDIO=new Audio(REC.url);
+  AUDIO=applyVol(new Audio(REC.url));
   AUDIO.play();
 }
 function recTeardown(){
@@ -7027,7 +7339,7 @@ function recordPerf(id){ if(DOC)recStart({kind:'perf',id,doc:DOC.name}); }
 function playClip(id){
   const c=DOC.chunks.find(x=>x.id===id); if(!c||!c.clip)return;
   if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
-  AUDIO=new Audio('/api/clip?f='+encodeURIComponent(c.clip));
+  AUDIO=applyVol(new Audio('/api/clip?f='+encodeURIComponent(c.clip)));
   AUDIO.volume=Math.min(1,(c.gain==null?100:c.gain)/100);   // fades are a render-time thing
   AUDIO.play();
 }
@@ -7377,6 +7689,8 @@ if(STAGE)STAGE.onmessage=e=>{
   STAGESEEN=true;
   if(m.type==='hello'){
     STAGE.postMessage({type:'open',name:DOC?DOC.name:''});
+    // a stage that just woke inherits the monitor level it missed
+    STAGE.postMessage({type:'vol',to:'embed',v:Math.round(VOL*100),mute:MUTED});
     if(STAGEPLAY&&Date.now()-STAGEPLAY.at<8000)STAGE.postMessage(STAGEPLAY);
     STAGEPLAY=null;
     return;
@@ -7394,7 +7708,8 @@ if(STAGE)STAGE.onmessage=e=>{
   if(m.type==='popped-bye'){ POPSEEN=0; return; }   // the watcher restores
   if(!DOC||m.name!==DOC.name)return;
   if(m.type==='state'){ const b=$('stgplay');
-    if(b)b.textContent=m.playing?'⏸ Story':'▶ Story'; }
+    if(b)b.textContent=m.playing?'⏸ Story':'▶ Story';
+    if(m.playing)mixApplied(); }   // a ride's stretch premixes as it starts
   if(m.type==='popin'){ if(POPUP){ try{POPUP.close()}catch(_){} POPUP=null; }
     POPSEEN=0; clearInterval(POPWATCH); POPWATCH=null; paintStageBtn(false);
     if(STAGE)STAGE.postMessage({type:'pause',to:'embed'}); }
@@ -7542,8 +7857,9 @@ async function previewBook(){
     `previewing ${fmtTime(r.secs)}`+(from==null?' of audiobook':` from card #${from}`);
   MARKS=r.marks||[]; MARKI=-1;
   if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
-  const a=new Audio('/api/book_audio?name='+encodeURIComponent(DOC.name)+'&t='+Date.now());
+  const a=applyVol(new Audio('/api/book_audio?name='+encodeURIComponent(DOC.name)+'&t='+Date.now()));
   AUDIO=a; BOOKPLAY=a;
+  mixApplied();      // the preview was just mixed with the faders where they are
   const done=()=>{
     if(BOOKPLAY!==a)return;
     BOOKPLAY=null;
@@ -8046,6 +8362,7 @@ function pingStack(){
 }
 loadSettings().then(()=>refresh().then(renderProfiles).then(showLastProj));
 paintFR();          // the header buttons before any document is open
+paintVol();         // the fader and mute wear last session's setting
 paintClip();        // a card copied last session is still on the clipboard
 // One quiet look at GitHub a few seconds in — late enough that a slow
 // network never delays the editor coming up, and silent unless there is

@@ -183,6 +183,7 @@ $('empty').textContent=EMBED
 let NAME=qs.get('name')||'';
 let DOC=null;              // the open episode, as /api/doc tells it
 let MARKS=[], MARKI=-1;    // card start times of the playing stretch
+let REMIX=false;           // a fader moved mid-ride: re-premix at the next card
 let SHOWN=null;            // the visual currently on the room's wall
 
 // One audio element for the life of the page. The first .play() lands inside
@@ -244,7 +245,14 @@ if(BC)BC.onmessage=e=>{
   }
   if(m.type==='open'&&m.name){ if(m.name!==NAME)switchStory(m.name); else load(); }
   if(!EMBED&&m.to==='embed')return;    // addressed transport is the embed's alone
-  if(m.type==='vol')return void(AUDIO.volume=Math.max(0,Math.min(1,(+m.v||0)/100)));
+  if(m.type==='vol'){
+    // the studio's monitor knob, or a mirror's — the bar's own slider follows
+    // so the two never disagree about what the room is set to
+    if(m.v!=null){ AUDIO.volume=Math.max(0,Math.min(1,(+m.v||0)/100));
+      const s=$('vol'); if(s)s.value=Math.round(+m.v||0); }
+    if('mute'in m)AUDIO.muted=!!m.mute;
+    return; }
+  if(m.type==='remix'){ REMIX=true; return; }   // honoured at the next card seam
   if(m.type==='cur')idleShow(m.card);
   if(m.type==='stop')stop();
   if(m.type==='play'){
@@ -520,6 +528,7 @@ function playRun(tok,from,upto){
       // an empty stretch — nothing renderable between two stops — is not a
       // reason to halt the story; the walk simply continues past it
       if(!r.ok)return res(true);
+      REMIX=false;                    // this premix carries the desk as it stands
       MARKS=r.marks||[]; MARKI=-1;
       CAPQ=[]; CAPI=-1;               // a new stretch, a new page plan
       titleClear();                   // and no title carried over from the last
@@ -694,6 +703,12 @@ function tick(){
   while(i+1<MARKS.length&&MARKS[i+1].at<=t)i++;
   if(!MARKS.length)return;
   if(i===MARKI)return void pageTick(t);   // no new card: pages still turn
+  // A remix wish is honoured HERE, at the seam between two cards: the rest
+  // of the ride is premixed again with the faders where they now stand and
+  // carries on from this card — the same manoeuvre as stop-and-play-from-
+  // here, folded into a boundary where a rest already lives, so the gap
+  // hides inside the silence the mix was going to leave anyway.
+  if(REMIX&&EMBED&&!AUDIO.paused&&MARKS[i]){ REMIX=false; story(MARKS[i].id); return; }
   MARKI=i;
   const c=card(MARKS[i].id);
   if(c){
