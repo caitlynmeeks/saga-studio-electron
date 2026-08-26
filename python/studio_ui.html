@@ -463,6 +463,33 @@ border-radius:4px;padding:5px 9px;font-size:12px;color:var(--fg)}
 .ctx hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
 .ctx .ctxask{display:flex;gap:5px;padding:2px}
 .ctx .ctxask input{flex:1;min-width:120px}
+/* the whole Media pane takes files from the Finder — audio to the clips,
+   pictures and film to the visuals. Lit while a drop is over it. */
+#sideClips.filedrop{box-shadow:inset 0 0 0 2px var(--green)}
+/* the asset inspector: click a clip or a picture in the Media tab and it
+   stands here — its face, its numbers and its knobs, as a profile does */
+#assetview img,#assetview video{width:100%;max-height:340px;object-fit:contain;
+background:var(--bg);border:1px solid var(--line);border-radius:7px}
+#assetview .ameta{font-size:11px;color:var(--dim);margin:7px 0}
+#assetview .arowi{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+#assetview .arowi[hidden]{display:none}   /* flex would out-argue hidden */
+#awave{width:100%;height:64px;display:block;border:1px solid var(--line);
+border-radius:7px;background:var(--bg)}
+#aedit{display:block;margin:0 auto;max-width:100%;border:1px solid var(--line);
+border-radius:7px;background:var(--bg);touch-action:none}
+/* a name that opens the inspector when clicked */
+.alnk{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+/* the recording desk: one floating strip for the whole app, above everything,
+   so the card repaints happening underneath cannot tear a take down */
+#recbar{position:fixed;left:50%;transform:translateX(-50%);bottom:64px;z-index:120;
+background:var(--chrome);border:1px solid var(--line);border-radius:9px;
+padding:10px 12px;width:min(430px,90vw);box-shadow:0 8px 30px rgba(0,0,0,.5)}
+#recdot{color:var(--faint)}
+#recdot.live{color:var(--red);animation:recblink 1.2s steps(2,start) infinite}
+@keyframes recblink{to{visibility:hidden}}
+#reclevel{flex:1;height:7px;background:var(--panel);border:1px solid var(--line);
+border-radius:4px;overflow:hidden}
+#reclvl{display:block;height:100%;width:0;background:var(--green)}
 /* the running server is older than the code on disk */
 #stalebar{position:fixed;left:0;right:0;bottom:0;z-index:99;
 background:var(--amber);color:#141008;font-size:12px;padding:7px 14px;text-align:center}
@@ -692,29 +719,34 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
  </div>
 
  <div class="pane" id="sideClips">
-  <h2>Audio Clips</h2>
-  <div class="mut" style="font-size:11px;margin-bottom:8px">Music and sound
-    effects, shared by every episode. ▶ plays one and stops it again;
-    double-click opens it in your audio editor.</div>
-  <input class="qry" id="qclips" placeholder="filter clips…" oninput="setQry('clips')">
+  <!-- One door and one filter for the whole pool. The prose that used to sit
+       under each header lives in its ? now: the pane shows media, not
+       paragraphs, and the type of a file decides where it lands. -->
+  <div style="display:flex;gap:5px">
+    <button onclick="recordClip()"
+      title="record from the microphone, straight into the clip library"><span
+      style="color:var(--red)">●</span> Record…</button>
+    <button class="pri" onclick="importPool()" style="flex:1"
+      title="audio files itself under Audio Clips, pictures and film under Visuals — or skip the button and drop files anywhere on this pane from the Finder">Import Media…</button>
+  </div>
+  <input class="qry" id="qpool" placeholder="filter clips and visuals…"
+    oninput="setPoolQry()" style="margin-top:8px">
+
+  <h2 style="margin-top:10px">Audio Clips <span class="qm"
+    title="Music, sound effects and recordings, shared by every episode. ▶ plays one and stops it again; double-click opens one in your audio editor; right-click can turn it into a character's voice.">?</span></h2>
   <div id="clipsort"></div>
   <div id="clips"></div>
-  <div style="display:flex;gap:5px;margin-top:8px">
-    <button onclick="importClip()">Import a Clip…</button>
-  </div>
 
-  <h2 style="margin-top:18px">visuals</h2>
-  <div class="mut" style="font-size:11px;margin-bottom:8px">Pictures and film
-    for the stage, shared like clips. Drag one into the episode;
-    double-click to open it in your viewer.</div>
-  <input class="qry" id="qmedia" placeholder="filter pictures…" oninput="setQry('media')">
+  <h2 style="margin-top:18px">Visuals <span class="qm"
+    title="Pictures and film for the stage, shared like clips. Drag one into the episode to place it; double-click opens it in your viewer. Sorted by Story, each files itself under the stack that shows it, painted against it, or generated it.">?</span></h2>
   <div id="mediasort"></div>
   <div id="media"></div>
   <div style="display:flex;gap:5px;margin-top:8px">
-    <button onclick="importMedia()">Import an Image or Film…</button>
     <button onclick="pressPool()" id="pressb"
       title="recompress every png/jpg still in the pool to WebP — same pictures, a fraction of the weight; exports, source archives and uploads all slim down. New imports and paintings are pressed automatically.">Slim to WebP</button>
   </div>
+  <input type="file" id="poolfile" multiple hidden
+    accept="audio/*,image/*,video/*,.mp3,.wav,.flac,.m4a,.ogg,.aif,.aiff,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov">
   <input type="file" id="mediafile" hidden
     accept="image/*,video/*,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov">
  </div>
@@ -861,8 +893,9 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
  <div id="inspect" class="rpane">
    <datalist id="langlist"></datalist>
    <div id="profedit"></div>
+   <div id="assetview" hidden></div>
    <div id="nosel" class="mut" style="font-size:12px">
-     Pick a voice profile on the left to edit it here.
+     Pick a voice profile, a clip or a picture on the left to see it here.
    </div>
  </div>
  <div id="chat" class="rpane">
@@ -918,9 +951,30 @@ Selected cards go along as context.</div></div>
   </div>
 </div>
 
+<div id="recbar" hidden>
+  <div style="display:flex;gap:8px;align-items:center">
+    <span id="recdot">●</span>
+    <b id="rectime" style="min-width:40px">0:00</b>
+    <div id="reclevel"><i id="reclvl"></i></div>
+  </div>
+  <div id="rechint" class="mut" style="font-size:11px;margin-top:6px"></div>
+  <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+    <input id="recname" placeholder="name it…" style="flex:1;min-width:0"
+      title="what the take will be filed as">
+    <button id="recstop" class="pri" onclick="recStop()">■ Stop</button>
+    <button id="recplay" onclick="recPlay()" hidden
+      title="listen back before deciding">▶</button>
+    <button id="recagain" onclick="recAgain()" hidden
+      title="toss this take and roll straight into another">↺</button>
+    <button id="recsave" class="pri" onclick="recSave()" hidden>Save</button>
+    <button onclick="recCancel()" title="put the microphone away, keep nothing">✕</button>
+  </div>
+</div>
+
 <script>
 const $=i=>document.getElementById(i);
 let DOC=null, SEL=new Set(), STATE={}, JOBS={}, POLL=null, HEIGHT={};
+let INSPECT=null;   // the media asset standing in the inspector, {kind,name}
 // the Queue tab's state lives HERE, at the top: setTab may kick the queue
 // poll during boot, long before the tab's own code — a declaration down
 // there would be a temporal dead zone and one thrown ReferenceError
@@ -1050,6 +1104,12 @@ function setQry(list){
 const hits=(q,...fields)=>!q||fields.some(
   f=>String(f||'').toLowerCase().includes(q));
 const nomatch='<span class="mut" style="font-size:12px">nothing matches</span>';
+// The Media pane runs one box over both of its lists: clips and visuals are
+// one pool to the person searching it, whatever the files are underneath.
+function setPoolQry(){
+  QRY.clips=QRY.media=($('qpool').value||'').trim().toLowerCase();
+  renderClips(); renderMedia();
+}
 
 
 // ── import ────────────────────────────────────────────────
@@ -1463,7 +1523,9 @@ function renderProfileList(){
 function renderProfiles(){
   renderProfileList();
   $('profedit').innerHTML = EDITING ? profEditor(EDITING) : '';
-  const ns=$('nosel'); if(ns)ns.hidden=!!EDITING;
+  // the inspector has two possible occupants — a profile being edited, or a
+  // media asset being looked at — and the placeholder yields to either
+  const ns=$('nosel'); if(ns)ns.hidden=!!EDITING||!!INSPECT;
   if(EDITING){
     bindVoiceDrop(); paintProfDirty(); paintImpact();
     const fp=((DRAFT||{}).fx||{}).plugin;
@@ -1629,12 +1691,13 @@ function inspectProfile(n){
     if(!confirmDiscard())return;
     EDITING=n; DRAFT=draftOf(n); IMPACT=null;
   }
-  showPanel('inspect'); renderProfiles();
+  dropAsset(); showPanel('inspect'); renderProfiles();
 }
 function editProfile(n){
   if(EDITING===n)return closeProf();
   if(!confirmDiscard())return;
   EDITING=n; DRAFT=draftOf(n); IMPACT=null;
+  dropAsset();
   showPanel('inspect');            // clicking a voice is what opens the inspector
   renderProfiles();
 }
@@ -2196,6 +2259,25 @@ function voiceFromCard(e,id){
   });
 }
 
+// voiceFromCard's sibling on the media shelf: a clip — recorded at the desk,
+// or imported years ago — becomes the reference clip of a new profile. A copy
+// crosses over, never the clip itself: the audio cards pointing at it keep
+// playing exactly what they always played.
+function voiceFromClip(e,i){
+  const c=CLIPVIEW[i]; if(!c)return;
+  openCtx(e,[]);
+  ctxAsk('','name the new character','create',async name=>{
+    const r=await api('/api/voice/from_clip',{clip:c.name,profile:name});
+    if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+    if(!confirmDiscard())return;              // an unsaved profile edit first
+    setSide('voices');
+    EDITING=r.profile; await refresh(); DRAFT=draftOf(r.profile); renderProfiles();
+    $('status').innerHTML=`<span class="ok">“${esc(r.profile)}” speaks with `+
+      `<b>${esc(r.voice)}</b></span> · ${fmtSecs(r.secs)} taken from “${esc(c.name)}”`+
+      (r.secs>10?' — <span class="warn">only the first 10s is ever used</span>':'');
+  });
+}
+
 // ── plugins ───────────────────────────────────────────────
 // A profile can put an audio plugin after the model. The sliders are built from
 // whatever the plugin says its parameters are, so nothing here knows anything
@@ -2628,14 +2710,16 @@ function renderClips(){
   // disturb: playing, dragging and renaming all address a clip by it
   const rows=CLIPVIEW.map((c,i)=>[c,i]).filter(([c])=>hits(QRY.clips,c.name));
   $('clips').innerHTML = !CLIPVIEW.length
-    ? '<span class="mut" style="font-size:12px">none yet — import one below</span>'
+    ? '<span class="mut" style="font-size:12px">none yet — record or import above</span>'
     : rows.length ? rows.map(([c,i])=>{
     const used=n[c.name]||0, when=fmtWhen(c.added);
     const on=PLAYCLIP===c.name;
-    return `<div class="proj" draggable="true" oncontextmenu="clipMenu(event,${i})"
+    return `<div class="proj${INSPECT&&INSPECT.kind==='clip'&&INSPECT.name===c.name?' sel':''}"
+      draggable="true" oncontextmenu="clipMenu(event,${i})"
+      onclick="inspectClipAt(${i})"
       ondragstart="clipDragStart(event,${i})" ondragend="clipDragEnd()"
       ondblclick="openIn('clip',${i})"
-      title="drag into the episode to place it · double-click to open it in your audio editor · right-click to rename">
+      title="click to inspect · drag into the episode to place it · double-click opens your audio editor">
       <div style="display:flex;gap:6px;align-items:center">
         <button class="tiny" title="${on?'stop':'hear it'}" ondblclick="event.stopPropagation()"
           onclick="event.stopPropagation();playClipAt(${i})">${on?'■':'▶'}</button>
@@ -2673,7 +2757,6 @@ function playClipAt(i){
   renderClips();
   $('status').textContent=`playing “${c.name}” · ${fmtSecs(c.secs)}`;
 }
-function importClip(){ CLIPTARGET=null; $('clipfile').click(); }
 
 // A clip dragged out of the sidebar and dropped into the stack becomes an audio
 // card holding it. The card drop targets already exist for reordering, so this
@@ -2718,6 +2801,7 @@ function clipMenu(e,i){
     ...(eapp?[{label:'Edit in '+appLabel(eapp), run:()=>editExternal('clip',c.name)}]:[]),
     {label:'Rename…', run:()=>{ openCtx(e,[]);
        ctxAsk(c.name,'clip name','rename',t=>renameClip(c.name,t)); }},
+    {label:'New Voice Profile…', run:()=>voiceFromClip(e,i)},
     '-',
     // Deleting is deliberately not offered: clips are global, undo can
     // resurrect a card that points at one, and an export packs whatever the
@@ -2766,10 +2850,12 @@ function mediaRow(m,i,used){
     ?`<img src="/api/media?f=${encodeURIComponent(m.name)}&v=${m.added}" loading="lazy"
        style="height:30px;width:44px;object-fit:cover;border-radius:4px;flex:none">`
     :`<span style="width:44px;text-align:center;flex:none" title="film">🎞</span>`;
-  return `<div class="proj" draggable="true" oncontextmenu="mediaMenu(event,${i})"
+  return `<div class="proj${INSPECT&&INSPECT.kind==='media'&&INSPECT.name===m.name?' sel':''}"
+    draggable="true" oncontextmenu="mediaMenu(event,${i})"
+    onclick="inspectMediaAt(${i})"
     ondragstart="mediaDragStart(event,${i})" ondragend="mediaDragEnd()"
     ondblclick="openIn('media',${i})"
-    title="drag into the episode to place it · double-click to open it in your viewer · right-click to rename">
+    title="click to inspect · drag into the episode to place it · double-click opens your viewer">
     <div style="display:flex;gap:6px;align-items:center">
       ${thumb}
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
@@ -2782,18 +2868,25 @@ function mediaRow(m,i,used){
 function renderMedia(){
   const n=STATE.media_counts||{}, home=STATE.media_home;
   MEDIAVIEW=sortedBy(STATE.media||[],'media','added');
-  $('mediasort').innerHTML=sortBar('media','Newest');
+  // Story is a view, not an ordering: filed under the stack that knows each
+  // picture. Name and Newest mean what they say, so they draw one flat list —
+  // a sort that only rearranged rows inside folders read as doing nothing.
+  const how=SORTS.media||'story';
+  $('mediasort').innerHTML=`<div class="sortbar">
+    <button class="${how==='story'?'on':''}" onclick="setSort('media','story')"
+      title="filed under the stack that shows them, painted against them, or generated them">Story</button>
+    <button class="${how==='name'?'on':''}" onclick="setSort('media','name')">Name</button>
+    <button class="${how==='added'?'on':''}" onclick="setSort('media','added')">Newest</button>
+  </div>`;
   const at=new Map(MEDIAVIEW.map((m,i)=>[m.name,i]));
   if(!MEDIAVIEW.length)
     return void($('media').innerHTML='<span class="mut" style="font-size:12px">'+
-      'none yet — import one below</span>');
-  // an older server sends no attribution: draw the flat list it expects
-  if(!home)
-    return void($('media').innerHTML=MEDIAVIEW.map(
-      (m,i)=>mediaRow(m,i,n[m.name]||0)).join(''));
+      'none yet — Import Media above, or drop files from the Finder</span>');
   const q=QRY.media;
-  if(q){
-    const found=MEDIAVIEW.filter(m=>hits(q,m.name));
+  // filtering flattens (see QRY), the honest sorts flatten, and an older
+  // server that sends no attribution has nothing to file by
+  if(q||how!=='story'||!home){
+    const found=q?MEDIAVIEW.filter(m=>hits(q,m.name)):MEDIAVIEW;
     return void($('media').innerHTML=found.length
       ?found.map(m=>mediaRow(m,at.get(m.name),n[m.name]||0)).join(''):nomatch);
   }
@@ -2813,7 +2906,7 @@ function renderMedia(){
       continue;
     }
     grp(h?'p:'+h.project:'orphans',
-        h?(h.title||h.project):'Nothing knows these').rows.push(m);
+        h?(h.title||h.project):'Unfiled').rows.push(m);
   }
   const order=[...groups.values()].sort((a,b)=>{
     if((a.key==='orphans')!==(b.key==='orphans'))return a.key==='orphans'?1:-1;
@@ -2918,7 +3011,6 @@ async function pressPool(){
   refresh();
 }
 function pickMedia(id){ MEDIATARGET=id; $('mediafile').click(); }
-function importMedia(){ MEDIATARGET=null; $('mediafile').click(); }
 $('mediafile').onchange=async e=>{
   const f=e.target.files[0]; e.target.value='';
   if(!f)return;
@@ -2936,6 +3028,566 @@ $('mediafile').onchange=async e=>{
   await refresh(); renderMedia();
   if(id!=null&&DOC)open_(DOC.name,true,id);
 };
+
+// ── the pool door ─────────────────────────────────────────
+// One Import for the whole pool: the type of the file decides where it lands,
+// not which button you found. Audio files itself under Audio Clips, pictures
+// and film under Visuals. The Finder can skip the button entirely — files
+// dropped anywhere on the Media pane walk through the same gate. Internal
+// drags (a clip or a picture headed for the stack) carry no Files entry in
+// their dataTransfer and pass by untouched.
+const isAudioFile=f=>/^audio\//.test(f.type||'')
+  ||/\.(mp3|wav|flac|m4a|ogg|opus|aif|aiff)$/i.test(f.name||'');
+const isVisualFile=f=>/^(image|video)\//.test(f.type||'')
+  ||/\.(png|jpe?g|webp|gif|avif|heic|mp4|webm|mov)$/i.test(f.name||'');
+function importPool(){ $('poolfile').click(); }
+$('poolfile').onchange=async e=>{
+  const fs=[...e.target.files]; e.target.value='';
+  if(fs.length)await importFiles(fs);
+};
+async function importFiles(fs){
+  let clips=0, visuals=0, errs=0;
+  for(const f of fs){
+    const kind=isAudioFile(f)?'clip':isVisualFile(f)?'media':null;
+    if(!kind){
+      errs++;
+      $('status').innerHTML=`<span class="warn">“${esc(f.name)}” is neither audio, picture nor film</span>`;
+      continue;
+    }
+    $('status').textContent=`importing ${f.name}…`;
+    let j;
+    try{
+      const r=await fetch(`/api/${kind}/upload?fn=`+encodeURIComponent(f.name),
+        {method:'POST',body:f,headers:{'Content-Type':'application/octet-stream'}});
+      j=await r.json();
+    }catch(ex){ j={error:String(ex)}; }
+    if(j.error){
+      errs++;
+      $('status').innerHTML=`<span class="warn">${esc(f.name)}: ${esc(j.error)}</span>`;
+      continue;
+    }
+    if(kind==='clip')clips++; else visuals++;
+  }
+  await refresh(); renderClips(); renderMedia();
+  const got=[clips&&`${clips} clip${clips===1?'':'s'}`,
+             visuals&&`${visuals} visual${visuals===1?'':'s'}`].filter(Boolean).join(' and ');
+  // all refused: the last refusal is still on screen, and it says more than a count
+  if(got)$('status').innerHTML=`<span class="ok">imported ${got}</span>`+
+    (errs?` · <span class="warn">${errs} refused</span>`:'');
+}
+{
+  const pane=$('sideClips');
+  const carries=e=>[...((e.dataTransfer&&e.dataTransfer.types)||[])].includes('Files');
+  ['dragenter','dragover'].forEach(k=>pane.addEventListener(k,e=>{
+    if(!carries(e))return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect='copy';
+    pane.classList.add('filedrop');
+  }));
+  pane.addEventListener('dragleave',e=>{
+    if(!pane.contains(e.relatedTarget))pane.classList.remove('filedrop');
+  });
+  pane.addEventListener('drop',e=>{
+    if(!carries(e))return;
+    e.preventDefault();
+    pane.classList.remove('filedrop');
+    importFiles([...e.dataTransfer.files]);
+  });
+}
+
+// ── the asset inspector ───────────────────────────────────
+// Click a clip or a picture in the Media tab and it stands in the inspector
+// the way a profile does: its face, its numbers, and its knobs. The pane's
+// two occupants hand over to each other — picking a profile puts the asset
+// down, picking an asset closes the editor, asking first if it is dirty.
+// The stack stays the stage's: nothing here takes the middle column.
+function inspectClipAt(i){ const c=CLIPVIEW[i]; if(c)inspectAsset('clip',c.name); }
+function inspectMediaAt(i){ const m=MEDIAVIEW[i]; if(m)inspectAsset('media',m.name); }
+function dropAsset(){ stopAssetSrc(); INSPECT=null;
+  const v=$('assetview'); v.hidden=true; v.innerHTML=''; }
+function closeAsset(){ dropAsset(); renderProfiles(); renderClips(); renderMedia(); }
+function inspectAsset(kind,name){
+  if(EDITING&&!confirmDiscard())return;
+  EDITING=null; DRAFT=null; IMPACT=null;
+  INSPECT={kind,name};
+  showPanel('inspect');
+  renderProfiles();               // clears the editor, hides the placeholder
+  renderClips(); renderMedia();   // the picked row wears .sel
+  renderAsset();
+}
+function assetInfo(){
+  if(!INSPECT)return null;
+  if(INSPECT.kind==='take'){
+    // a take lives on its card, so the card is its record
+    const c=DOC&&DOC.name===INSPECT.doc
+      ?DOC.chunks.find(x=>x.id===INSPECT.id):null;
+    if(!c||c.perf!==INSPECT.name||!c.haveperf)return null;
+    return {name:INSPECT.name,secs:c.perflen||0,label:c.perfname||'performance'};
+  }
+  return INSPECT.kind==='clip'
+    ? (STATE.clips||[]).find(c=>c.name===INSPECT.name)
+    : (STATE.media||[]).find(m=>m.name===INSPECT.name);
+}
+// the voiced card's "you said" name opens the performance itself — takes are
+// content-addressed (a rendered card must keep the exact recording it
+// rendered from), which is why they are not clips; this is their stand
+function inspectTake(id){
+  const c=DOC&&DOC.chunks.find(x=>x.id===id);
+  if(!c||!c.perf||!c.haveperf)return;
+  if(EDITING&&!confirmDiscard())return;
+  EDITING=null; DRAFT=null; IMPACT=null;
+  INSPECT={kind:'take',name:c.perf,id,doc:DOC.name};
+  showPanel('inspect');
+  renderProfiles(); renderClips(); renderMedia();
+  renderAsset();
+}
+async function takeToClip(){
+  if(!INSPECT||INSPECT.kind!=='take')return;
+  const info=assetInfo();
+  const r=await api('/api/take/to_clip',{take:INSPECT.name,fn:info?info.label:'take'});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  $('status').innerHTML=`<span class="ok">“${esc(r.clip)}” is in the Media tab now</span>`+
+    ` · ${fmtSecs(r.secs)} — the card keeps its performance`;
+  await refresh(); renderClips();
+}
+function renderAsset(){
+  const v=$('assetview'); if(!INSPECT)return;
+  stopAssetSrc();                            // a new stand, a quiet room
+  const a=assetInfo();
+  if(!a)return void closeAsset();          // renamed or gone under us
+  const take=INSPECT.kind==='take';
+  const counts=take?{}:INSPECT.kind==='clip'?(STATE.clip_counts||{}):(STATE.media_counts||{});
+  const used=counts[a.name]||0, when=fmtWhen(a.added), sz=a.size?size(a.size):'';
+  const film=INSPECT.kind==='media'&&a.kind==='video';
+  const kindlab=take?`performance on card #${INSPECT.id}`
+    :INSPECT.kind==='clip'?'audio clip':film?'film':'picture';
+  const eapp=take?null:appFor(INSPECT.kind==='clip'?'clip':film?'video':'image');
+  const src=`/api/media?f=${encodeURIComponent(a.name)}&v=${a.added}`;
+  const body=INSPECT.kind==='media'
+    ? (film?`<video controls src="${src}" onplay="if(AUDIO)AUDIO.pause()"></video>`
+      // a gif may animate, and a bake would keep one frame — look, don't touch
+      :a.ext==='gif'?`<img src="${src}" onload="const d=$('adim');
+             if(d)d.textContent=' · '+this.naturalWidth+' × '+this.naturalHeight+' px'">`
+      :`<canvas id="aedit"></canvas>
+       <div class="arowi">
+         <button id="efh" onclick="editFlip('fh')" title="mirror it, left for right">⇋ Flip H</button>
+         <button id="efv" onclick="editFlip('fv')" title="mirror it, top for bottom">⇵ Flip V</button>
+         <button onclick="editRot()" title="a quarter turn clockwise — press again for more">⟳ 90°</button>
+         <button id="ecrop" onclick="editCropMode()" title="then drag a rectangle on the picture — the drag is the crop">✂ Crop</button>
+       </div>
+       <div class="prow"><div class="plab">brightness</div>
+         <input type="range" min="0" max="200" value="100" id="e_b" oninput="editSlide()"><span class="pv" id="ev_b">100%</span></div>
+       <div class="prow"><div class="plab">contrast</div>
+         <input type="range" min="0" max="200" value="100" id="e_c" oninput="editSlide()"><span class="pv" id="ev_c">100%</span></div>
+       <div class="prow"><div class="plab">saturation</div>
+         <input type="range" min="0" max="200" value="100" id="e_s" oninput="editSlide()"><span class="pv" id="ev_s">100%</span></div>
+       <div class="prow"><div class="plab">hue</div>
+         <input type="range" min="-180" max="180" value="0" id="e_h" oninput="editSlide()"><span class="pv" id="ev_h">0°</span></div>
+       <div class="arowi" id="editacts" hidden>
+         <button class="pri" onclick="editSave(true)"
+           title="the picture keeps its name, and every card showing it follows — the edit becomes what it is">Apply</button>
+         <button onclick="editSave(false)"
+           title="the original stays as it is; the edit lands beside it as its own picture">Save as a Copy</button>
+         <button onclick="editReset()">Reset</button>
+       </div>`)
+    : `<canvas id="awave"></canvas>
+      <div class="dual" style="margin-top:6px">
+        <div class="rail"></div><div class="fill" id="atfill"></div>
+        <input type="range" min="0" max="1000" value="0" id="atin" oninput="trimUi()">
+        <input type="range" min="0" max="1000" value="1000" id="atout" oninput="trimUi()">
+      </div>
+      <div class="ameta" id="atlab"></div>
+      <div class="arowi">
+        <button class="pri" id="aplay" onclick="playAssetSel()"
+          title="hear the kept stretch — press again to stop">▶ Play</button>
+        <button id="atrimb" onclick="saveTrim()" disabled
+          title="${take?'the card performs only the kept stretch from here on — the full recording stays in takes/, and rendered history keeps its pointer'
+            :'the kept stretch becomes a new clip beside this one — the original is never edited, because cards point at it by name'}">${
+          take?`Trim it — card #${INSPECT.id} follows`:'Save Trim as a Copy'}</button>
+      </div>`;
+  v.innerHTML=`
+   <div style="display:flex;align-items:center;gap:6px">
+     <h2 style="margin:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(take?a.label:a.name)}</h2>
+     <button class="tiny" onclick="closeAsset()" title="put it down">✕</button>
+   </div>
+   <div class="ameta">${kindlab}${a.secs?' · '+fmtSecs(a.secs):''}${
+     a.ext?' · '+esc(a.ext):''}<span id="adim"></span>${sz?' · '+sz:''}${take?'':' · '+(
+     used?used+' card'+(used===1?'':'s'):'not used yet')}${when?' · '+esc(when):''}</div>
+   ${body}
+   <div class="arowi">
+     ${INSPECT.kind==='media'?`<button onclick="api('/api/media/open',{media:'${a.name}'})"
+        title="the file itself, in your viewer">Open in Viewer</button>`:''}
+     ${eapp?`<button onclick="editExternal('${INSPECT.kind==='clip'?'clip':film?'video':'image'}','${a.name}')">Edit in ${esc(appLabel(eapp))}</button>`:''}
+     ${INSPECT.kind==='clip'?`<button onclick="assetAskVoice()"
+        title="this clip becomes the reference a character speaks with — only its first 10s is ever read">New Voice Profile…</button>`:''}
+     ${take?`<button onclick="takeToClip()"
+        title="a copy crosses into the Media tab as a clip, with every clip verb — the take stays on its card">Make it a Clip</button>`:''}
+     ${INSPECT.kind==='media'&&!film?`<button onclick="promotePicker(event,'${a.name}')"
+        title="into the cast, as a reference plate for painting against">→ Reference…</button>`:''}
+     ${['png','jpg','jpeg'].includes(a.ext)?`<button onclick="assetPress()"
+        title="same picture, a fraction of the weight — the name stays, so every card pointing at it follows">Press to WebP</button>`:''}
+     ${take?'':'<button onclick="assetAskRename()">Rename…</button>'}
+   </div>
+   <div id="avoice" hidden class="arowi">
+     <input id="avname" placeholder="character name…" style="flex:1;min-width:0"
+       onkeydown="if(event.key==='Enter')assetVoice()">
+     <button class="pri" onclick="assetVoice()">Create</button>
+   </div>
+   <div id="aren" hidden class="arowi">
+     <input id="arenin" placeholder="new name…" style="flex:1;min-width:0"
+       onkeydown="if(event.key==='Enter')assetRename()">
+     <button class="pri" onclick="assetRename()">Rename</button>
+   </div>`;
+  v.hidden=false;
+  if(INSPECT.kind!=='media'){ trimUi(); drawWave(a.name); }
+  else if(!film&&a.ext!=='gif')loadEditImage(a.name);
+  const p=$('inspect'); if(p)p.scrollTop=0;
+}
+// clips and takes are served from different shelves
+const assetAudioUrl=name=>(INSPECT&&INSPECT.kind==='take'?'/api/take?f=':'/api/clip?f=')
+  +encodeURIComponent(name);
+// in and out ride 0–1000 permille of the clip, so the thumbs need no idea of
+// seconds; trimSpan turns them back into time whenever time is wanted
+function trimSpan(){
+  const a=assetInfo()||{secs:0};
+  const lo=$('atin'), hi=$('atout');
+  let x=+lo.value, y=+hi.value;
+  if(x>y){ x=y; lo.value=x; }        // the thumbs push each other, never cross
+  return [x/1000*(a.secs||0), y/1000*(a.secs||0), a.secs||0, x, y];
+}
+function trimUi(){
+  const [a,b,dur,x,y]=trimSpan();
+  const f=$('atfill');
+  if(f){ f.style.left=(x/10)+'%'; f.style.width=((y-x)/10)+'%'; }
+  const cut=x>0||y<1000;
+  $('atlab').textContent=cut
+    ? `keep ${fmtSecs(a)} – ${fmtSecs(b)} · ${fmtSecs(b-a)} of ${fmtSecs(dur)}`
+    : `whole clip · ${fmtSecs(dur)}`;
+  $('atrimb').disabled=!cut;
+}
+// the project's second Web Audio: the recorder met the microphone, this one
+// only decodes. One context, reused — decoding needs no exclusive device.
+// The decoded buffer stays: playback starts from it, not from a seek.
+let ACTX=null, WAVEBUF=null;
+async function drawWave(name){
+  const cv=$('awave'); if(!cv)return;
+  const dpr=window.devicePixelRatio||1;
+  const W=(cv.clientWidth||300)*dpr, H=64*dpr;
+  cv.width=W; cv.height=H;
+  const g=cv.getContext('2d');
+  const css=k=>getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+  try{
+    const ab=await (await fetch(assetAudioUrl(name))).arrayBuffer();
+    if(!INSPECT||INSPECT.name!==name)return;       // moved on while fetching
+    ACTX=ACTX||new AudioContext();
+    const buf=await ACTX.decodeAudioData(ab);
+    if(!INSPECT||INSPECT.name!==name)return;
+    WAVEBUF={name,buf};
+    const ch=buf.getChannelData(0), n=ch.length;
+    const step=Math.max(1,Math.floor(n/W)), mid=H/2;
+    g.clearRect(0,0,W,H);
+    g.fillStyle=css('--green')||'#7fd88f';
+    for(let x=0;x<W;x++){
+      let lo=0, hi=0;
+      const s=x*step, e=Math.min(n,s+step);
+      for(let i=s;i<e;i++){ const q=ch[i]; if(q<lo)lo=q; if(q>hi)hi=q; }
+      const top=mid-hi*mid*.92, bot=mid-lo*mid*.92;
+      g.fillRect(x,top,1,Math.max(1,bot-top));
+    }
+  }catch(_){
+    g.fillStyle=css('--dim')||'#6d7d75';
+    g.font=`${11*dpr}px ui-monospace,monospace`;
+    g.fillText('no waveform',8*dpr,20*dpr);
+  }
+}
+// Playback goes through the decoded buffer the waveform already holds. An
+// <audio> element honours a start point by SEEKING, this server serves no
+// byte ranges, and a seek that cannot land slides silently back to 0 —
+// which reads as "the in point does nothing" while the out point, a mere
+// stop-timer, keeps working. A buffer source starts and stops on the sample.
+let ASRC=null;
+function stopAssetSrc(){
+  if(!ASRC)return;
+  const s=ASRC; ASRC=null;
+  try{ s.stop(); }catch(_){}
+  const bt=$('aplay'); if(bt)bt.textContent='▶ Play';
+}
+function playAssetSel(){
+  if(!INSPECT)return;
+  if(ASRC)return void stopAssetSrc();          // press again to stop
+  const [a,b]=trimSpan(), name=INSPECT.name;
+  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }   // one channel, as ever
+  if(WAVEBUF&&WAVEBUF.name===name&&ACTX){
+    ACTX.resume().catch(()=>{});
+    const src=ACTX.createBufferSource();
+    src.buffer=WAVEBUF.buf;
+    src.connect(ACTX.destination);
+    const me=ASRC=src;
+    src.onended=()=>{ if(ASRC===me){ ASRC=null;
+      const bt=$('aplay'); if(bt)bt.textContent='▶ Play'; } };
+    src.start(0,a,Math.max(0.05,b-a));
+    const bt=$('aplay'); if(bt)bt.textContent='■ Stop';
+    return;
+  }
+  // no decoded buffer (the waveform failed) — the element, best effort
+  const au=AUDIO=new Audio(assetAudioUrl(name));
+  const done=()=>{ const bt=$('aplay'); if(bt)bt.textContent='▶ Play'; };
+  au.onpause=done; au.onended=done;
+  au.onplay=()=>{ const bt=$('aplay'); if(bt)bt.textContent='■ Stop'; };
+  au.ontimeupdate=()=>{ if(au.currentTime>=b-0.02){ au.pause(); au.currentTime=0; } };
+  au.oncanplay=()=>{ if(Math.abs(au.currentTime-a)>0.05)au.currentTime=a;
+    Promise.resolve(au.play()).catch(done); };
+}
+async function saveTrim(){
+  if(!INSPECT)return;
+  const [a,b]=trimSpan();
+  const bt=$('atrimb'); bt.disabled=true;
+  if(INSPECT.kind==='take'){
+    // a new take, and the card repointed at it — the old one stays in
+    // takes/ because rendered history points there by name
+    const info=assetInfo(), id=INSPECT.id, doc=INSPECT.doc;
+    const r=await api('/api/take/trim',{take:INSPECT.name,start:a,end:b});
+    if(r.error){ bt.disabled=false;
+      return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`); }
+    await api('/api/chunk',{name:doc,id,perf:r.perf,
+                            perfname:info?info.label:'performance'});
+    $('status').innerHTML=`<span class="ok">trimmed to ${fmtSecs(r.secs)}</span>`+
+      ` — card #${id} performs the trim now; press <b>render</b> to hear it in voice`;
+    await open_(doc,true,id);
+    inspectTake(id);
+    return;
+  }
+  const r=await api('/api/clip/trim',{clip:INSPECT.name,start:a,end:b});
+  if(r.error){ bt.disabled=false;
+    return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`); }
+  $('status').innerHTML=`<span class="ok">“${esc(r.clip)}” kept</span> · ${fmtSecs(r.secs)}`+
+    ' — the original is untouched';
+  await refresh();
+  inspectAsset('clip',r.clip);               // the new copy takes the stand
+}
+function assetAskVoice(){ const d=$('avoice'); d.hidden=!d.hidden; if(!d.hidden)$('avname').focus(); }
+async function assetVoice(){
+  if(!INSPECT)return;
+  const name=$('avname').value.trim(); if(!name)return void $('avname').focus();
+  const r=await api('/api/voice/from_clip',{clip:INSPECT.name,profile:name});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  dropAsset(); setSide('voices');
+  EDITING=r.profile; await refresh(); DRAFT=draftOf(r.profile); renderProfiles();
+  $('status').innerHTML=`<span class="ok">“${esc(r.profile)}” speaks with `+
+    `<b>${esc(r.voice)}</b></span> · ${fmtSecs(r.secs)}`+
+    (r.secs>10?' — <span class="warn">only the first 10s is ever used</span>':'');
+}
+function assetAskRename(){
+  const d=$('aren'); d.hidden=!d.hidden;
+  if(!d.hidden){ $('arenin').value=INSPECT?INSPECT.name:''; $('arenin').focus(); }
+}
+async function assetRename(){
+  if(!INSPECT)return;
+  const to=$('arenin').value.trim(); if(!to)return void $('arenin').focus();
+  const kind=INSPECT.kind;
+  const r=await api(kind==='clip'?'/api/clip/rename':'/api/media/rename',
+    kind==='clip'?{clip:INSPECT.name,to}:{media:INSPECT.name,to});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  $('status').innerHTML=`<span class="ok">renamed to “${esc(r.clip||r.media)}”</span>`+
+    (r.cards?` — ${r.cards} card${r.cards===1?'':'s'} followed it`:'');
+  await refresh();
+  if(r.cards&&DOC)open_(DOC.name,true);      // card headers say the new name
+  inspectAsset(kind,r.clip||r.media);
+}
+async function assetPress(){
+  if(!INSPECT)return;
+  const r=await api('/api/media/compress',{media:INSPECT.name});
+  if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
+  $('status').textContent=r.pressed
+    ? `pressed to WebP — saved ${size(r.saved)}`
+    : 'nothing to press — it is already WebP';
+  await refresh();
+  inspectAsset('media',INSPECT.name);
+}
+
+// ── the little darkroom ───────────────────────────────────
+// Flip, turn, crop and the tone dials, right on the stand. Everything is a
+// live preview on a canvas — nothing touches the file until Apply (the
+// picture keeps its name and every card showing it follows, the same bargain
+// as the WebP press) or Save as a Copy (the original never learns about it).
+// The bake happens once, at full resolution, on the way out.
+//
+// Flips act in the frame you are looking at, rotation underneath them; a
+// crop is dragged in that same final frame. Turning or flipping after a crop
+// would silently move what the rectangle meant, so those clear it instead.
+let IMGEDIT=null;
+function editDefaults(){
+  return {fh:false,fv:false,rot:0,crop:null,b:100,c:100,s:100,h:0,
+          cropping:false,drag:null,raf:0};
+}
+function loadEditImage(name){
+  const st=IMGEDIT={name,img:null,...editDefaults()};
+  const im=new Image();
+  im.onload=()=>{
+    if(IMGEDIT!==st||!INSPECT||INSPECT.name!==name)return;   // moved on
+    st.img=im;
+    const d=$('adim');
+    if(d)d.textContent=' · '+im.naturalWidth+' × '+im.naturalHeight+' px';
+    editPaint(); editWireCrop();
+  };
+  im.src='/api/media?f='+encodeURIComponent(name)+'&v='+((assetInfo()||{}).added||'');
+}
+// width and height once the quarter turns are counted
+function editTSize(){
+  const im=IMGEDIT.img, odd=IMGEDIT.rot%2;
+  return {w:odd?im.naturalHeight:im.naturalWidth,
+          h:odd?im.naturalWidth:im.naturalHeight};
+}
+// the whole edit as pixels — full=true ignores the crop (the cropping drag
+// needs the uncut picture under it)
+function editBake(full){
+  const st=IMGEDIT, im=st.img, t=editTSize();
+  const off=document.createElement('canvas');
+  off.width=t.w; off.height=t.h;
+  const g=off.getContext('2d');
+  g.filter=`brightness(${st.b}%) contrast(${st.c}%) saturate(${st.s}%) hue-rotate(${st.h}deg)`;
+  g.translate(t.w/2,t.h/2);
+  g.scale(st.fh?-1:1,st.fv?-1:1);      // flips outermost: they mean the screen
+  g.rotate(st.rot*Math.PI/2);
+  g.drawImage(im,-im.naturalWidth/2,-im.naturalHeight/2);
+  const cr=full?null:st.crop;
+  if(!cr)return off;
+  const out=document.createElement('canvas');
+  out.width=Math.max(1,Math.round(cr.w)); out.height=Math.max(1,Math.round(cr.h));
+  out.getContext('2d').drawImage(off,cr.x,cr.y,cr.w,cr.h,0,0,out.width,out.height);
+  return out;
+}
+function editPaint(){
+  const st=IMGEDIT, cv=$('aedit');
+  if(!st||!st.img||!cv||st.raf)return;
+  st.raf=requestAnimationFrame(()=>{
+    st.raf=0;
+    if(IMGEDIT!==st||!$('aedit'))return;
+    const t=editTSize();
+    const showFull=st.cropping||!st.crop;
+    const view=showFull?{x:0,y:0,w:t.w,h:t.h}:st.crop;
+    const paneW=cv.parentElement.clientWidth||300;
+    const scale=Math.min(paneW/view.w,340/view.h);
+    const dpr=window.devicePixelRatio||1;
+    cv.width=Math.max(1,Math.round(view.w*scale*dpr));
+    cv.height=Math.max(1,Math.round(view.h*scale*dpr));
+    cv.style.width=Math.round(view.w*scale)+'px';
+    const g=cv.getContext('2d');
+    g.drawImage(editBake(showFull),0,0,cv.width,cv.height);
+    if(st.cropping&&st.drag&&st.drag.w>2){
+      const s=scale*dpr, d=st.drag;
+      g.strokeStyle='#7fd88f'; g.lineWidth=2; g.setLineDash([6,4]);
+      g.strokeRect(d.x*s,d.y*s,d.w*s,d.h*s);
+      g.setLineDash([]);
+    }
+  });
+}
+function editWireCrop(){
+  const cv=$('aedit'); if(!cv)return;
+  // scale read live from the canvas itself: a crop is only ever dragged over
+  // the full picture, so the rect and the turned size agree by construction
+  const pos=e=>{
+    const r=cv.getBoundingClientRect(), sc=r.width/editTSize().w;
+    return {x:(e.clientX-r.left)/sc,y:(e.clientY-r.top)/sc};
+  };
+  cv.onpointerdown=e=>{
+    const st=IMGEDIT; if(!st||!st.cropping)return;
+    try{ cv.setPointerCapture(e.pointerId); }catch(_){}
+    const p=pos(e);
+    st.drag={x0:p.x,y0:p.y,x:p.x,y:p.y,w:0,h:0};
+  };
+  cv.onpointermove=e=>{
+    const st=IMGEDIT; if(!st||!st.cropping||!st.drag)return;
+    const p=pos(e), d=st.drag;
+    d.x=Math.min(d.x0,p.x); d.y=Math.min(d.y0,p.y);
+    d.w=Math.abs(p.x-d.x0); d.h=Math.abs(p.y-d.y0);
+    editPaint();
+  };
+  cv.onpointerup=()=>{
+    const st=IMGEDIT; if(!st||!st.cropping||!st.drag)return;
+    const t=editTSize(), d=st.drag;
+    st.drag=null; st.cropping=false;
+    $('ecrop').classList.remove('dirty'); cv.style.cursor='';
+    const x=Math.max(0,Math.min(d.x,t.w-1)), y=Math.max(0,Math.min(d.y,t.h-1));
+    const w=Math.min(d.w,t.w-x), h=Math.min(d.h,t.h-y);
+    if(w>4&&h>4)st.crop={x,y,w,h};
+    editDirtyUi(); editPaint();
+  };
+}
+function editCropMode(){
+  const st=IMGEDIT; if(!st||!st.img)return;
+  st.cropping=!st.cropping; st.crop=null; st.drag=null;
+  $('ecrop').classList.toggle('dirty',st.cropping);
+  $('aedit').style.cursor=st.cropping?'crosshair':'';
+  if(st.cropping)$('status').textContent='drag a rectangle on the picture — the drag is the crop';
+  editDirtyUi(); editPaint();
+}
+function editFlip(k){
+  const st=IMGEDIT; if(!st||!st.img)return;
+  st[k]=!st[k];
+  if(st.crop){ st.crop=null;
+    $('status').textContent='the crop was cleared — drag it again on the mirrored picture'; }
+  editDirtyUi(); editPaint();
+}
+function editRot(){
+  const st=IMGEDIT; if(!st||!st.img)return;
+  st.rot=(st.rot+1)%4;
+  if(st.crop){ st.crop=null;
+    $('status').textContent='the crop was cleared — drag it again on the turned picture'; }
+  editDirtyUi(); editPaint();
+}
+function editSlide(){
+  const st=IMGEDIT; if(!st)return;
+  st.b=+$('e_b').value; st.c=+$('e_c').value;
+  st.s=+$('e_s').value; st.h=+$('e_h').value;
+  $('ev_b').textContent=st.b+'%'; $('ev_c').textContent=st.c+'%';
+  $('ev_s').textContent=st.s+'%'; $('ev_h').textContent=st.h+'°';
+  editDirtyUi(); editPaint();
+}
+function editDirty(){
+  const st=IMGEDIT;
+  return !!st&&!!(st.fh||st.fv||st.rot||st.crop
+                  ||st.b!==100||st.c!==100||st.s!==100||st.h!==0);
+}
+function editDirtyUi(){
+  const st=IMGEDIT, r=$('editacts');
+  if(r)r.hidden=!editDirty();
+  const bh=$('efh'), bv=$('efv');
+  if(bh)bh.classList.toggle('dirty',!!st.fh);
+  if(bv)bv.classList.toggle('dirty',!!st.fv);
+}
+function editReset(){
+  const st=IMGEDIT; if(!st)return;
+  IMGEDIT={name:st.name,img:st.img,...editDefaults()};
+  ['e_b','e_c','e_s'].forEach(i=>{ if($(i))$(i).value=100; });
+  if($('e_h'))$('e_h').value=0;
+  ['ev_b','ev_c','ev_s'].forEach(i=>{ if($(i))$(i).textContent='100%'; });
+  if($('ev_h'))$('ev_h').textContent='0°';
+  ['efh','efv','ecrop'].forEach(i=>{ if($(i))$(i).classList.remove('dirty'); });
+  const cv=$('aedit'); if(cv)cv.style.cursor='';
+  editDirtyUi(); editPaint();
+}
+async function editSave(over){
+  const st=IMGEDIT;
+  if(!st||!st.img||!INSPECT||!editDirty())return;
+  const blob=await new Promise(r=>editBake(false).toBlob(r,'image/webp',0.92));
+  if(!blob)return void($('status').innerHTML=
+    '<span class="warn">could not bake the edit</span>');
+  $('status').textContent='saving the edit…';
+  let j;
+  try{
+    const r=await fetch('/api/media/upload?fn='+encodeURIComponent(st.name+'.webp')
+        +(over?'&over=1':''),
+      {method:'POST',body:blob,headers:{'Content-Type':'application/octet-stream'}});
+    j=await r.json();
+  }catch(ex){ j={error:String(ex)}; }
+  if(j.error)return void($('status').innerHTML=`<span class="warn">${esc(j.error)}</span>`);
+  $('status').innerHTML=over
+    ?`<span class="ok">“${esc(j.media)}” now wears the edit</span> — every card showing it follows`
+    :`<span class="ok">the edit landed beside it as “${esc(j.media)}”</span> — the original is untouched`;
+  await refresh();
+  inspectAsset('media',j.media);
+}
 
 // ── the cast ──────────────────────────────────────────────
 // Characters, locations, props and styles as things the library knows by
@@ -4611,9 +5263,13 @@ function voicedCard(c){
     </div>
     <div class="arow">
       <span class="lbl">you said</span>
-      <span id="pn${c.id}">${perf}</span>
+      <span id="pn${c.id}" ${c.haveperf?`class="alnk" onclick="inspectTake(${c.id})"
+        title="the performance itself, in the inspector — waveform, trim, and a way into the Media tab"`:''}>${perf}</span>
       <span style="flex:1"></span>
-      <button onclick="pickPerf(${c.id})">${c.perf?'replace…':'import a recording…'}</button>
+      <button onclick="recordPerf(${c.id})"
+        title="perform the line right here — the mic, no file dialog"><span
+        style="color:var(--red)">●</span> ${c.perf?'re-record…':'record…'}</button>
+      <button onclick="pickPerf(${c.id})">${c.perf?'replace from file…':'import…'}</button>
       <button id="pk${c.id}" onclick="playPerf(${c.id})" ${c.haveperf?'':'disabled'}
         title="hear your own recording, before conversion">▶ Yours</button>
     </div>
@@ -6208,6 +6864,157 @@ function playPerf(id){
   AUDIO=new Audio('/api/take?f='+encodeURIComponent(c.perf));
   AUDIO.play();
 }
+
+// ── the recording desk ────────────────────────────────────
+// One microphone strip for the whole app, floating above everything so the
+// card repaints happening underneath cannot tear a take down. Two doors in:
+// the Media tab records a clip for the library, a ◎ voiced card records the
+// performance that drives it. Same desk, different landing — the upload
+// endpoints already take any blob the browser makes, so recording is only
+// ever capture plus the import that already existed.
+//
+// MediaRecorder runs without a timeslice on purpose: chunked webm is only
+// demuxable from its first chunk, and one blob at stop is the only shape
+// ffmpeg upstairs is guaranteed to read. And the enhancements a phone call
+// wants — echo cancellation, noise gates, auto gain — are all off: they pump
+// and smear exactly the timbre and dynamics that cloning and conversion are
+// here to keep. The meter is there so you can set your own level instead.
+let REC=null;
+async function recStart(target){
+  if(REC)return;                                   // one take at a time
+  if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia))
+    return void($('status').innerHTML='<span class="warn">no microphone here</span>'+
+      ' — recording needs the app or a 127.0.0.1 tab; from another machine, import a file instead');
+  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; } // monitoring bleeds into the take
+  stopAssetSrc();                                  // and so does the inspector
+  let stream;
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:{
+      echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  }catch(ex){
+    return void($('status').innerHTML='<span class="warn">the microphone said no</span> — '+
+      esc(ex.name==='NotAllowedError'||ex.name==='NotFoundError'
+        ?'give this app microphone permission in System Settings and try again'
+        :String(ex.message||ex)));
+  }
+  const mime=['audio/webm;codecs=opus','audio/webm','audio/mp4']
+    .find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported(t))||'';
+  const mr=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
+  const ctx=new AudioContext();
+  const an=ctx.createAnalyser(); an.fftSize=2048;
+  ctx.createMediaStreamSource(stream).connect(an);
+  const rec=REC={target,stream,mr,ctx,an,buf:new Uint8Array(an.fftSize),
+                 chunks:[],t0:performance.now(),raf:0,blob:null,url:null};
+  mr.ondataavailable=e=>{ if(e.data&&e.data.size)rec.chunks.push(e.data); };
+  // guarded: a cancelled take's late onstop must not finish somebody else's
+  mr.onstop=()=>{ if(rec===REC)recDone(); };
+  mr.start();                                      // no timeslice — see above
+  const now=new Date();
+  const hm=now.toTimeString().slice(0,5).replace(':','.');
+  $('recname').value = target.kind==='clip'
+    ? 'recorded '+now.toLocaleDateString('en-CA').slice(5)+' '+hm
+    : `card ${target.id} take ${hm}`;
+  $('rechint').textContent = target.kind==='clip'
+    ? 'straight into the clip library — a clone reference only ever uses the first 10s'
+    : `performing card #${target.id} — the rhythm and feeling carry over, the voice does not`;
+  $('recdot').classList.add('live');
+  $('rectime').textContent='0:00';
+  $('recstop').hidden=false;
+  $('recplay').hidden=$('recsave').hidden=$('recagain').hidden=true;
+  $('recbar').hidden=false;
+  recMeter();
+  $('status').textContent='recording…';
+}
+function recMeter(){
+  if(!REC)return;
+  REC.an.getByteTimeDomainData(REC.buf);
+  let peak=0;
+  for(let i=0;i<REC.buf.length;i++){
+    const v=Math.abs(REC.buf[i]-128); if(v>peak)peak=v;
+  }
+  const pct=Math.min(100,Math.round(peak/1.27));
+  const bar=$('reclvl');
+  bar.style.width=pct+'%';
+  bar.style.background=pct>92?'var(--red)':pct>75?'var(--amber)':'var(--green)';
+  if(REC.mr.state==='recording'){
+    const s=Math.floor((performance.now()-REC.t0)/1000);
+    $('rectime').textContent=`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  }
+  REC.raf=requestAnimationFrame(recMeter);
+}
+function recStop(){ if(REC&&REC.mr.state==='recording')REC.mr.stop(); }
+function recDone(){
+  if(!REC)return;
+  cancelAnimationFrame(REC.raf);
+  REC.stream.getTracks().forEach(t=>t.stop());     // give the mic light back
+  REC.ctx.close().catch(()=>{});
+  REC.blob=new Blob(REC.chunks,{type:REC.mr.mimeType||'audio/webm'});
+  REC.url=URL.createObjectURL(REC.blob);
+  $('recdot').classList.remove('live');
+  $('recstop').hidden=true;
+  $('recplay').hidden=$('recsave').hidden=$('recagain').hidden=false;
+  $('status').textContent='listen back, then save it — or ↺ and roll again';
+}
+function recPlay(){
+  if(!REC||!REC.url)return;
+  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
+  AUDIO=new Audio(REC.url);
+  AUDIO.play();
+}
+function recTeardown(){
+  if(!REC)return;
+  const rec=REC; REC=null;                         // late onstop checks this
+  cancelAnimationFrame(rec.raf);
+  try{ if(rec.mr.state!=='inactive')rec.mr.stop(); }catch(_){}
+  rec.stream.getTracks().forEach(t=>t.stop());
+  rec.ctx.close().catch(()=>{});
+  if(rec.url){
+    if(AUDIO&&AUDIO.src===rec.url){ AUDIO.pause(); AUDIO=null; }
+    URL.revokeObjectURL(rec.url);
+  }
+  $('recbar').hidden=true;
+}
+function recCancel(){ recTeardown(); $('status').textContent='nothing kept'; }
+function recAgain(){
+  const t=REC&&REC.target;
+  recTeardown();
+  if(t)recStart(t);
+}
+async function recSave(){
+  if(!REC||!REC.blob)return;
+  const rec=REC, t=rec.target;
+  const name=$('recname').value.trim()||'recording';
+  // the extension is cosmetic — the server probes the container by content —
+  // but an honest one keeps a rescued temp file openable by hand
+  const ext=(rec.mr.mimeType||'').includes('mp4')?'.m4a':'.webm';
+  $('recsave').disabled=true;
+  $('status').textContent='saving the take…';
+  let j;
+  try{
+    const r=await fetch((t.kind==='clip'?'/api/clip/upload?fn=':'/api/take/upload?fn=')
+        +encodeURIComponent(name+ext),
+      {method:'POST',body:rec.blob,headers:{'Content-Type':'application/octet-stream'}});
+    j=await r.json();
+  }catch(ex){ j={error:String(ex)}; }
+  $('recsave').disabled=false;
+  // a failed save keeps the desk open: the take is still here, and trying
+  // again costs nothing
+  if(j.error)return void($('status').innerHTML=`<span class="warn">${esc(j.error)}</span>`);
+  recTeardown();
+  if(t.kind==='clip'){
+    $('status').innerHTML=`<span class="ok">clip “${esc(j.clip)}” recorded</span>`+
+      ` · ${fmtSecs(j.secs)}`+
+      (j.renamed?' — that name was taken, so it landed beside it':'');
+    await refresh(); renderClips();
+  }else{
+    await api('/api/chunk',{name:t.doc,id:t.id,perf:j.perf,perfname:j.perfname});
+    $('status').innerHTML=`<span class="ok">take on card #${t.id}</span>`+
+      ` · ${fmtSecs(j.secs)} — press <b>render</b> to hear it in the character's voice`;
+    if(DOC&&DOC.name===t.doc)open_(t.doc,true,t.id);
+  }
+}
+function recordClip(){ recStart({kind:'clip'}); }
+function recordPerf(id){ if(DOC)recStart({kind:'perf',id,doc:DOC.name}); }
 
 function playClip(id){
   const c=DOC.chunks.find(x=>x.id===id); if(!c||!c.clip)return;

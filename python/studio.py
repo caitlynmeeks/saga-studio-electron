@@ -1064,7 +1064,9 @@ def media_list():
     if not MEDIA.is_dir():
         return []
     return sorted(({"name": p.stem, "kind": media_kind(p),
-                    "added": round(p.stat().st_mtime)}
+                    "added": round(p.stat().st_mtime),
+                    "size": p.stat().st_size,
+                    "ext": p.suffix.lower().lstrip(".")}
                    for p in MEDIA.iterdir()
                    if p.suffix.lower() in IMG_EXT + VID_EXT
                    and not p.name.startswith(".")),
@@ -4925,7 +4927,8 @@ class H(BaseHTTPRequestHandler):
                 # `added` is the file's mtime — rename preserves it, so a clip
                 # keeps the date it arrived rather than the date you retitled it
                 "clips": sorted(({"name": p.stem, "secs": clip_secs(p),
-                                  "added": round(p.stat().st_mtime)}
+                                  "added": round(p.stat().st_mtime),
+                                  "size": p.stat().st_size}
                                  for p in CLIPS.glob("*.wav")),
                                 key=lambda c: c["name"]),
                 "media": media_list(),
@@ -5292,29 +5295,52 @@ class H(BaseHTTPRequestHandler):
         """Body is the audio file itself, like _import_archive — a song in a
         base64 JSON field would hold the whole thing in memory twice. ffmpeg
         does the reading, so anything ffmpeg can decode is fair game; what
-        lands in clips/ is always a plain PCM wav this program understands."""
+        lands in clips/ is always a plain PCM wav this program understands.
+
+        And it never overwrites — the rule voices have always lived by. Cards
+        point at a clip by name, so different audio landing under a taken name
+        would change what they play with nothing to mark the seam; and the
+        recording desk files takes under friendly stems that repeat, which
+        must never eat yesterday's take. The same bytes again cost nothing;
+        different bytes wanting a taken name land beside it."""
         fn = parse_qs(u.query).get("fn", ["clip"])[0]
         stem = re.sub(r"[^a-z0-9_-]+", "-", Path(fn).stem.lower()).strip("-")[:40] or "clip"
         if not shutil.which("ffmpeg"):
             return self._send(400, {"error": "ffmpeg is needed to import audio clips"})
         fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".clip-",
                                    suffix=Path(fn).suffix or ".bin")
+        wav = None
         try:
             with os.fdopen(fd, "wb") as f:
                 self._read_body_to(f)
             CLIPS.mkdir(parents=True, exist_ok=True)
-            dest = CLIPS / f"{stem}.wav"
+            fd2, wav = tempfile.mkstemp(dir=CLIPS, prefix=".clip-", suffix=".wav")
+            os.close(fd2)
             r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                                "-i", tmp, str(dest)], capture_output=True, text=True)
+                                "-i", tmp, wav], capture_output=True, text=True)
             if r.returncode:
-                dest.unlink(missing_ok=True)
                 return self._send(400, {"error": "ffmpeg could not read that file: "
                                         + (r.stderr or "").strip()[-300:]})
-            return self._send(200, {"ok": True, "clip": stem, "secs": clip_secs(dest)})
+            name, renamed = stem, False
+            dest = CLIPS / f"{stem}.wav"
+            if dest.exists() and sha256_file(dest) == sha256_file(Path(wav)):
+                Path(wav).unlink(missing_ok=True)   # byte for byte what is here
+            else:
+                if dest.exists():
+                    taken = {p.stem for p in CLIPS.glob("*.wav")}
+                    name, renamed = _free_name(taken, stem, "new"), True
+                    dest = CLIPS / f"{name}.wav"
+                os.replace(wav, dest)
+                os.chmod(dest, 0o644)              # mkstemp makes it 0600
+            wav = None
+            return self._send(200, {"ok": True, "clip": name, "secs": clip_secs(dest),
+                                    "renamed": renamed})
         except Exception as ex:
             return self._send(400, {"error": f"{type(ex).__name__}: {ex}"})
         finally:
             Path(tmp).unlink(missing_ok=True)
+            if wav:
+                Path(wav).unlink(missing_ok=True)
 
     def _take_upload(self, u):
         """A performance to drive a voiced card.
@@ -5433,7 +5459,13 @@ class H(BaseHTTPRequestHandler):
         kept when smaller): the stage shows it identically, and every export,
         source archive and darkride upload gets lighter for free. Never
         overwrites, same rule as clips: media is global, and replacing a
-        name would change every episode showing it."""
+        name would change every episode showing it.
+
+        Except on purpose. ?over=1 is the asset inspector's Apply: an edit of
+        the picture BEHIND the name, asked for by the person looking at it —
+        the press to WebP set the precedent that bytes may change while the
+        name holds, and every card showing it following along is the point."""
+        over = parse_qs(u.query).get("over", ["0"])[0] == "1"
         fn = parse_qs(u.query).get("fn", ["media"])[0]
         ext = Path(fn).suffix.lower()
         if ext not in IMG_EXT + VID_EXT:
@@ -5460,8 +5492,11 @@ class H(BaseHTTPRequestHandler):
                 if sha256_file(existing) == sha256_file(Path(tmp)):
                     return self._send(200, {"ok": True, "media": stem,
                                             "kind": media_kind(existing)})
-                taken = {p.stem for p in MEDIA.iterdir() if p.is_file()}
-                name = _free_name(taken, stem, "new")
+                if over:
+                    existing.unlink()          # the old ext may differ; clear it
+                else:
+                    taken = {p.stem for p in MEDIA.iterdir() if p.is_file()}
+                    name = _free_name(taken, stem, "new")
             dest = MEDIA / f"{name}{ext}"
             os.replace(tmp, dest)              # same filesystem: tmp lives in ROOT
             os.chmod(dest, 0o644)              # mkstemp makes it 0600
@@ -5640,10 +5675,14 @@ class H(BaseHTTPRequestHandler):
         # ever REPLACED by a smaller same-picture, so pool law holds in
         # spirit: no name changes meaning.
         if u.path == "/api/media/compress":
+            # the whole pool by default; with a name, just that one still —
+            # the asset inspector's own press button
+            only = re.sub(r"[^a-z0-9_-]", "", str(d.get("media") or ""))
             pressed, saved = 0, 0
             for p in sorted(MEDIA.iterdir()) if MEDIA.exists() else []:
                 if not p.is_file() \
-                        or p.suffix.lower() not in (".png", ".jpg", ".jpeg"):
+                        or p.suffix.lower() not in (".png", ".jpg", ".jpeg") \
+                        or (only and p.stem != only):
                     continue
                 was = p.stat().st_size
                 w = webp_still(p)
@@ -5654,6 +5693,109 @@ class H(BaseHTTPRequestHandler):
                     saved += was - w.stat().st_size
             return self._send(200, {"ok": True, "pressed": pressed,
                                     "saved": saved})
+        if u.path == "/api/clip/trim":
+            # A trim never edits the clip: cards point at it by name, and a
+            # shorter file behind the same name would change what they play
+            # with nothing to mark the seam. The kept stretch lands beside it
+            # as a copy, named for what it is.
+            try:
+                src = clip_file(re.sub(r"[^a-z0-9_-]", "",
+                                       str(d.get("clip") or "")))
+            except FileNotFoundError:
+                return self._send(404, {"error": "no such clip"})
+            try:
+                a, b = float(d.get("start") or 0), float(d.get("end") or 0)
+            except (TypeError, ValueError):
+                return self._send(400, {"error": "start and end are seconds"})
+            total = clip_secs(src)
+            a, b = max(0.0, min(a, total)), max(0.0, min(b, total))
+            if b - a < 0.1:
+                return self._send(400, {"error": "keep at least a tenth of a second"})
+            if not shutil.which("ffmpeg"):
+                return self._send(400, {"error": "ffmpeg is needed to trim a clip"})
+            taken = {p.stem for p in CLIPS.glob("*.wav")}
+            name, i = f"{src.stem}-trim", 2
+            while name in taken:
+                name, i = f"{src.stem}-trim-{i}", i + 1
+            dest = CLIPS / f"{name}.wav"
+            # -ss/-to on the OUTPUT side of a wav decode is sample-accurate;
+            # there are no keyframes in PCM to snap to
+            r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error",
+                                "-y", "-i", str(src), "-ss", f"{a:.3f}",
+                                "-to", f"{b:.3f}", str(dest)],
+                               capture_output=True, text=True)
+            if r.returncode:
+                dest.unlink(missing_ok=True)
+                return self._send(400, {"error": "ffmpeg could not trim that: "
+                                        + (r.stderr or "").strip()[-300:]})
+            os.chmod(dest, 0o644)
+            return self._send(200, {"ok": True, "clip": name,
+                                    "secs": clip_secs(dest)})
+        if u.path == "/api/take/trim":
+            # A performance trimmed is a NEW take. Takes are content-addressed
+            # precisely so a rendered card keeps the exact recording it
+            # rendered from — so the trim hashes to its own name, the caller
+            # repoints the card, and the dot goes stale honestly.
+            name = re.sub(r"[^0-9a-f]", "", str(d.get("take") or ""))[:20]
+            src = take_path(name) if name else None
+            if not name or not src.exists():
+                return self._send(404, {"error": "no such take"})
+            try:
+                a, b = float(d.get("start") or 0), float(d.get("end") or 0)
+            except (TypeError, ValueError):
+                return self._send(400, {"error": "start and end are seconds"})
+            total = clip_secs(src)
+            a, b = max(0.0, min(a, total)), max(0.0, min(b, total))
+            if b - a < 0.1:
+                return self._send(400, {"error": "keep at least a tenth of a second"})
+            if not shutil.which("ffmpeg"):
+                return self._send(400, {"error": "ffmpeg is needed to trim a take"})
+            fd2, wav = tempfile.mkstemp(dir=TAKES, prefix=".take-", suffix=".wav")
+            os.close(fd2)
+            try:
+                r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error",
+                                    "-y", "-i", str(src), "-ss", f"{a:.3f}",
+                                    "-to", f"{b:.3f}", wav],
+                                   capture_output=True, text=True)
+                if r.returncode:
+                    return self._send(400, {"error": "ffmpeg could not trim that: "
+                                            + (r.stderr or "").strip()[-300:]})
+                new = sha256_file(Path(wav))[:20]
+                dest = take_path(new)
+                if dest.exists():
+                    Path(wav).unlink(missing_ok=True)  # already have this one
+                else:
+                    os.replace(wav, dest)
+                    os.chmod(dest, 0o644)
+                wav = None
+                return self._send(200, {"ok": True, "perf": new,
+                                        "secs": clip_secs(dest)})
+            finally:
+                if wav:
+                    Path(wav).unlink(missing_ok=True)
+        if u.path == "/api/take/to_clip":
+            # a performance crossing the fence into the media pool, as a copy
+            # — the take stays a take, the card keeps its pointer, and the
+            # copy takes a clip name and every clip verb with it
+            name = re.sub(r"[^0-9a-f]", "", str(d.get("take") or ""))[:20]
+            src = take_path(name) if name else None
+            if not name or not src.exists():
+                return self._send(404, {"error": "no such take"})
+            fn = str(d.get("fn") or "take")
+            stem = re.sub(r"[^a-z0-9_-]+", "-", fn.lower()).strip("-")[:40] or "take"
+            CLIPS.mkdir(parents=True, exist_ok=True)
+            dest = CLIPS / f"{stem}.wav"
+            if dest.exists() and sha256_file(dest) == sha256_file(src):
+                pass                                   # already crossed over
+            else:
+                if dest.exists():
+                    taken = {p.stem for p in CLIPS.glob("*.wav")}
+                    stem = _free_name(taken, stem, "new")
+                    dest = CLIPS / f"{stem}.wav"
+                shutil.copy2(src, dest)
+                os.chmod(dest, 0o644)
+            return self._send(200, {"ok": True, "clip": stem,
+                                    "secs": clip_secs(dest)})
         # Keeping current. Both are lockless: asking GitHub and replacing
         # program files touches no document, and the check in particular
         # must never make the editor wait on a slow network.
@@ -6656,6 +6798,55 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "profile": pname,
                                         "voice": vname, "engine": base["engine"],
                                         "secs": clip_secs(VOICES / f"{vname}.wav")})
+            if u.path == "/api/voice/from_clip":
+                # from_card's sibling, reaching the other shelf: a clip in the
+                # media pool — recorded at the desk, or imported — becomes the
+                # reference clip of a new profile. A copy crosses over, never
+                # the clip itself, so the audio cards pointing at it keep
+                # playing exactly what they always played.
+                try:
+                    src = clip_file(str(d.get("clip") or ""))
+                except FileNotFoundError:
+                    return self._send(404, {"error": "no such clip"})
+                pname = _clean(d.get("profile"), 60)
+                if not pname:
+                    return self._send(400, {"error": "a name is needed"})
+                profs = profiles()
+                if pname in profs:
+                    return self._send(400, {"error": f"there is already a "
+                                            f"profile called {pname!r}"})
+                if not shutil.which("ffmpeg"):
+                    return self._send(400, {"error": "ffmpeg is needed to make a voice"})
+                stem = re.sub(r"[^a-z0-9_-]+", "-", pname.lower()).strip("-")[:40] or "voice"
+                VOICES.mkdir(parents=True, exist_ok=True)
+                # Never overwrite a voice: its NAME is part of every chunk
+                # hash that used it. Same rule as import, upload and from_card.
+                taken = {q.stem for q in VOICES.iterdir() if q.is_file()}
+                vname = stem if stem not in taken else _free_name(taken, stem, "new")
+                dest = VOICES / f"{vname}.wav"
+                # mono on the way over, as _voice_upload does — the engine
+                # reads one channel, and a stereo clip should not weigh double
+                r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error",
+                                    "-y", "-i", str(src), "-ac", "1", str(dest)],
+                                   capture_output=True, text=True)
+                if r.returncode:
+                    dest.unlink(missing_ok=True)
+                    return self._send(400, {"error": "ffmpeg could not read that clip: "
+                                            + (r.stderr or "").strip()[-300:]})
+                # The profile starts from Default — a clip carries no knob
+                # settings the way a card does. Kokoro speaks presets rather
+                # than clips, so hand the profile to the engine that clones.
+                base = dict(profs.get("Default") or BASE_PROFILE)
+                base.pop("fx", None)
+                base["voices"] = [vname]
+                base["active"] = 0
+                if base.get("engine") == "kokoro":
+                    base["engine"] = "chatterbox"
+                profs[pname] = base
+                save_profiles(profs)
+                return self._send(200, {"ok": True, "profile": pname,
+                                        "voice": vname, "engine": base["engine"],
+                                        "secs": clip_secs(dest)})
             if u.path == "/api/profile/delete":
                 nm = d.get("profile")
                 if nm == "Default":
