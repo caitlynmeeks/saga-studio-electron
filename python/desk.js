@@ -32,6 +32,8 @@ const SagaDesk = (() => {
   'use strict';
   let ctx = null, masterNode = null, monitorNode = null;
   let chNodes = {};                    // channel id -> GainNode, made lazily
+  let chAna = {}, masterAna = null;    // the meters' taps, one per node
+  let VUBUF = null;                    // one scratch buffer serves them all
   // desired values, held even before the first ride creates the context
   let MIX = { gains: {}, master: 1 };
   let MON = { v: 1, mute: false };
@@ -49,6 +51,12 @@ const SagaDesk = (() => {
     monitorNode.connect(ctx.destination);
     masterNode.gain.value = MIX.master;
     monitorNode.gain.value = MON.mute ? 0 : MON.v;
+    // the Master meter taps BEFORE the monitor: it reads the book's level,
+    // not this machine's loudness — a muted monitor still shows the show
+    masterAna = ctx.createAnalyser();
+    masterAna.fftSize = 512;
+    masterNode.connect(masterAna);
+    VUBUF = new Float32Array(512);
     return ctx;
   }
   // The browser may refuse sound until a click has landed somewhere. True
@@ -78,7 +86,13 @@ const SagaDesk = (() => {
       const g = ensure().createGain();
       g.gain.value = id in MIX.gains ? MIX.gains[id] : 1;
       g.connect(masterNode);
+      // the channel's meter, tapped POST-fader: it shows what you hear,
+      // so a pulled fader pulls the bar and a mute goes dark
+      const a = ctx.createAnalyser();
+      a.fftSize = 512;
+      g.connect(a);
       chNodes[id] = g;
+      chAna[id] = a;
     }
     return chNodes[id];
   }
@@ -103,6 +117,26 @@ const SagaDesk = (() => {
   function setMonitor(v, mute) {
     MON = { v: Math.max(0, Math.min(1, +v || 0)), mute: !!mute };
     if (ctx) glide(monitorNode, MON.mute ? 0 : MON.v);
+  }
+
+  // ── the meters ──────────────────────────────────────────────────────
+  // Instantaneous peaks off the analyser taps: {master, chans:{id: peak}},
+  // linear, and past 1.0 means the EXPORT would clip (the live desk does
+  // not). null while the clock is stopped, so a paused desk's bars fall.
+  const peakOf = a => {
+    a.getFloatTimeDomainData(VUBUF);
+    let p = 0;
+    for (let i = 0; i < VUBUF.length; i++) {
+      const v = VUBUF[i] < 0 ? -VUBUF[i] : VUBUF[i];
+      if (v > p) p = v;
+    }
+    return p;
+  };
+  function levels() {
+    if (!ctx || ctx.state !== 'running') return null;
+    const out = { master: peakOf(masterAna), chans: {} };
+    for (const id in chAna) out.chans[id] = peakOf(chAna[id]);
+    return out;
   }
 
   // decoded buffers by URL. Two cards with the same words share a wav —
@@ -276,6 +310,6 @@ const SagaDesk = (() => {
     return out.getChannelData(0);
   }
 
-  return { ensure, resume, setMix, setMonitor, play, renderOffline,
+  return { ensure, resume, setMix, setMonitor, play, renderOffline, levels,
            running: () => !!ctx && ctx.state === 'running' };
 })();

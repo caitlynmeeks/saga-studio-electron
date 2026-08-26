@@ -195,6 +195,14 @@ let RIDE=null;             // the desk's handle for the playing stretch
 let TOTAL=0;               // the stretch's length, for the bar's clock
 let MONV=1, MONMUTE=false; // this machine's loudness — never in any render
 setInterval(()=>tick(),250);
+// the editor's Mixer wears the VU bars, but the ride's sound lives HERE —
+// so the embed reads its own meters and hands them across, only while
+// something is actually playing
+setInterval(()=>{
+  if(!EMBED||!RIDE||!RIDE.playing)return;
+  const v=SagaDesk.levels();
+  if(v)say({type:'levels',master:v.master,chans:v.chans});
+},100);
 
 // ── the viewer's knobs ────────────────────────────────────
 // The same controls the exported web player wears: volume, captions, full

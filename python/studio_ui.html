@@ -538,6 +538,15 @@ display:flex;align-items:center}
 .phead+.psec{border-top:0;padding-top:0;margin-top:9px}
 .mixrow{display:flex;align-items:center;gap:7px;margin-bottom:6px;font-size:12px}
 .mixrow input[type=range]{flex:1;min-width:0}
+/* fader + its VU bar, stacked: the bar reads post-fader off the desk, so
+   it shows what the room hears — amber past full scale, where the export
+   would clip even though the live desk does not */
+.mixrow .fader{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.mixrow .fader input[type=range]{width:100%;min-width:0;flex:none}
+.vu{height:3px;background:var(--line);border-radius:2px;overflow:hidden}
+.vu i{display:block;height:100%;width:0%;background:var(--green);
+  border-radius:2px;transition:width 80ms linear}
+.vu i.hot{background:var(--amber)}
 .mixname{flex:0 0 30%;min-width:0;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;color:var(--bright)}
 .mixname[onclick]{cursor:text}
@@ -1636,40 +1645,39 @@ function renderMixer(force){
   const M={gain:100,mute:false,...(DOC.master||{})};
   host.innerHTML=`<div class="pedit">
     <div class="phead" style="cursor:pointer" onclick="foldMixer()">
-      <b>${MIXFOLD?'▸':'▾'} Mixer</b>${qm('the sound of the book itself. Every audio '
-        +'card plays on Channel 1 unless its right-click sends it elsewhere — one '
-        +'per character, one for music, one for sfx, as you like. The faders and '
-        +'the Master are LIVE: drag one during a play or a ride and you hear it '
-        +'move, mid-word — and the same levels land in the book and the exports, '
-        +'since nothing re-renders. The slider in the top bar is different — '
-        +'monitor volume, this machine only, never in a render. '
-        +'Click a channel name to rename it.')}
+      <b>${MIXFOLD?'▸':'▾'} Mixer</b>${qm('the book’s own sound, live: faders '
+        +'land mid-word, and the same levels ship in every export — nothing '
+        +'re-renders. Right-click a card to send it to a channel; click a name '
+        +'to rename. The top-bar slider is different: monitor volume, this '
+        +'machine only.')}
       <span class="mut">${ch.length===1?'':ch.length+' channels'}</span>
     </div>`+(MIXFOLD?'':`<div class="mixrow mixmaster">
       <span class="mixname"><b>Master</b></span>
-      <input type="range" min="0" max="200" step="1" value="${M.gain}"
+      <span class="fader"><input type="range" min="0" max="200" step="1" value="${M.gain}"
         oninput="$('mvM').textContent=Math.round(this.value)+'%';masterLive(this.value)"
         onchange="masterSet({gain:+this.value})"
-        title="the book's own level, over the whole mix — pull it down and even a clipping mix comes back">
+        title="the book's level — below 100% rescues a clipping mix">
+      <span class="vu"><i id="vuM"></i></span></span>
       <span class="pv" id="mvM">${Math.round(M.gain)}%</span>
       <button class="tiny ${M.mute?'on':''}" onclick="masterSet({mute:${!M.mute}})"
-        title="mute the whole book — exports too, so mind the desk on your way out">M</button>
+        title="mute the whole book — exports too">M</button>
     </div>`+ch.map((c,i)=>`<div class="mixrow">
       <span class="mixname" ${c.id==='main'?'':`onclick="renameChannel(${i})"
         title="click to rename"`}>${esc(c.name)}</span>
-      <input type="range" min="0" max="200" step="1" value="${c.gain}"
+      <span class="fader"><input type="range" min="0" max="200" step="1" value="${c.gain}"
         oninput="$('mv${i}').textContent=Math.round(this.value)+'%';chLive(${i},this.value)"
         onchange="chSet(${i},{gain:+this.value})"
-        title="this channel's level in the mix — 100% is as rendered, live under your hand">
+        title="this channel's level — live">
+      <span class="vu"><i id="vu${i}"></i></span></span>
       <span class="pv" id="mv${i}">${Math.round(c.gain)}%</span>
       <button class="tiny ${c.mute?'on':''}" onclick="chSet(${i},{mute:${!c.mute}})"
-        title="mute this channel — in the book and on the stage too, right now">M</button>
+        title="mute this channel">M</button>
       ${c.id==='main'?'':`<button class="tiny" onclick="removeChannel(${i})"
-        title="remove this channel — its ${used[c.id]||0} card${(used[c.id]||0)===1?'':'s'} return to Channel 1">✕</button>`}
+        title="remove — its ${used[c.id]||0} card${(used[c.id]||0)===1?'':'s'} return to Channel 1">✕</button>`}
     </div>`).join('')
     +`<button class="tiny" onclick="addChannel()" style="margin-top:4px">+ Add Channel</button>
       <button class="tiny" onclick="channelsPerVoice()" style="margin-top:4px"
-        title="build the desk from the cast: a channel for every voice this story speaks in, its cards assigned — pressing again reuses them">A channel per voice</button>`)
+        title="a channel for every voice, its cards assigned — safe to press again">A channel per voice</button>`)
     +`</div>`;
 }
 function masterSet(patch){
@@ -1787,6 +1795,33 @@ async function channelsPerVoice(){
       make.length===1?'':'s'}, assigned ${moved} card${moved===1?'':'s'}</span>`
     +(locked?` — ${locked} locked card${locked===1?'':'s'} left alone`:'')
     +(crowded?' — the desk holds 24 channels, so the most-used voices went first':'');
+}
+// ── the VU bars ───────────────────────────────────────────
+// One meter per fader, fed by whichever desk is speaking: this window's own
+// (book preview) read directly, the stage's arriving as {type:'levels'}
+// broadcasts from the embed. Peaks are sqrt-scaled so speech sits mid-bar
+// instead of hugging the floor; fast attack, gentle fall; a bar past full
+// scale goes amber — the export would clip there, though the live desk
+// does not. Quiet costs nothing: once every bar has fallen dark the loop
+// stops touching the DOM.
+let VUSTAGE=null, VUDISP={}, VULIT=false;
+setInterval(paintVU,80);
+function paintVU(){
+  let v=null;
+  if(BOOKPLAY&&BOOKPLAY.playing)v=SagaDesk.levels();
+  if(!v&&VUSTAGE&&Date.now()-VUSTAGE.at<400)v=VUSTAGE;
+  if(!v&&!VULIT)return;
+  VULIT=false;
+  const set=(key,el,lvl)=>{
+    const now=Math.max(lvl||0,(VUDISP[key]||0)*0.78);
+    VUDISP[key]=now<0.004?0:now;
+    if(now)VULIT=true;
+    if(!el)return;
+    el.style.width=Math.min(100,Math.sqrt(now)*100)+'%';
+    el.classList.toggle('hot',now>=1);
+  };
+  set('master',$('vuM'),v?v.master:0);
+  (DOC?chList():[]).forEach((c,i)=>set(c.id,$('vu'+i),v&&v.chans?v.chans[c.id]:0));
 }
 
 function profEditor(n){
@@ -7774,6 +7809,7 @@ if(STAGE)STAGE.onmessage=e=>{
   if(!DOC||m.name!==DOC.name)return;
   if(m.type==='state'){ const b=$('stgplay');
     if(b)b.textContent=m.playing?'⏸ Story':'▶ Story'; }
+  if(m.type==='levels'){ VUSTAGE={at:Date.now(),master:m.master,chans:m.chans}; }
   if(m.type==='popin'){ if(POPUP){ try{POPUP.close()}catch(_){} POPUP=null; }
     POPSEEN=0; clearInterval(POPWATCH); POPWATCH=null; paintStageBtn(false);
     if(STAGE)STAGE.postMessage({type:'pause',to:'embed'}); }
