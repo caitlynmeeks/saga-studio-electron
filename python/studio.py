@@ -54,7 +54,7 @@ import unicodedata
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 HERE = Path(__file__).resolve().parent
 # ── keeping current ─────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ APP_BRANCH = os.environ.get("SAGA_BRANCH", "main")
 APP_DIR = Path(os.environ.get("SAGA_APP_DIR") or HERE).expanduser()
 # Exactly what an update replaces: the program, never the data. A name not
 # on this list cannot be written by an update, whatever a tarball holds.
-PAYLOAD = ("studio.py", "studio_ui.html", "stage_ui.html", "player.js",
+PAYLOAD = ("studio.py", "studio_ui.html", "stage_ui.html", "player.js", "desk.js",
            "export_player.html", "omnivoice_server.py", "chatterbox_server.py",
            "saga_mcp.py", "openai_agent.py", "discuss_rules.md",
            "requirements.txt")
@@ -3798,25 +3798,16 @@ def master_gain(doc):
     return 0.0 if m.get("mute") else _num(m.get("gain"), 100.0, 0.0, 200.0) / 100.0
 
 
-def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
-    """Mix every card onto one timeline; (audio, sample_rate, missing, marks) back.
+def mix_events(doc, gap=0.35, frm=None, upto=None, chime=False, secs_of=None):
+    """The cursor walk, factored out of mixdown so /api/mix_plan and the
+    shipped sum read one score and can never drift. Returns (events, cursor,
+    missing, marks): events are (start, kind, path, c) tuples, start in
+    seconds, path None for a chime. Placement only — gains are nobody's
+    business here.
 
-    `marks` is where each card starts, in seconds — [{"id", "at"}, …]. The
-    browser follows it during preview to show which card is speaking, which is
-    also what makes "stop, fix that one" possible without hunting for it.
-
-    `chime` marks unready cards with a tone instead of dropping them. Preview
-    only; assemble() leaves them out, as it always has.
-
-    `frm` is a card id to start at: the timeline then begins with that card at
-    zero and runs to the end, which is how you hear the rest of the book after
-    fixing something in the middle without sitting through what came before.
-    A music bed opened earlier is simply not in that mix — the cards before the
-    start are not on the timeline at all, so there is nothing to carry over.
-
-    Plain numpy throughout: the mix is adds and multiplies on one array, and
-    keeping torch out of it is what lets the studio itself run on a small
-    interpreter — the engines that need torch live behind worker processes.
+    `secs_of(path)` supplies durations: the default reads sf.info headers,
+    which is what the plan wants; mixdown passes a reader that also caches
+    the arrays it is about to sum.
 
     A cursor walks the cards in order. Speech is placed at the cursor and
     advances it by its own length plus a rest (scene breaks get a longer one,
@@ -3825,18 +3816,27 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
     the cursor and advances it either past the whole clip (mode "full") or by
     its "after" seconds — in which case the rest of the clip keeps playing
     *under* whatever the cursor reaches next, which is how music fades out
-    beneath the first line of narration. Overlaps are summed and clamped.
+    beneath the first line of narration.
 
-    Fades are percentages of the clip: fade [10, 90] ramps up over the first
-    10% and down over the last 10%. Gain is applied after the fade.
+    `marks` is where each card starts, in seconds — [{"id", "at"}, …]. The
+    browser follows it during playback to show which card is speaking, which
+    is also what makes "stop, fix that one" possible without hunting for it.
 
-    No model here — the sample rate comes from the first speech chunk on disk
-    (they are all rendered at the model's rate), so mixing never costs a
-    ten-second model load. Both assemble() and the in-browser preview sit on
-    this one function, so what you hear is what ships, by construction."""
-    import numpy as np
-    profs = profiles()          # once for the whole mix, not once per card
-    chg = channel_gains(doc)    # the mixer's faders, resolved once too
+    `chime` marks unready cards with a tone instead of dropping them. Preview
+    only; assemble() leaves them out, as it always has.
+
+    `frm` is a card id to start at: the timeline then begins with that card at
+    zero and runs to the end, which is how you hear the rest of the book after
+    fixing something in the middle without sitting through what came before.
+    A music bed opened earlier is simply not in that mix — the cards before the
+    start are not on the timeline at all, so there is nothing to carry over."""
+    if secs_of is None:
+        import soundfile as sf
+
+        def secs_of(path):
+            i = sf.info(str(path))
+            return i.frames / i.samplerate
+    profs = profiles()          # once for the whole walk, not once per card
     cards = doc["chunks"]
     if frm is not None:
         i = next((k for k, c in enumerate(cards) if c["id"] == frm), None)
@@ -3867,7 +3867,7 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
         if not chime:
             return
         note(c)
-        events.append((cursor, "chime", None, None, c))
+        events.append((cursor, "chime", None, c))
         cursor += CHIME_SECS + gap
         last_gap = gap
 
@@ -3910,11 +3910,11 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
             if not c.get("clip") or not f.exists():
                 unready(c)
                 continue
-            w, wsr = _read_wav(f)
+            secs = secs_of(f)
             note(c)
-            events.append((cursor, kind, w, wsr, c))
+            events.append((cursor, kind, f, c))
             cursor += (max(0.0, float(c.get("after", 0.0)))
-                       if c.get("mode") == "after" else w.shape[-1] / wsr)
+                       if c.get("mode") == "after" else secs)
             last_gap = 0.0                    # a clip is not followed by a rest
             continue
         f = AUDIO / f"{chunk_hash(c, doc, profs)}.wav"
@@ -3930,29 +3930,69 @@ def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
                 # it; the card is still there, just dry
                 print(f"plugin failed on card {c['id']}: "
                       f"{type(ex).__name__}: {ex}", flush=True)
-        w, wsr = _read_wav(f)
+        secs = secs_of(f)
         note(c)
-        events.append((cursor, kind, w, wsr, c))
+        events.append((cursor, kind, f, c))
         # a voiced card lands here too — rendered and content-addressed exactly
         # as speech is — but it has no text to carry a scene mark
         g = 1.1 if is_speech(c) and c["text"].strip().startswith("❦") else gap
-        cursor += w.shape[-1] / wsr + g
+        cursor += secs + g
         last_gap = g
+    return events, cursor, missing, marks
+
+
+def mixdown(doc, gap=0.35, frm=None, upto=None, chime=False):
+    """Mix every card onto one timeline; (audio, sample_rate, missing, marks) back.
+
+    The walk itself lives in mix_events — written once, shared with the live
+    desk's /api/mix_plan, so the desk in the browser and the book that ships
+    read one score. This half is the sum: place, fade, gain, clamp. Overlaps
+    are summed and clamped.
+
+    Fades are percentages of the clip: fade [10, 90] ramps up over the first
+    10% and down over the last 10%. Gain is applied after the fade.
+
+    Plain numpy throughout: the mix is adds and multiplies on one array, and
+    keeping torch out of it is what lets the studio itself run on a small
+    interpreter — the engines that need torch live behind worker processes.
+
+    No model here — the sample rate comes from the first speech chunk on disk
+    (they are all rendered at the model's rate), so mixing never costs a
+    ten-second model load. Both assemble() and the in-browser preview sit on
+    this one function, so what you hear is what ships, by construction."""
+    import numpy as np
+    profs = profiles()          # once for the whole mix, not once per card
+    chg = channel_gains(doc)    # the mixer's faders, resolved once too
+    cache = {}                  # path -> (samples, rate): read once, sum often
+
+    def reader(path):
+        if path not in cache:
+            cache[path] = _read_wav(path)
+        w, wsr = cache[path]
+        return w.shape[-1] / wsr
+
+    events, cursor, missing, marks = mix_events(doc, gap, frm, upto, chime,
+                                                reader)
     if not events:
         return None, 0, missing, []
     # every speech chunk is at the model's rate; only clips ever need resampling.
     # A preview of a chapter nobody has rendered yet is all chimes and carries no
     # rate of its own, so fall back to a clip's, then to the model's.
-    sr = (next((e[3] for e in events if e[1] in ("speech", "voiced")), None)
-          or next((e[3] for e in events if e[3]), None) or 24000)
+    sr = (next((cache[e[2]][1] for e in events if e[1] in ("speech", "voiced")), None)
+          or next((cache[e[2]][1] for e in events if e[2] is not None), None) or 24000)
     pieces = []
-    for start, kind, w, wsr, c in events:
+    for start, kind, path, c in events:
         if kind == "chime":
             pieces.append((int(start * sr), chime_wave(sr)))
             continue
+        w, wsr = cache[path]
         if wsr != sr:                         # mono already: _read_wav saw to it
             w = _resample(w, wsr, sr)
         if kind == "audio":
+            # two cards can share one clip, and the cache hands them the same
+            # array — the fades below write in place, so they fade a copy
+            if w is cache[path][0]:
+                w = w.copy()
             n = w.shape[-1]
             lo, hi = (list(c.get("fade") or []) + [0, 100])[:2]
             fi, fo = int(n * lo / 100), int(n * (100 - hi) / 100)
@@ -4955,6 +4995,12 @@ class H(BaseHTTPRequestHandler):
             # HTML export — see the file's own preamble for why it is alone
             return self._send(200, (HERE / "player.js").read_bytes(),
                               "text/javascript; charset=utf-8")
+        if u.path == "/desk.js":
+            # the live mixing desk — the Web Audio graph the stage and the
+            # editor both play through. Never inlined into an export: the
+            # exported player has no server and stays premixed.
+            return self._send(200, (HERE / "desk.js").read_bytes(),
+                              "text/javascript; charset=utf-8")
         if u.path == "/api/state":
             pcounts, ccounts, mcounts, mhome = library_counts()
             return self._send(200, {
@@ -5215,6 +5261,29 @@ class H(BaseHTTPRequestHandler):
                 buf = io.BytesIO()
                 sf.write(buf, audio * (g / 100.0), asr, format="WAV", subtype="FLOAT")
                 return self._send(200, buf.getvalue(), "audio/wav")
+            return self._send_file(f, "audio/wav")
+        if u.path == "/api/card_wav":
+            # the desk's feed: one card, fx-rendered and GAIN-FREE — profile,
+            # channel and Master levels are the browser graph's business now,
+            # applied live on its own nodes. card_audio above keeps them
+            # baked, for the lone ▶ Full button that plays outside the desk.
+            doc = load(q.get("name", [""])[0])
+            if not doc:
+                return self._send(404, b"", "text/plain")
+            cid = int(q.get("id", ["-1"])[0])
+            c = next((x for x in doc["chunks"] if x["id"] == cid), None)
+            if c is None or not is_renderable(c):
+                return self._send(404, b"", "text/plain")
+            f = AUDIO / f"{chunk_hash(c, doc)}.wav"
+            if not f.exists():
+                return self._send(404, b"", "text/plain")
+            eff = fx_of(params_for(c, doc))
+            if eff:
+                try:
+                    f = fx_render(f, eff)
+                except Exception as ex:
+                    print(f"plugin failed on card {cid}: "
+                          f"{type(ex).__name__}: {ex}", flush=True)
             return self._send_file(f, "audio/wav")
         if u.path == "/api/take":
             nm = re.sub(r"[^a-z0-9]", "", q.get("f", [""])[0])
@@ -6019,6 +6088,7 @@ class H(BaseHTTPRequestHandler):
         # impact scans every project in the library to count cards, so it is
         # slow and read-only — exactly the shape that must not hold the lock
         lock = None if u.path in ("/api/chat", "/api/assemble", "/api/book_preview",
+                                  "/api/mix_plan",
                                   "/api/reveal", "/api/open_link",
                                   "/api/cast/reveal", "/api/cast/open",
                                   "/api/media/open",
@@ -7167,6 +7237,58 @@ class H(BaseHTTPRequestHandler):
                     return self._send(400, {"error": str(ex)})
                 return self._send(200, {"ok": True, "url": url,
                                         "bytes": nbytes})
+            if u.path == "/api/mix_plan":
+                # The live desk's score: the same cursor walk mixdown sums,
+                # served as placements for the browser's own node graph.
+                # Channel and Master gains are deliberately absent — the desk
+                # owns those live; only each card's STATIC factor travels
+                # (profile gain for the spoken kinds, card gain for a clip).
+                # Durations come off sf.info headers of the fx-rendered
+                # files, so a plan costs what the first preview already paid.
+                doc = load(d["name"])
+                if not doc:
+                    return self._send(404, {"error": "no such story"})
+                frm, upto = d.get("from"), d.get("upto")
+                import soundfile as sf
+                memo = {}
+
+                def secs(p):
+                    if p not in memo:
+                        i = sf.info(str(p))
+                        memo[p] = i.frames / i.samplerate
+                    return memo[p]
+                events, cursor, missing, marks = mix_events(
+                    doc, frm=None if frm is None else int(frm),
+                    upto=None if upto is None else int(upto),
+                    chime=True, secs_of=secs)
+                profs = profiles()
+                nm = quote(d["name"])
+                evs, total = [], cursor
+                for start, kind, path, c in events:
+                    at = round(start, 3)
+                    if kind == "chime":
+                        evs.append({"id": c["id"], "at": at, "kind": "chime",
+                                    "dur": CHIME_SECS})
+                        total = max(total, start + CHIME_SECS)
+                        continue
+                    dur = secs(path)
+                    e = {"id": c["id"], "at": at, "kind": kind,
+                         "dur": round(dur, 3),
+                         "chan": c.get("channel") or "main"}
+                    if kind == "audio":
+                        e["url"] = "/api/clip?f=" + quote(c.get("clip", ""))
+                        e["gain"] = float(c.get("gain", 100)) / 100.0
+                        if c.get("fade"):
+                            e["fade"] = list(c["fade"])[:2]
+                    else:
+                        e["url"] = f"/api/card_wav?name={nm}&id={c['id']}"
+                        e["gain"] = float(params_for(c, doc, profs)
+                                          .get("gain", 100)) / 100.0
+                    evs.append(e)
+                    total = max(total, start + dur)
+                return self._send(200, {"ok": bool(evs), "total": round(total, 3),
+                                        "missing": missing, "from": frm,
+                                        "marks": marks, "events": evs})
             if u.path == "/api/book_preview":
                 frm, upto = d.get("from"), d.get("upto")
                 f, secs, missing, marks = preview_book(

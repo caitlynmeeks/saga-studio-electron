@@ -154,6 +154,7 @@ body.mirror #popin{display:inline-block}
     title="Close the stage — the story pauses, and the editor’s Stage button reopens it">×</button>
 </div>
 <script src="/player.js"></script>
+<script src="/desk.js"></script>
 <script>
 const $=i=>document.getElementById(i);
 const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -183,28 +184,31 @@ $('empty').textContent=EMBED
 let NAME=qs.get('name')||'';
 let DOC=null;              // the open episode, as /api/doc tells it
 let MARKS=[], MARKI=-1;    // card start times of the playing stretch
-let REMIX=false;           // a fader moved mid-ride: re-premix at the next card
 let SHOWN=null;            // the visual currently on the room's wall
 
-// One audio element for the life of the page. The first .play() lands inside
-// a click, which unlocks it; after that, swapping src keeps working — the
-// pattern that survives autoplay policy everywhere, including iOS.
-const AUDIO=new Audio();
-AUDIO.addEventListener('timeupdate',tick);
+// One desk for the life of the page — every stretch plays through SagaDesk's
+// node graph, so faders, mutes and the Master land live, mid-word, with no
+// seam. The first resume() lands after a click somewhere in the app, which
+// unlocks the context; after that it plays rides for as long as the window
+// lives. The desk has no timeupdate: a small interval feeds the same tick.
+let RIDE=null;             // the desk's handle for the playing stretch
+let TOTAL=0;               // the stretch's length, for the bar's clock
+let MONV=1, MONMUTE=false; // this machine's loudness — never in any render
+setInterval(()=>tick(),250);
 
 // ── the viewer's knobs ────────────────────────────────────
 // The same controls the exported web player wears: volume, captions, full
 // screen — remembered per browser. Captions are painted by THIS window, so
 // CC acts locally in every mode; the sound lives with whoever owns
 // playback, so a mirror forwards volume to the embed instead of touching
-// its own silent AUDIO. Here CC starts ON — the author writes against the
+// its own silent desk. Here CC starts ON — the author writes against the
 // words — where the web player starts quiet. The typewriter is the
 // author's design and simply plays as written.
 let CC=true, TW=true;
 const pref=(k,v)=>{ try{ localStorage.setItem('saga.stage.'+k,v) }catch(e){} };
 function setVol(v){ pref('vol',v);
   if(MIRROR)say({type:'vol',to:'embed',v:+v});
-  else AUDIO.volume=v/100; }
+  else{ MONV=Math.max(0,Math.min(1,(+v||0)/100)); SagaDesk.setMonitor(MONV,MONMUTE); } }
 function toggleCC(){ CC=!CC; $('ccb').classList.toggle('lit',CC); pref('cc',CC?'1':'0');
   if(!CC){ $('caption').classList.remove('on'); $('fxcap').classList.remove('on'); }
   // back on: forget the standing keys and ask the embed to re-send the wall,
@@ -215,7 +219,8 @@ function fullScreen(){
   else document.documentElement.requestFullscreen().catch(()=>{}); }
 try{
   const v0=localStorage.getItem('saga.stage.vol');
-  if(v0!=null&&v0!==''){ $('vol').value=v0; AUDIO.volume=v0/100; }
+  if(v0!=null&&v0!==''){ $('vol').value=v0;
+    MONV=Math.max(0,Math.min(1,(+v0||0)/100)); SagaDesk.setMonitor(MONV,MONMUTE); }
   const c0=localStorage.getItem('saga.stage.cc'); if(c0!=null)CC=c0==='1';
   $('ccb').classList.toggle('lit',CC);
 }catch(e){}
@@ -230,7 +235,7 @@ const sayFrame=patch=>{ if(!EMBED)return;
 if(BC)BC.onmessage=e=>{
   const m=e.data||{};
   if(m.type==='hello'){ if(EMBED){ sayFrame();
-    say({type:'state',playing:!AUDIO.paused}); } return; }  // a late mirror gets the wall
+    say({type:'state',playing:!!(RIDE&&RIDE.playing)}); } return; }  // a late mirror gets the wall
   if(m.type==='frame'&&!EMBED)return void mirror(m);   // an owner is painting
   if(m.type==='choose')return void(CHOOSE&&CHOOSE(m.i));
   if(MIRROR){
@@ -248,11 +253,17 @@ if(BC)BC.onmessage=e=>{
   if(m.type==='vol'){
     // the studio's monitor knob, or a mirror's — the bar's own slider follows
     // so the two never disagree about what the room is set to
-    if(m.v!=null){ AUDIO.volume=Math.max(0,Math.min(1,(+m.v||0)/100));
+    if(m.v!=null){ MONV=Math.max(0,Math.min(1,(+m.v||0)/100));
       const s=$('vol'); if(s)s.value=Math.round(+m.v||0); }
-    if('mute'in m)AUDIO.muted=!!m.mute;
+    if('mute'in m)MONMUTE=!!m.mute;
+    SagaDesk.setMonitor(MONV,MONMUTE);
     return; }
-  if(m.type==='remix'){ REMIX=true; return; }   // honoured at the next card seam
+  if(m.type==='mix'){
+    // the editor's faders, live: the graph hears them mid-word, and the DOC
+    // follows so the next ride's plan seeds from the same numbers
+    if(DOC){ DOC.channels=m.channels||[]; DOC.master=m.master||null; }
+    SagaDesk.setMix(m.channels,m.master);
+    return; }
   if(m.type==='cur')idleShow(m.card);
   if(m.type==='stop')stop();
   if(m.type==='play'){
@@ -263,17 +274,17 @@ if(BC)BC.onmessage=e=>{
     // a different story behind the same button is a switch, never a resume —
     // the paused ride belongs to the old episode and must not speak for this one
     if(m.name&&m.name!==NAME){ switchStory(m.name); story(m.from==null?null:m.from); }
-    else if(!AUDIO.paused)pause();
+    else if(RIDE&&RIDE.playing)pause();
     // the editor names the selected card, and play honours it even mid-pause:
     // a resume replays from THAT card with a fresh document, so everything
-    // repainted or reworded during the pause is in the ride — resuming the
-    // stale premix was how an author could never see their own changes
+    // repainted or reworded during the pause is in the ride — replaying a
+    // stale stretch was how an author could never see their own changes
     else if(m.from!=null)story(m.from);
-    else if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended&&RUNOFF){
-      AUDIO.play(); $('playb').textContent='⏸ Pause'; say({type:'state',playing:true});
+    else if(RIDE&&!RIDE.ended&&RUNOFF){
+      RIDE.resume(); $('playb').textContent='⏸ Pause'; say({type:'state',playing:true});
     }else story(null);
   }
-  if(m.type==='pause'&&!AUDIO.paused)pause();
+  if(m.type==='pause'&&RIDE&&RIDE.playing)pause();
 };
 say({type:'hello'});
 // A mirror announces itself every couple of seconds, so an editor that
@@ -332,7 +343,7 @@ async function load(curtain){
   // on the dark room instead. Never stomp the wall mid-ride: a refresh
   // while playing is about the words, not the picture; and a mirror's wall
   // belongs to the embed's frames alone.
-  if(curtain!==false&&!MIRROR&&AUDIO.paused)show(govVis(0));
+  if(curtain!==false&&!MIRROR&&!(RIDE&&RIDE.playing))show(govVis(0));
 }
 const card=id=>DOC&&DOC.chunks.find(c=>c.id===id);
 // the visual that governs the card at index k: the last ready visual at or
@@ -523,22 +534,32 @@ function playRun(tok,from,upto){
   return new Promise(res=>{
     (async()=>{
       if(tok!==TOKEN)return res(false);
-      const r=await api('/api/book_preview',{name:NAME,from,upto});
+      const r=await api('/api/mix_plan',{name:NAME,from,upto});
       if(tok!==TOKEN)return res(false);
       // an empty stretch — nothing renderable between two stops — is not a
       // reason to halt the story; the walk simply continues past it
       if(!r.ok)return res(true);
-      REMIX=false;                    // this premix carries the desk as it stands
+      // the desk seeds from the ride's own fresh DOC; every {type:'mix'}
+      // that arrives mid-stretch lands on the same nodes, live
+      SagaDesk.setMix(DOC.channels,DOC.master);
+      SagaDesk.setMonitor(MONV,MONMUTE);
+      // sound must be granted before the ride is armed — a refusal keeps
+      // the wish (PEND) for the ▶ button's very human gesture to grant
+      if(!await SagaDesk.resume()||tok!==TOKEN){ setLive(false); return res(false); }
+      PEND=null;                                       // sound granted: wish spent
+      if(RIDE)RIDE.stop();            // a restart mid-ride lets the old one go
       MARKS=r.marks||[]; MARKI=-1;
       CAPQ=[]; CAPI=-1;               // a new stretch, a new page plan
       titleClear();                   // and no title carried over from the last
+      TOTAL=r.total||0;
       RUNOFF=()=>res(false);
-      AUDIO.onended=()=>{ RUNOFF=null; res(tok===TOKEN); };
-      AUDIO.src='/api/book_audio?name='+encodeURIComponent(NAME)+'&t='+Date.now();
-      AUDIO.play().then(()=>{ PEND=null; })            // sound granted: wish spent
-        .catch(()=>{ RUNOFF=null; setLive(false); res(false); });
+      const h=RIDE=SagaDesk.play(r,{onended:()=>{
+        if(RIDE!==h)return;
+        RUNOFF=null; res(tok===TOKEN);
+      }});
       $('playb').textContent='⏸ Pause';
       say({type:'state',playing:true});
+      barLit();
     })();
   });
 }
@@ -613,6 +634,7 @@ function paintVars(){
 
 function ended(reason){
   setLive(false);
+  barLit();
   $('playb').textContent='▶ Play';
   say({type:'state',playing:false});
   caption(''); fxcap(''); titleClear();
@@ -626,17 +648,20 @@ function ended(reason){
 
 // ── transport ─────────────────────────────────────────────
 function pause(){
-  AUDIO.pause();                       // the run's promise stays pending
+  if(RIDE)RIDE.pause();                // the run's promise stays pending —
+                                       // the clock and every armed source
+                                       // freeze as one under ctx.suspend
   $('playb').textContent='▶ Resume';
   say({type:'state',playing:false});
   say({type:'stopped',card:MARKS[MARKI]?MARKS[MARKI].id:null});
+  barLit();
 }
 function toggle(){
   // the mirror's button drives the embed — one clock, one voice
   if(MIRROR)return void say({type:'toggle',to:'embed'});
-  if(!AUDIO.paused)return pause();
-  if(AUDIO.src&&AUDIO.currentTime>0&&!AUDIO.ended&&RUNOFF){
-    AUDIO.play(); $('playb').textContent='⏸ Pause'; return;   // resume the run
+  if(RIDE&&RIDE.playing)return pause();
+  if(RIDE&&!RIDE.ended&&RUNOFF){
+    RIDE.resume(); $('playb').textContent='⏸ Pause'; barLit(); return;   // resume the run
   }
   story(PEND);      // an ungranted "play from card N" wish is honoured here
 }
@@ -646,17 +671,18 @@ function stop(){
   caption(''); fxcap(''); titleClear();
   if(RUNOFF){ const f=RUNOFF; RUNOFF=null; f(); }
   if(ASKOFF){ const f=ASKOFF; ASKOFF=null; f(); }
-  AUDIO.pause(); hideChooser();
+  if(RIDE){ RIDE.stop(); RIDE=null; }
+  hideChooser();
   $('playb').textContent='▶ Play';
   say({type:'state',playing:false});
+  barLit();
 }
 // A different story arriving — by open, play or toggle — ends the old ride
 // completely: its pause, its pending wish, its flags, its audio. Nothing of
 // one episode may leak into another's playback, and the resume branch must
 // never find yesterday's episode still loaded in the deck.
 function switchStory(n){
-  stop();
-  AUDIO.removeAttribute('src');        // no src, no stale resume
+  stop();                              // stop() lets the desk's ride go whole
   VARS={}; PEND=null; paintVars();
   NAME=n; load();
 }
@@ -671,7 +697,7 @@ function playFrom(from){
 // the new picture, and the doc is refetched for the same reason — the
 // change being checked lives in a document this window has not seen yet.
 async function idleShow(id){
-  if(!NAME||!AUDIO.paused||ASKOFF)return;
+  if(!NAME||(RIDE&&RIDE.playing)||ASKOFF)return;
   const d=await api('/api/doc?name='+encodeURIComponent(NAME));
   if(d&&!d.error)DOC=d;
   if(!DOC)return;
@@ -696,19 +722,14 @@ async function idleShow(id){
 }
 
 function tick(){
-  const t=AUDIO.currentTime;
-  $('clock').textContent=fmt(t)+(AUDIO.duration?' / '+fmt(AUDIO.duration):'');
+  if(!RIDE)return;                        // no ride, no clock to follow
+  const t=RIDE.time();
+  $('clock').textContent=fmt(t)+(TOTAL?' / '+fmt(TOTAL):'');
   if(EMBED)say({type:'clock',s:$('clock').textContent});
   let i=MARKI<0?0:MARKI;
   while(i+1<MARKS.length&&MARKS[i+1].at<=t)i++;
   if(!MARKS.length)return;
   if(i===MARKI)return void pageTick(t);   // no new card: pages still turn
-  // A remix wish is honoured HERE, at the seam between two cards: the rest
-  // of the ride is premixed again with the faders where they now stand and
-  // carries on from this card — the same manoeuvre as stop-and-play-from-
-  // here, folded into a boundary where a rest already lives, so the gap
-  // hides inside the silence the mix was going to leave anyway.
-  if(REMIX&&EMBED&&!AUDIO.paused&&MARKS[i]){ REMIX=false; story(MARKS[i].id); return; }
   MARKI=i;
   const c=card(MARKS[i].id);
   if(c){
@@ -720,7 +741,7 @@ function tick(){
     if(vis)show(vis);
     // the subtitle wins over the spoken text — "Teide" on screen while the
     // booth was fed "tay-dee" — and it is the only words a voiced card has.
-    const dur=(i+1<MARKS.length?MARKS[i+1].at:(AUDIO.duration||t))-MARKS[i].at;
+    const dur=(i+1<MARKS.length?MARKS[i+1].at:(TOTAL||t))-MARKS[i].at;
     const kind=c.type||'speech';
     if(kind==='title'){ TITLEQ=SagaPlay.titlePlan(c,MARKS[i].at); TPHASE=''; }
     if((kind==='audio'||kind==='silence')&&c.sub){
@@ -762,7 +783,7 @@ document.addEventListener('keydown',e=>{
 // Same manners as the exported web player: lit on any pointer, tap or key,
 // dark again a few seconds into playback. A stopped stage keeps its knobs —
 // a pause, a choice and the end are exactly the moments a viewer reaches
-// for them. A mirror owns no AUDIO, so it judges "playing" by the state
+// for them. A mirror owns no desk, so it judges "playing" by the state
 // messages the embed broadcasts.
 let BART=null, MPLAY=false;
 function barLit(){
@@ -770,15 +791,15 @@ function barLit(){
   clearTimeout(BART); BART=setTimeout(barDim,2800);
 }
 function barDim(){
-  const playing=MIRROR?MPLAY:(AUDIO.src&&!AUDIO.paused&&!AUDIO.ended);
+  const playing=MIRROR?MPLAY:!!(RIDE&&RIDE.playing);
   if(!playing||$('chooser').classList.contains('on'))return;
   document.body.classList.remove('barlit');
 }
 ['pointermove','pointerdown','keydown'].forEach(ev=>
   document.addEventListener(ev,barLit,{passive:true}));
 // stops relight the knobs even when the pointer never moved; a fresh play
-// just arms the countdown again
-['play','pause','ended'].forEach(ev=>AUDIO.addEventListener(ev,barLit));
+// just arms the countdown again — the transport calls barLit at each turn,
+// since the desk fires no element events
 barLit();
 
 load();

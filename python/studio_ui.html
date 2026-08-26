@@ -546,12 +546,6 @@ display:flex;align-items:center}
 .mixrow button.on{color:var(--amber);border-color:var(--amber)}
 /* the Master sits above the channels the way it sits above them on a desk */
 .mixmaster{border-bottom:1px solid var(--line);padding-bottom:7px;margin-bottom:7px}
-/* a touched fader waits for the tape: a gentle pulse until the next play
-   bakes it in, then stillness — the row itself says which settings are
-   heard and which are still a promise */
-.mixrow.pend input[type=range],.mixrow.pend .pv{animation:mixpend 1.6s ease-in-out infinite}
-.mixrow.pend .pv{color:var(--amber)}
-@keyframes mixpend{0%,100%{opacity:1}50%{opacity:.4}}
 /* the prose that used to sit under every control lives behind these now */
 .qm{display:inline-block;margin-left:6px;width:12px;height:12px;line-height:12px;
 text-align:center;border:1px solid var(--line);border-radius:50%;font-size:9px;
@@ -1006,6 +1000,7 @@ Selected cards go along as context.</div></div>
   </div>
 </div>
 
+<script src="/desk.js"></script>
 <script>
 const $=i=>document.getElementById(i);
 let DOC=null, SEL=new Set(), STATE={}, JOBS={}, POLL=null, HEIGHT={};
@@ -1599,20 +1594,28 @@ const chSelect=c=>chList().length>1?`<select style="font-size:11px;padding:1px 4
   </select>`:'';
 let MIXFOLD=false;
 try{ MIXFOLD=localStorage.getItem('saga.mixfold')==='1'; }catch(e){}
-// A moved fader is a promise, not yet an effect: the mix bakes at serve
-// time, so the new level is heard from the NEXT play. Until one starts —
-// a card's ▶, a book preview, a stage ride — the touched rows pulse
-// gently: the desk's way of saying "noted, waiting for the tape".
-let MIXPEND={name:'',keys:new Set()};
-function mixPend(key){
-  if(!DOC)return;
-  if(MIXPEND.name!==DOC.name)MIXPEND={name:DOC.name,keys:new Set()};
-  MIXPEND.keys.add(key);
+// The desk is LIVE: a moved fader lands on the playing graph the moment it
+// moves — this editor's book preview and the stage's ride alike, mid-word,
+// no seam, nothing waiting for the next play. Dragging applies at every
+// pixel and broadcasts to the stage (throttled, trailing edge kept);
+// letting go saves to the story, as ever.
+let MIXCASTT=0, MIXCASTP=null;
+function mixCast(ch,m){
+  SagaDesk.setMix(ch,m);
+  const send=()=>{ MIXCASTT=Date.now();
+    if(STAGE)STAGE.postMessage({type:'mix',to:'embed',channels:ch,master:m||null}); };
+  clearTimeout(MIXCASTP); MIXCASTP=null;
+  if(Date.now()-MIXCASTT>100)send();
+  else MIXCASTP=setTimeout(send,100);
 }
-function mixApplied(){
-  if(!MIXPEND.keys.size)return;
-  MIXPEND.keys.clear();
-  renderMixer();
+function chLive(i,g){
+  const ch=chList().map(x=>({...x})); if(!ch[i])return;
+  ch[i].gain=+g;
+  mixCast(ch,DOC&&DOC.master);
+}
+function masterLive(g){
+  const m={gain:100,mute:false,...((DOC&&DOC.master)||{})}; m.gain=+g;
+  mixCast(chList(),m);
 }
 function foldMixer(){
   MIXFOLD=!MIXFOLD;
@@ -1631,50 +1634,51 @@ function renderMixer(force){
   const ch=chList(), used={};
   DOC.chunks.forEach(c=>{ const k=c.channel||'main'; used[k]=(used[k]||0)+1; });
   const M={gain:100,mute:false,...(DOC.master||{})};
-  const pend=k=>MIXPEND.name===DOC.name&&MIXPEND.keys.has(k)?' pend':'';
   host.innerHTML=`<div class="pedit">
     <div class="phead" style="cursor:pointer" onclick="foldMixer()">
       <b>${MIXFOLD?'▸':'▾'} Mixer</b>${qm('the sound of the book itself. Every audio '
         +'card plays on Channel 1 unless its right-click sends it elsewhere — one '
-        +'per character, one for music, one for sfx, as you like. Faders and the '
-        +'Master land in the book, the exports and the stage alike, at mix time: '
-        +'nothing re-renders, and you hear them from the next play. The slider in '
-        +'the top bar is different — monitor volume, this machine only, live. '
+        +'per character, one for music, one for sfx, as you like. The faders and '
+        +'the Master are LIVE: drag one during a play or a ride and you hear it '
+        +'move, mid-word — and the same levels land in the book and the exports, '
+        +'since nothing re-renders. The slider in the top bar is different — '
+        +'monitor volume, this machine only, never in a render. '
         +'Click a channel name to rename it.')}
       <span class="mut">${ch.length===1?'':ch.length+' channels'}</span>
-    </div>`+(MIXFOLD?'':`<div class="mixrow mixmaster${pend('master')}">
+    </div>`+(MIXFOLD?'':`<div class="mixrow mixmaster">
       <span class="mixname"><b>Master</b></span>
       <input type="range" min="0" max="200" step="1" value="${M.gain}"
-        oninput="$('mvM').textContent=Math.round(this.value)+'%'"
+        oninput="$('mvM').textContent=Math.round(this.value)+'%';masterLive(this.value)"
         onchange="masterSet({gain:+this.value})"
         title="the book's own level, over the whole mix — pull it down and even a clipping mix comes back">
       <span class="pv" id="mvM">${Math.round(M.gain)}%</span>
       <button class="tiny ${M.mute?'on':''}" onclick="masterSet({mute:${!M.mute}})"
         title="mute the whole book — exports too, so mind the desk on your way out">M</button>
-    </div>`+ch.map((c,i)=>`<div class="mixrow${pend(c.id)}">
+    </div>`+ch.map((c,i)=>`<div class="mixrow">
       <span class="mixname" ${c.id==='main'?'':`onclick="renameChannel(${i})"
         title="click to rename"`}>${esc(c.name)}</span>
       <input type="range" min="0" max="200" step="1" value="${c.gain}"
-        oninput="$('mv${i}').textContent=Math.round(this.value)+'%'"
+        oninput="$('mv${i}').textContent=Math.round(this.value)+'%';chLive(${i},this.value)"
         onchange="chSet(${i},{gain:+this.value})"
-        title="this channel's level in the mix — 100% is as rendered">
+        title="this channel's level in the mix — 100% is as rendered, live under your hand">
       <span class="pv" id="mv${i}">${Math.round(c.gain)}%</span>
       <button class="tiny ${c.mute?'on':''}" onclick="chSet(${i},{mute:${!c.mute}})"
-        title="mute this channel — in the book and on the stage too">M</button>
+        title="mute this channel — in the book and on the stage too, right now">M</button>
       ${c.id==='main'?'':`<button class="tiny" onclick="removeChannel(${i})"
         title="remove this channel — its ${used[c.id]||0} card${(used[c.id]||0)===1?'':'s'} return to Channel 1">✕</button>`}
     </div>`).join('')
-    +`<button class="tiny" onclick="addChannel()" style="margin-top:4px">+ Add Channel</button>`)
+    +`<button class="tiny" onclick="addChannel()" style="margin-top:4px">+ Add Channel</button>
+      <button class="tiny" onclick="channelsPerVoice()" style="margin-top:4px"
+        title="build the desk from the cast: a channel for every voice this story speaks in, its cards assigned — pressing again reuses them">A channel per voice</button>`)
     +`</div>`;
 }
 function masterSet(patch){
-  mixPend('master');
   const m={gain:100,mute:false,...(DOC.master||{}),...patch};
   api('/api/story',{name:DOC.name,master:m}).then(r=>{
     if(r.error)return void($('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`);
     DOC.master=r.master||null;
     renderMixer(true);
-    if(STAGE)STAGE.postMessage({type:'remix',to:'embed'});
+    mixCast(chList(),DOC.master);   // live — this window's graph and the stage's
   });
 }
 async function saveChannels(ch){
@@ -1682,14 +1686,12 @@ async function saveChannels(ch){
   if(r.error){ $('status').innerHTML=`<span class="warn">${esc(r.error)}</span>`; return null; }
   DOC.channels=r.channels||[];
   renderMixer(true);
-  // a ride in progress picks the change up at its next card, not its next stop
-  if(STAGE)STAGE.postMessage({type:'remix',to:'embed'});
+  mixCast(DOC.channels,DOC.master);   // live — a ride in progress hears it now
   return r;
 }
 function chSet(i,patch){
   const ch=chList().map(x=>({...x}));
   Object.assign(ch[i],patch);
-  mixPend(ch[i].id);
   saveChannels(ch);
 }
 function addChannel(){
@@ -1727,6 +1729,64 @@ async function removeChannel(i){
   await open_(DOC.name,true);          // the server sent its cards back to Main
   $('status').innerHTML=`<span class="ok">removed “${esc(gone.name)}”</span>${
     n?` — its ${n} card${n===1?'':'s'} return${n===1?'s':''} to Channel 1`:''}`;
+}
+// ── a channel per voice ───────────────────────────────────
+// One press builds the desk from the cast: every voice profile a speech or
+// voiced card actually uses (first-appearance order) gets a channel named
+// after it — id v-<slug>, so pressing again reuses them — and its cards
+// move there. Cards already sent to a manual channel keep the author's
+// opinion, locked cards refuse edits and are reported, and existing manual
+// channels are left alone: the press fills in the unassigned, it does not
+// bulldoze. 24 channels is the server's clamp — when the cast outnumbers
+// the room, the most-used voices go first, and the status says so.
+async function channelsPerVoice(){
+  if(!DOC)return;
+  const order=[], byProf={};
+  DOC.chunks.forEach(c=>{
+    const k=c.type||'speech';
+    if(k!=='speech'&&k!=='voiced')return;
+    const p=c.profile||'Default';
+    if(!byProf[p]){ byProf[p]=[]; order.push(p); }
+    byProf[p].push(c);
+  });
+  if(!order.length)
+    return void($('status').textContent='no spoken cards to build channels for');
+  const ch=chList().map(x=>({...x}));
+  const slugOf=p=>'v-'+(p.toLowerCase().replace(/[^a-z0-9]+/g,'-')
+    .replace(/^-+|-+$/g,'')||'voice');
+  // two profiles that slug the same get numbered apart, this press
+  const ids={};
+  order.forEach(p=>{
+    let id=slugOf(p), n=2;
+    while(Object.values(ids).includes(id))id=slugOf(p)+'-'+n++;
+    ids[p]=id;
+  });
+  const need=order.filter(p=>!ch.some(c=>c.id===ids[p]));
+  const room=Math.max(0,24-ch.length);
+  const crowded=need.length>room;
+  const make=crowded
+    ?[...need].sort((a,b)=>byProf[b].length-byProf[a].length).slice(0,room)
+    :need;
+  make.forEach(p=>ch.push({id:ids[p],name:p,gain:100,mute:false}));
+  if(make.length&&!await saveChannels(ch))return;
+  const have=new Set(ch.map(c=>c.id));
+  let moved=0, locked=0;
+  for(const p of order){
+    if(!have.has(ids[p]))continue;
+    for(const c of byProf[p]){
+      const cur=c.channel||'main';
+      if(cur===ids[p])continue;
+      if(cur!=='main'&&!/^v-/.test(cur))continue;   // a manual send stands
+      if(c.locked){ locked++; continue; }
+      const r=await api('/api/chunk',{name:DOC.name,id:c.id,channel:ids[p]});
+      if(r&&!r.error)moved++; else locked++;
+    }
+  }
+  await open_(DOC.name,true);        // pills, dropdowns and mixer all follow
+  $('status').innerHTML=`<span class="ok">built ${make.length} channel${
+      make.length===1?'':'s'}, assigned ${moved} card${moved===1?'':'s'}</span>`
+    +(locked?` — ${locked} locked card${locked===1?'':'s'} left alone`:'')
+    +(crowded?' — the desk holds 24 channels, so the most-used voices went first':'');
 }
 
 function profEditor(n){
@@ -6975,10 +7035,15 @@ let AUDIO=null, PF=null;   // PF: {id,el} — the card whose ▶ Full holds the 
 let VOL=1, MUTED=false;
 try{ const v=parseFloat(localStorage.getItem('saga.vol')); if(v>=0&&v<=1)VOL=v; }catch(e){}
 try{ MUTED=localStorage.getItem('saga.mute')==='1'; }catch(e){}
-function applyVol(a){ if(a){ a.volume=VOL; a.muted=MUTED; } return a; }
+function applyVol(a){ if(a){
+  // one audio channel for the whole app: a NEW element taking the deck
+  // stops the desk's book preview where it stands, card selected
+  if(a instanceof HTMLAudioElement&&a!==AUDIO)bookStop(false);
+  a.volume=VOL; a.muted=MUTED; } return a; }
 function volAll(){
   applyVol(AUDIO);
   if(AGAIN)AGAIN.gain.value=MUTED?0:VOL;
+  SagaDesk.setMonitor(VOL,MUTED);    // the desk's monitor rides the same knob
   document.querySelectorAll('video').forEach(applyVol);
   // the stage hears the same knob, live: monitor volume is ONE volume,
   // whichever window the sound is coming from
@@ -7005,6 +7070,7 @@ function paintVol(){
 function stopAllAudio(){
   if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
   PF=null;
+  bookStop(false);                   // the desk's book preview too
   stopAssetSrc();
   document.querySelectorAll('video').forEach(v=>v.pause());
   if(STAGE)STAGE.postMessage({type:'pause',to:'embed'});
@@ -7029,7 +7095,6 @@ function playFull(id){
   const a=AUDIO=applyVol(new Audio('/api/card_audio?name='+encodeURIComponent(DOC.name)+
                   '&id='+id+'&t='+Date.now()));
   PF={id,el:a};
-  mixApplied();      // a fresh fetch carries the mixer as it stands now
   // the button wears the state: ▶ at rest, ⏸ while playing — whatever word
   // sits after the symbol (Full, In Voice) stays. A repaint of the stack
   // rebuilds the button at ▶; the toggle still answers, only the symbol lags.
@@ -7708,8 +7773,7 @@ if(STAGE)STAGE.onmessage=e=>{
   if(m.type==='popped-bye'){ POPSEEN=0; return; }   // the watcher restores
   if(!DOC||m.name!==DOC.name)return;
   if(m.type==='state'){ const b=$('stgplay');
-    if(b)b.textContent=m.playing?'⏸ Story':'▶ Story';
-    if(m.playing)mixApplied(); }   // a ride's stretch premixes as it starts
+    if(b)b.textContent=m.playing?'⏸ Story':'▶ Story'; }
   if(m.type==='popin'){ if(POPUP){ try{POPUP.close()}catch(_){} POPUP=null; }
     POPSEEN=0; clearInterval(POPWATCH); POPWATCH=null; paintStageBtn(false);
     if(STAGE)STAGE.postMessage({type:'pause',to:'embed'}); }
@@ -7840,55 +7904,59 @@ function followCard(id){
   if(r.top<mr.top+50||r.bottom>mr.bottom-50)
     el.scrollIntoView({block:'center',behavior:'smooth'});
 }
+// The desk's handle down, the way the old element's pause handler did it:
+// stopping partway leaves you on the card you stopped at, so the fix and
+// the "preview from #here" that follows it need no scrolling and no
+// clicking. Reaching the end selects nothing: the next play starts at the
+// top, which is what finishing a book means.
+function bookStop(atEnd){
+  const h=BOOKPLAY; if(!h)return;
+  BOOKPLAY=null;
+  h.stop();
+  const at=MARKI>=0&&MARKS[MARKI]?MARKS[MARKI].id:null;
+  clearPlaying();
+  CUR=atEnd?null:at;
+  paintCur();
+}
 async function previewBook(){
   if(!DOC)return void($('status').textContent='open a document first');
   const b=$('pvbook');
-  if(BOOKPLAY){ BOOKPLAY.pause(); return; }   // the pause handler resets the button
+  if(BOOKPLAY)return void bookStop(false);   // pressing again stops, card kept
   await flushAll();          // mix the edit you just made, not the one before it
   const from=CUR;            // pinned now: clicking a card mid-mix must not move it
-  b.disabled=true; b.textContent='mixing…';
-  const r=await api('/api/book_preview',{name:DOC.name,from});
-  b.disabled=false; syncBookBtn();
+  if(b){ b.disabled=true; b.textContent='mixing…'; }
+  const r=await api('/api/mix_plan',{name:DOC.name,from});
+  if(b)b.disabled=false;
+  syncBookBtn();
   if(r.error||!r.ok) return void($('status').innerHTML=r.error
     ?`<span class="warn">${esc(r.error)}</span>`
     :'<span class="warn">nothing to preview yet</span> — render or bake some cards first');
   $('status').innerHTML=(r.missing
     ?missChip(r.missing)+' — a chime marks each one · ':'')+
-    `previewing ${fmtTime(r.secs)}`+(from==null?' of audiobook':` from card #${from}`);
+    `previewing ${fmtTime(r.total)}`+(from==null?' of audiobook':` from card #${from}`);
   MARKS=r.marks||[]; MARKI=-1;
-  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }
-  const a=applyVol(new Audio('/api/book_audio?name='+encodeURIComponent(DOC.name)+'&t='+Date.now()));
-  AUDIO=a; BOOKPLAY=a;
-  mixApplied();      // the preview was just mixed with the faders where they are
-  const done=()=>{
-    if(BOOKPLAY!==a)return;
-    BOOKPLAY=null;
-    const at=MARKI>=0&&MARKS[MARKI]?MARKS[MARKI].id:null;
-    clearPlaying();
-    // Stopping partway leaves you on the card you stopped at, so the fix and
-    // the "preview from #here" that follows it need no scrolling and no
-    // clicking. Reaching the end selects nothing: the next play starts at the
-    // top, which is what finishing a book means.
-    CUR=a.ended?null:at;
-    paintCur();                       // repaints and puts the button back
-  };
-  a.addEventListener('pause',done);
-  a.addEventListener('ended',done);
-  a.addEventListener('error',()=>{ done(); $('status').innerHTML=
-    '<span class="warn">could not play the preview</span>'; });
-  a.addEventListener('timeupdate',()=>{
-    if(BOOKPLAY!==a)return;
-    const i=markAt(a.currentTime);
-    if(i>=0&&i!==MARKI){ MARKI=i; followCard(MARKS[i].id); }
-    b.textContent=playLabel(a.currentTime);
+  if(AUDIO){ AUDIO.pause(); AUDIO.currentTime=0; }   // one channel, as ever
+  PF=null;
+  // the plan is placements only: the desk carries the faders as they stand,
+  // and keeps carrying them as they move — which is the whole point
+  SagaDesk.setMix(DOC.channels,DOC.master);
+  SagaDesk.setMonitor(VOL,MUTED);
+  await SagaDesk.resume();             // the press itself is the gesture
+  const h=BOOKPLAY=SagaDesk.play(r,{
+    ontick:t=>{
+      if(BOOKPLAY!==h)return;
+      const i=markAt(t);
+      if(i>=0&&i!==MARKI){ MARKI=i; followCard(MARKS[i].id); }
+      if(b)b.textContent=playLabel(t);
+    },
+    onended:()=>{ if(BOOKPLAY===h)bookStop(true); },
   });
-  a.play();
-  b.textContent=playLabel(0);
+  if(b)b.textContent=playLabel(0);
 }
 // Dropping the anchor and pressing play is two clicks for one thought, so the
 // button is the thought: back to the top, and go.
 async function previewFromTop(){
-  if(BOOKPLAY){ BOOKPLAY.pause(); BOOKPLAY=null; }
+  bookStop(false);
   clearCur();
   await previewBook();
 }
