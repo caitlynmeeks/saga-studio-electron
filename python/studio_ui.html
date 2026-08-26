@@ -141,6 +141,11 @@ color:var(--faint);cursor:pointer;transition:.15s;font-size:12.5px}
 #drop.hot{border-color:var(--green);color:var(--green);background:#131a17}
 .proj{padding:7px 8px;border-radius:6px;cursor:pointer;margin-bottom:2px}
 .proj:hover{background:#182220}.proj.sel{background:#1b2724;color:var(--bright)}
+/* the ping: an amber flash that fades back to whatever the row's resting
+   look is — no background in the last frame, so the animation lands on the
+   row's own color (.sel green, hover, or nothing) instead of guessing it */
+.proj.ping{animation:pingflash 1.4s ease-out}
+@keyframes pingflash{0%,35%{background:#4a3f14;box-shadow:inset 3px 0 0 var(--amber)}}
 .proj .meta{font-size:11px;color:var(--faint)}
 .bar{height:3px;background:var(--line);border-radius:2px;margin-top:4px;overflow:hidden}
 .bar i{display:block;height:100%;background:var(--green)}
@@ -592,7 +597,8 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 <body data-panel="off" data-tab="inspect">
 <header>
   <b>SAGA STUDIO</b>
-  <span class="mut" id="hdr">no project</span>
+  <span class="mut" id="hdr" onclick="pingStack()" style="cursor:pointer"
+    title="find this stack in the sidebar">no project</span>
   <button class="tiny" onclick="toggleStoryPanel()" title="stack settings — title, typewriter, typing sound, picture style">⚙</button>
   <span style="flex:1"></span>
   <span class="pill warn" id="busy"></span>
@@ -1391,6 +1397,8 @@ function keepPlace(a,was){
 async function open_(name,quiet,anchor){
   const wasName=DOC&&DOC.name;
   DOC=await api('/api/doc?name='+encodeURIComponent(name));
+  // the homing beacon: next launch, the sidebar scrolls back to this stack
+  try{ localStorage.setItem('saga.lastproj',DOC.name); }catch(e){}
   $('hdr').textContent=DOC.title+' · '+DOC.chunks.length+' chunks';
   // a different story in the editor is a different story on the stage, and
   // it must be told NOW — mid-ride included — or the old one keeps playing
@@ -8007,7 +8015,36 @@ pollQueue();
 // Settings first, and WAITED for: the Edit buttons on cards exist only if an
 // outside app is configured, and painting the cards before the settings
 // arrive builds a stack with no Edit buttons on it.
-loadSettings().then(()=>refresh().then(renderProfiles));
+// Where you left off. The launch walks the sidebar back to the stack that
+// was open when the app last closed — the list itself never reorders for
+// it, because a shelf's order is its reading order and rows that jump
+// around break the hand's memory of where things live. Move the view, not
+// the furniture. A stack folded away inside its shelf has no row to walk
+// to, so the shelf's own bar stands in for it.
+function showLastProj(){
+  let last=''; try{ last=localStorage.getItem('saga.lastproj')||''; }catch(e){}
+  if(!last)return;
+  const shelf=(STATE.series||[]).find(s=>s.order.includes(last));
+  const row=document.querySelector(`#projects .proj[data-name="${CSS.escape(last)}"]`)
+    ||(shelf&&document.querySelector(`#projects .sbar[data-slug="${CSS.escape(shelf.slug)}"]`));
+  if(row)row.scrollIntoView({block:'center'});
+}
+// Unity's ping, for the stack you are in: the header names it, and clicking
+// the name walks the sidebar to its row and flashes it. The Stacks pane
+// comes forward if another side is up, and a shelf folded over the row is
+// opened first — a ping that stops at a closed door has answered nothing.
+function pingStack(){
+  if(!DOC)return;
+  if(document.body.dataset.side!=='stories')setSide('stories');
+  const shelf=(STATE.series||[]).find(s=>s.order.includes(DOC.name));
+  if(shelf&&SFOLD[shelf.slug])foldSeries(shelf.slug);   // unfolds, repaints, saves
+  const row=document.querySelector(`#projects .proj[data-name="${CSS.escape(DOC.name)}"]`);
+  if(!row)return;
+  row.scrollIntoView({behavior:'smooth',block:'center'});
+  row.classList.remove('ping'); void row.offsetWidth;   // restart the flash mid-fade
+  row.classList.add('ping');
+}
+loadSettings().then(()=>refresh().then(renderProfiles).then(showLastProj));
 paintFR();          // the header buttons before any document is open
 paintClip();        // a card copied last session is still on the clipboard
 // One quiet look at GitHub a few seconds in — late enough that a slow
