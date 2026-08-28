@@ -3174,9 +3174,12 @@ _eng = {"name": None, "stage": "", "log": [], "error": None, "proc": None,
 _hf_fallback_said = False
 # Where removable drives land. An unmounted drive's path fails is_dir(),
 # but its PARENT is one of these — which always exists, and so proves
-# nothing about the drive. Never probe by creating the directory: on
-# macOS /Volumes is admin-writable, and a successfully created decoy
-# would sit on the internal disk until the real drive mounts over it.
+# nothing about the drive. Never probe by creating the directory: whether
+# a mount root permits an unprivileged mkdir varies by OS and version
+# (modern macOS locks /Volumes to root:wheel; older releases and other
+# systems have been looser), and wherever it succeeds the decoy sits on
+# the internal disk until the real drive mounts over it. A reachability
+# check must not depend on permissions happening to refuse.
 _MOUNT_ROOTS = {Path("/Volumes"), Path("/mnt"), Path("/media")}
 
 
