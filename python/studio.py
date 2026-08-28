@@ -4445,12 +4445,15 @@ def share_web(name, unlisted=None):
         unlisted = bool(share.get("unlisted"))
     payload = zp.read_bytes()
     dk = settings()["darkride"]["key"]
+    series_slug = series_of(name)
     for retry in (False, True):
         req = urllib.request.Request(DARKRIDE + "/api/upload", data=payload,
                                      headers={"Content-Type": "application/zip"})
         req.add_header("X-Darkride-Unlisted", "1" if unlisted else "0")
         if dk:                       # the account this share belongs to
             req.add_header("X-Darkride-Key", dk)
+        if series_slug:
+            req.add_header("X-Darkride-Series", series_slug)
         if share.get("slug") and share.get("token"):
             req.add_header("X-Darkride-Slug", share["slug"])
             req.add_header("X-Darkride-Token", share["token"])
@@ -4812,6 +4815,7 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(b)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(b)
 
@@ -7281,7 +7285,15 @@ class H(BaseHTTPRequestHandler):
                         if c.get("fade"):
                             e["fade"] = list(c["fade"])[:2]
                     else:
-                        e["url"] = f"/api/card_wav?name={nm}&id={c['id']}"
+                        # h names the CONTENT. The desk caches decoded audio
+                        # by URL across plays, and a split, insert or delete
+                        # renumbers every id downstream — so an id-only URL
+                        # would hand a renumbered card its predecessor's
+                        # decode, one slot off and the wrong length. The
+                        # server ignores h; it exists to make the cache key
+                        # honest.
+                        e["url"] = (f"/api/card_wav?name={nm}&id={c['id']}"
+                                    f"&h={chunk_hash(c, doc, profs)}")
                         e["gain"] = float(params_for(c, doc, profs)
                                           .get("gain", 100)) / 100.0
                     evs.append(e)
