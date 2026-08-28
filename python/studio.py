@@ -3172,6 +3172,12 @@ _eng = {"name": None, "stage": "", "log": [], "error": None, "proc": None,
 
 
 _hf_fallback_said = False
+# Where removable drives land. An unmounted drive's path fails is_dir(),
+# but its PARENT is one of these — which always exists, and so proves
+# nothing about the drive. Never probe by creating the directory: on
+# macOS /Volumes is admin-writable, and a successfully created decoy
+# would sit on the internal disk until the real drive mounts over it.
+_MOUNT_ROOTS = {Path("/Volumes"), Path("/mnt"), Path("/media")}
 
 
 def _hf_home():
@@ -3183,12 +3189,20 @@ def _hf_home():
     env = os.environ.get("HF_HOME")
     if env:
         p = Path(env).expanduser()
-        if p.is_dir() or p.parent.is_dir():
+        if p.is_dir():
+            # here and usable — a read-only mount falls through
+            if os.access(p, os.W_OK):
+                return p
+        elif p.parent.is_dir() and p.parent not in _MOUNT_ROOTS:
+            # a cache that does not exist yet under a real parent is fine
+            # (snapshot_download creates it); a missing dir whose parent
+            # is a mount root is an absent drive wearing a plausible path
             return p
         if not _hf_fallback_said:
             _hf_fallback_said = True
-            print(f"HF_HOME={env} is not reachable (unmounted drive?) — "
-                  f"using the managed cache instead", flush=True)
+            print(f"HF_HOME={env} is not reachable or not writable "
+                  f"(unmounted drive?) — using the managed cache instead",
+                  flush=True)
     return (ENGINES_DIR / "hf").expanduser()
 
 

@@ -66,7 +66,10 @@ for f in kokoro-v1.0.int8.onnx voices-v1.0.bin; do
       echo "copying $f from $SRC"
       cp "$SRC/$f" "$K/$f"
     else
-      echo "fetching $f…"
+      # braced because Apple's bash is 3.2, which reads $f followed by a
+      # multibyte … as a variable NAMED "f…" — and under set -u that is
+      # unbound and fatal, but only on the branch a fresh machine takes
+      echo "fetching ${f}…"
       curl -L --fail -o "$K/$f" \
         "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/$f"
     fi

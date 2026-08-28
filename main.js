@@ -254,8 +254,11 @@ async function maybeWarnAboutClassic () {
 // exactly what a first launch should make, and needs no ceremony.
 async function maybeAnnounceLibrary (lib, existedBeforeLaunch) {
   if (config.get('libraryDir') || config.get('libraryAnnounced')) return
-  config.save({ libraryAnnounced: true })
   if (!existedBeforeLaunch || !win) return
+  // burned only when the dialog is actually about to show: a fresh first
+  // launch (nothing to announce) must not spend the one-time flag, or a
+  // library adopted on any LATER launch is announced to nobody
+  config.save({ libraryAnnounced: true })
   const { response } = await dialog.showMessageBox(win, {
     type: 'info',
     buttons: ['Keep This Library', 'Choose a Different Folder…'],
