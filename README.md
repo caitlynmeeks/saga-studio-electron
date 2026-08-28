@@ -7,8 +7,14 @@ holding a server.
 
 ```sh
 npm install
+npm run runtime     # the bundled Python and the Kokoro voice (~600 MB, cached)
 npm start
 ```
+
+`npm run runtime` is what makes the dev run match the packaged app: without
+it, `npm start` probes the system for an interpreter and finds one with none
+of the studio's packages — the window opens, but no voice can speak. (Skipped
+it? The Voices tab offers **Install Kokoro** as the in-app repair.)
 
 ## Build it yourself
 
@@ -73,7 +79,10 @@ here and opens it:
 
 Change any of them under **File** and **Saga Studio › Choose Python
 Interpreter…**; the choice is remembered in
-`~/Library/Application Support/saga-studio-desktop/config.json`.
+`~/Library/Application Support/Saga Studio/config.json` (Electron derives
+the folder from the product name). Deleting that file resets the app's own
+settings — port, window bounds, chosen folders — without touching the
+library.
 
 A candidate interpreter only counts if **torch** is importable from it —
 checked on the filesystem rather than by running Python, because asking an

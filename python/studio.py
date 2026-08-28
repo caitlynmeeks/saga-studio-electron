@@ -1397,13 +1397,39 @@ def version_now():
                     "how": "git", "dirty": dirty}
         return {"sha": "", "at": 0, "subject": "", "how": "git", "dirty": False}
     try:
-        v = json.loads((APP_DIR / "version.json").read_text(encoding="utf-8"))
+        # beside the running studio.py — the bundle's own stamp, or the
+        # downloaded payload's when running from it (HERE is APP_DIR then).
+        # APP_DIR directly would be wrong the one time it differs: a stale
+        # download losing to a fresher bundle must not speak for it.
+        v = json.loads((HERE / "version.json").read_text(encoding="utf-8"))
         return {"sha": str(v.get("sha") or ""), "at": int(v.get("at") or 0),
                 "subject": str(v.get("subject") or ""), "how": "payload",
                 "dirty": False}
     except (OSError, ValueError):
         return {"sha": "", "at": 0, "subject": "", "how": "payload",
                 "dirty": False}
+
+
+_vernote = None
+
+
+def version_note():
+    """One short line for the header: the shell's package version when it
+    provides one, then the payload commit and its date — enough to answer
+    "which build are you on?" from across the room. Cached for the process:
+    /api/state is hot and asking git twice a refresh is not free."""
+    global _vernote
+    if _vernote is None:
+        v = version_now()
+        sha = (v["sha"] or "")[:7]
+        if sha and v.get("dirty"):
+            sha += "+"                 # uncommitted changes, worn honestly
+        day = (time.strftime("%Y-%m-%d", time.localtime(v["at"]))
+               if v["at"] else "")
+        app = os.environ.get("SAGA_APP_VERSION", "")
+        _vernote = " · ".join(x for x in
+                              (f"v{app}" if app else "", sha, day) if x)
+    return _vernote
 
 
 def version_latest():
@@ -3145,8 +3171,39 @@ _eng = {"name": None, "stage": "", "log": [], "error": None, "proc": None,
         "cancel": False, "thread": None}
 
 
+_hf_fallback_said = False
+
+
 def _hf_home():
-    return Path(os.environ.get("HF_HOME") or (ENGINES_DIR / "hf")).expanduser()
+    """The user's own HF cache when they have one — but only when it is
+    actually reachable. A stale export aiming at an unmounted drive would
+    otherwise fail at gigabyte three of an engine install, looking like a
+    bug in the installer rather than a dead environment variable."""
+    global _hf_fallback_said
+    env = os.environ.get("HF_HOME")
+    if env:
+        p = Path(env).expanduser()
+        if p.is_dir() or p.parent.is_dir():
+            return p
+        if not _hf_fallback_said:
+            _hf_fallback_said = True
+            print(f"HF_HOME={env} is not reachable (unmounted drive?) — "
+                  f"using the managed cache instead", flush=True)
+    return (ENGINES_DIR / "hf").expanduser()
+
+
+def _hf_ignored():
+    """The HF_HOME value being ignored for unreachability, or None."""
+    env = os.environ.get("HF_HOME")
+    return (env if env and _hf_home() == (ENGINES_DIR / "hf").expanduser()
+            else None)
+
+
+def _hf_managed():
+    """True when the weights live in the cache this manager owns — set
+    either by no HF_HOME at all, or by one that is being ignored. Gates
+    both deleting weights on remove and counting them in sizes."""
+    return "HF_HOME" not in os.environ or _hf_ignored() is not None
 
 
 def _worker_env(py):
@@ -3291,16 +3348,79 @@ def _install_omnivoice():
         time.strftime("%Y-%m-%d %H:%M") + "\n")
 
 
+KOKORO_FILES = ("kokoro-v1.0.int8.onnx", "voices-v1.0.bin")
+KOKORO_RELEASE = ("https://github.com/thewh1teagle/kokoro-onnx/releases/"
+                  "download/model-files-v1.0/")
+
+
+def _install_kokoro():
+    """The smallest install of the three: two files from the kokoro-onnx
+    release, ~0.4 GB together, straight into the library — the same spot
+    prepare-runtime.sh fills for a packaged build, and the spot every
+    launch checks first. No venv and no torch: the kokoro-onnx package
+    rides in the studio's own runtime, so files are the only thing that
+    can be missing — and until now the only engine the docs called
+    built-in was the one engine with no install button."""
+    global KOKORO_DIR, _kokoro, _kvoices
+    import urllib.request
+    dest = ROOT / "models" / "kokoro"
+    dest.mkdir(parents=True, exist_ok=True)
+    for fn in KOKORO_FILES:
+        if (dest / fn).exists():
+            continue
+        _eng["stage"] = f"downloading {fn}"
+        _eng_log(f"GET {KOKORO_RELEASE}{fn}")
+        tmp = dest / (fn + ".part")
+        try:
+            req = urllib.request.Request(KOKORO_RELEASE + fn,
+                                         headers={"User-Agent": "SagaStudio"})
+            with urllib.request.urlopen(req, timeout=60) as r, \
+                    open(tmp, "wb") as f:
+                total = int(r.headers.get("Content-Length") or 0)
+                got = 0
+                while True:
+                    if _eng["cancel"]:
+                        raise RuntimeError("cancelled")
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    got += len(chunk)
+                    if total:
+                        _eng["stage"] = (
+                            f"downloading {fn} — {got >> 20} of "
+                            f"{total >> 20} MB")
+            os.replace(tmp, dest / fn)
+        finally:
+            tmp.unlink(missing_ok=True)
+    # the fresh copy speaks now, not at next launch
+    KOKORO_DIR = dest
+    _kokoro = None
+    _kvoices = None
+    _eng["stage"] = "checking the install"
+    import importlib.util
+    if importlib.util.find_spec("kokoro_onnx") is None:
+        raise RuntimeError(
+            "the model files are down, but this Python has no kokoro-onnx "
+            "package — the packaged app and `npm run runtime` both carry "
+            "it; a classic checkout wants `pip install kokoro-onnx` in "
+            "its venv")
+    if not kokoro_available():
+        raise RuntimeError("the files landed but Kokoro still reports "
+                           "missing — see the log")
+
+
 def install_engine(name):
-    if name not in ENGINE_INFO:
+    if name != "kokoro" and name not in ENGINE_INFO:
         raise ValueError(f"no such engine {name!r}")
     if _eng["thread"] and _eng["thread"].is_alive():
         raise RuntimeError("an engine is already installing — one at a time")
 
     def run():
         try:
-            (_install_chatterbox if name == "chatterbox"
-             else _install_omnivoice)()
+            {"chatterbox": _install_chatterbox,
+             "omnivoice": _install_omnivoice,
+             "kokoro": _install_kokoro}[name]()
             _eng.update(stage="done", error=None)
         except Exception as ex:
             _eng["error"] = f"{type(ex).__name__}: {ex}"
@@ -3338,7 +3458,7 @@ def remove_engine(name):
             pr.terminate()
     _cb["warm"] = False
     shutil.rmtree(ENGINES_DIR / name, ignore_errors=True)
-    if "HF_HOME" not in os.environ:
+    if _hf_managed():
         shutil.rmtree(_snapshot_dir(ENGINE_INFO[name]["weights"]),
                       ignore_errors=True)
 
@@ -3357,23 +3477,38 @@ def _sized(path):
 
 
 def engines_status():
+    import importlib.util
     installing = None
     if _eng["thread"] and _eng["thread"].is_alive():
-        # a set of paths, not a list: an omnivoice install may be mid-way
-        # through the chatterbox install it depends on, and the chatterbox
-        # venv must not be counted twice
-        grow = {ENGINES_DIR / _eng["name"], ENGINES_DIR / "chatterbox",
-                _snapshot_dir(ENGINE_INFO[_eng["name"]]["weights"])}
-        if _eng["name"] == "omnivoice":
-            grow.add(_snapshot_dir(ENGINE_INFO["chatterbox"]["weights"]))
+        if _eng["name"] == "kokoro":
+            # two flat files into the library — no venv, no shared torch
+            grow = {ROOT / "models" / "kokoro"}
+        else:
+            # a set of paths, not a list: an omnivoice install may be mid-way
+            # through the chatterbox install it depends on, and the chatterbox
+            # venv must not be counted twice
+            grow = {ENGINES_DIR / _eng["name"], ENGINES_DIR / "chatterbox",
+                    _snapshot_dir(ENGINE_INFO[_eng["name"]]["weights"])}
+            if _eng["name"] == "omnivoice":
+                grow.add(_snapshot_dir(ENGINE_INFO["chatterbox"]["weights"]))
         installing = {"engine": _eng["name"], "stage": _eng["stage"],
                       "log": _eng["log"][-8:],
                       "mb": round(sum(_sized(p) for p in grow) / 1e6)}
     out = {"dir": str(ENGINES_DIR), "uv": bool(_uv()),
            "installing": installing,
            "failed": None if installing else _eng["error"],
+           # a stale HF_HOME aiming at an unmounted drive is being ignored —
+           # worth a line in the panel, invisible anywhere else
+           "hf_ignored": _hf_ignored(),
+           # files and pkg separately: "model files missing" and "this
+           # Python cannot import kokoro_onnx" are different repairs, and
+           # the panel should name the right one
            "kokoro": {"available": kokoro_available(),
-                      "voices": len(kokoro_voices())}}
+                      "voices": len(kokoro_voices()),
+                      "files": (_kokoro_model_file() is not None
+                                and (KOKORO_DIR / "voices-v1.0.bin").exists()),
+                      "pkg": importlib.util.find_spec("kokoro_onnx")
+                      is not None}}
     for name, info in ENGINE_INFO.items():
         managed = (ENGINES_DIR / name / ".ready").exists()
         avail = cb_available() if name == "chatterbox" else ov_available()
@@ -3381,7 +3516,7 @@ def engines_status():
         if managed:
             d["gb"] = round((_sized(ENGINES_DIR / name)
                              + (_sized(_snapshot_dir(info["weights"]))
-                                if "HF_HOME" not in os.environ else 0)) / 1e9, 1)
+                                if _hf_managed() else 0)) / 1e9, 1)
         out[name] = d
     return out
 
@@ -5053,6 +5188,10 @@ class H(BaseHTTPRequestHandler):
                 # restart. Still called nanobanana on the wire: the ✨
                 # button and the agent's overview both read this name.
                 "nanobanana": image_ready(),
+                # for the header: which build this is, and whose library —
+                # the two questions every support conversation starts with
+                "version": version_note(),
+                "library": str(ROOT),
                 "model": "warm" if _cb["warm"] else "cold"})
         if u.path == "/api/settings":
             # localhost and token-guarded, the author's own machine asking:

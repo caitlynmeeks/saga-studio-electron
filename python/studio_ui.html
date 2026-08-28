@@ -621,6 +621,7 @@ color:var(--faint);margin:0 0 9px;font-weight:600}
 <body data-panel="off" data-tab="inspect">
 <header>
   <b>SAGA STUDIO</b>
+  <span class="mut" id="appver" style="font-size:10px"></span>
   <span class="mut" id="hdr" onclick="pingStack()" style="cursor:pointer"
     title="find this stack in the sidebar">no project</span>
   <button class="tiny" onclick="toggleStoryPanel()" title="stack settings — title, typewriter, typing sound, picture style">⚙</button>
@@ -1316,14 +1317,25 @@ function renderEngines(){
   const st=(avail,n)=>busy(n)?'<span class="warn">installing…</span>'
       :avail?'<span class="ok">installed</span>'
       :'<span class="mut">not installed</span>';
-  const cb=ENG.chatterbox||{}, ov=ENG.omnivoice||{};
+  const cb=ENG.chatterbox||{}, ov=ENG.omnivoice||{}, ko=ENG.kokoro||{};
   el.innerHTML=
     engCard('Kokoro',
-      ENG.kokoro.available?'<span class="ok">built in</span>'
+      busy('kokoro')?'<span class="warn">installing…</span>'
+        :ko.available?'<span class="ok">ready</span>'
+        :ko.pkg===false?'<span class="warn">package missing</span>'
         :'<span class="warn">model files missing</span>',
-      `${ENG.kokoro.voices||54} preset voices in 9 languages, faster than
+      `${ko.voices||54} preset voices in 9 languages, faster than
        realtime on plain CPU. Apache-2.0 — fine to use in work you sell.
-       No cloning, which is rather the point.`,'')
+       No cloning, which is rather the point.`
+      +(ko.pkg===false?`<div class="warn" style="margin-top:3px">this Python
+        cannot import kokoro_onnx — the packaged app and <code>npm run
+        runtime</code> both carry it; a classic checkout wants
+        <code>pip install kokoro-onnx</code> in its venv</div>`:'')
+      +prog('kokoro'),
+      busy('kokoro')?'<button onclick="engCancel()">Cancel</button>'
+        :ko.available?''
+        :`<button class="pri" onclick="engInstall('kokoro')" ${inst?'disabled':''}
+           title="two model files from the kokoro-onnx release — no torch, no venv, the smallest voice by far">Install Kokoro (0.4 GB)</button>`)
     +engCard('Chatterbox',st(cb.available,'chatterbox'),
       `<b>Recommended</b> — the best voices: clones a character from a
        ten-second clip, four delivery dials, seeded takes, and it alone can
@@ -1346,13 +1358,20 @@ function renderEngines(){
         :`<button onclick="engInstall('omnivoice')" ${inst?'disabled':''}>Install OmniVoice</button>`)
     +(ENG.failed?`<div class="warn" style="font-size:11px;margin-top:6px">the last
        install failed: ${esc(ENG.failed)} — installing again picks up where it
-       left off</div>`:'');
+       left off</div>`:'')
+    +(ENG.hf_ignored?`<div class="warn" style="font-size:11px;margin-top:6px">HF_HOME
+       points at ${esc(ENG.hf_ignored)}, which is not reachable right now (an
+       unmounted drive?) — downloads go to the managed cache instead</div>`:'');
 }
 
 // ── state ─────────────────────────────────────────────────
 async function refresh(){
   STATE=await api('/api/state');
   $('model').textContent='model: '+STATE.model;
+  // which build, at a glance; the rollover answers "and whose library?"
+  const av=$('appver');
+  if(av&&STATE.version){av.textContent=STATE.version;
+    av.title='library: '+(STATE.library||'');}
   paintDiscuss();
   renderProfileList();       // counts move as cards do; the editor is left alone
   renderMixer();             // its own guard keeps a held fader out of reach

@@ -176,12 +176,16 @@ async function launch () {
   if (starting) return
   starting = true
   showShell('launching', { library: paths.library() })
+  // read before start(): the backend scaffolds the library folder, and
+  // "did this exist before we touched it" is the adoption question
+  const libExisted = paths.isDir(paths.library())
   try {
     const info = await backend.start({ onExit: onBackendDied })
     await win.loadURL(info.url)
     win.setTitle(`Saga Studio — ${path.basename(info.library)}`)
     Menu.setApplicationMenu(buildMenu(api))
     maybeWarnAboutClassic()
+    maybeAnnounceLibrary(info.library, libExisted)
   } catch (err) {
     showShell('error', {
       message: err.message || String(err),
@@ -239,6 +243,30 @@ async function maybeWarnAboutClassic () {
       detail: 'Quit it in the terminal it was started from, then keep working here.'
     })
   }
+}
+
+// A library the app ADOPTED is worth announcing, once. The Documents
+// fallback (and the classic servers' known spots) can hold a stale library
+// from an old build, and opening it silently makes a fresh install look
+// broken — old test projects, missing voices — with the real explanation
+// visible only on stdout, which a GUI user never sees. Only a folder that
+// already had something in it earns the dialog; a fresh empty library is
+// exactly what a first launch should make, and needs no ceremony.
+async function maybeAnnounceLibrary (lib, existedBeforeLaunch) {
+  if (config.get('libraryDir') || config.get('libraryAnnounced')) return
+  config.save({ libraryAnnounced: true })
+  if (!existedBeforeLaunch || !win) return
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'info',
+    buttons: ['Keep This Library', 'Choose a Different Folder…'],
+    defaultId: 0,
+    cancelId: 0,
+    message: 'Opening your library at ' + lib,
+    detail: 'This folder already existed, so the app adopted it — projects, ' +
+      'rendered audio and clips are read from and saved to it.\n\n' +
+      '"Choose Library Folder…" in the File menu changes it any time.'
+  })
+  if (response === 1) await api.chooseLibrary()
 }
 
 // ── things the menu and the shell page can ask for ──────────────────────
